@@ -179,6 +179,63 @@ async def _save_edge_tts(
     await communicate.save(str(output_path))
 
 
+def _save_pyttsx3_wav(text: str, output_path: Path, rate: str = "+0%") -> None:
+    import pyttsx3  # type: ignore
+
+    engine = pyttsx3.init()
+    voices = engine.getProperty("voices") or []
+    voice_id = None
+    for voice in voices:
+        meta = " ".join(
+            str(part)
+            for part in [getattr(voice, "id", ""), getattr(voice, "name", ""), getattr(voice, "languages", "")]
+            if part
+        ).lower()
+        if "vi-vn" in meta or "vietnam" in meta:
+            voice_id = getattr(voice, "id", None)
+            break
+    if voice_id:
+        engine.setProperty("voice", voice_id)
+    base_rate = 180
+    percent = _parse_rate_percent(rate)
+    target_rate = int(base_rate * (1 + (percent / 100.0)))
+    target_rate = max(110, min(target_rate, 280))
+    engine.setProperty("rate", target_rate)
+    engine.save_to_file(text, str(output_path))
+    engine.runAndWait()
+    engine.stop()
+
+
+def _map_gtts_lang(project_lang: str | None, voice: str) -> str:
+    voice_l = (voice or "").lower()
+    if voice_l.startswith("vi-"):
+        return "vi"
+    if voice_l.startswith("zh-"):
+        return "zh-CN"
+    raw = (project_lang or "").strip().lower().replace("_", "-")
+    if not raw:
+        return "vi"
+    base = raw.split("-")[0]
+    if base == "vi":
+        return "vi"
+    if base == "zh":
+        return "zh-CN"
+    if base == "en":
+        return "en"
+    if base == "ja":
+        return "ja"
+    if base == "ko":
+        return "ko"
+    return "vi"
+
+
+def _save_gtts_mp3(text: str, output_path: Path, lang: str) -> None:
+    from gtts import gTTS  # type: ignore
+
+    tts = gTTS(text=text, lang=lang, slow=False)
+    tts.save(str(output_path))
+
+
 def _resolve_srt_path(project_dir: Path, preferred_key: str) -> Path | None:
     candidates = [
         preferred_key,
@@ -280,6 +337,13 @@ def run_dub_job(
         total = len(cues)
         cache_hit = 0
         cache_miss = 0
+        edge_ok = 0
+        edge_failed = 0
+        pyttsx3_ok = 0
+        pyttsx3_failed = 0
+        gtts_ok = 0
+        gtts_failed = 0
+        gtts_lang = _map_gtts_lang(project.target_lang, voice)
         for idx, cue in enumerate(cues, start=1):
             slot_sec = max(0.05, cue.end_sec - cue.start_sec)
             dynamic_rate = _adaptive_rate(cue.text, slot_sec, rate)
@@ -291,32 +355,73 @@ def run_dub_job(
             else:
                 cache_miss += 1
                 raw_mp3 = tmp_dir / f"seg_{idx:06d}.mp3"
+                gtts_mp3 = tmp_dir / f"seg_{idx:06d}.gtts.mp3"
                 seg_wav = tmp_dir / f"seg_{idx:06d}.wav"
-                asyncio.run(
-                    _save_edge_tts(
-                        text=cue.text,
-                        output_path=raw_mp3,
-                        voice=voice,
-                        rate=dynamic_rate,
-                        volume=volume,
-                        pitch=pitch,
+                try:
+                    asyncio.run(
+                        _save_edge_tts(
+                            text=cue.text,
+                            output_path=raw_mp3,
+                            voice=voice,
+                            rate=dynamic_rate,
+                            volume=volume,
+                            pitch=pitch,
+                        )
                     )
-                )
-                _run_cmd(
-                    [
-                        "ffmpeg",
-                        "-y",
-                        "-i",
-                        str(raw_mp3),
-                        "-ac",
-                        "1",
-                        "-ar",
-                        "24000",
-                        "-sample_fmt",
-                        "s16",
-                        str(seg_wav),
-                    ]
-                )
+                    _run_cmd(
+                        [
+                            "ffmpeg",
+                            "-y",
+                            "-i",
+                            str(raw_mp3),
+                            "-ac",
+                            "1",
+                            "-ar",
+                            "24000",
+                            "-sample_fmt",
+                            "s16",
+                            str(seg_wav),
+                        ]
+                    )
+                    edge_ok += 1
+                except Exception as edge_ex:
+                    edge_failed += 1
+                    _push_event(
+                        artifacts,
+                        "synthesize_tts",
+                        f"Edge-TTS loi cue {idx}, fallback gTTS({gtts_lang})/pyttsx3: {str(edge_ex)[:120]}",
+                        min(80, 10 + int((idx / total) * 70)),
+                        level="warning",
+                    )
+                    try:
+                        _save_gtts_mp3(cue.text, gtts_mp3, gtts_lang)
+                        _run_cmd(
+                            [
+                                "ffmpeg",
+                                "-y",
+                                "-i",
+                                str(gtts_mp3),
+                                "-ac",
+                                "1",
+                                "-ar",
+                                "24000",
+                                "-sample_fmt",
+                                "s16",
+                                str(seg_wav),
+                            ]
+                        )
+                        gtts_ok += 1
+                    except Exception as gtts_ex:
+                        gtts_failed += 1
+                        try:
+                            _save_pyttsx3_wav(cue.text, seg_wav, dynamic_rate)
+                            pyttsx3_ok += 1
+                        except Exception as py_ex:
+                            pyttsx3_failed += 1
+                            raise RuntimeError(
+                                "tts_failed_all_engines: "
+                                f"edge={str(edge_ex)[:120]} | gtts={str(gtts_ex)[:120]} | pyttsx3={str(py_ex)[:120]}"
+                            ) from py_ex
                 cache[cache_key] = seg_wav
             rendered_wavs.append((cue, seg_wav))
 
@@ -330,6 +435,13 @@ def run_dub_job(
                         "processed_cues": idx,
                         "cache_hit": cache_hit,
                         "cache_miss": cache_miss,
+                        "edge_ok": edge_ok,
+                        "edge_failed": edge_failed,
+                        "gtts_ok": gtts_ok,
+                        "gtts_failed": gtts_failed,
+                        "gtts_lang": gtts_lang,
+                        "pyttsx3_ok": pyttsx3_ok,
+                        "pyttsx3_failed": pyttsx3_failed,
                         "percent_in_phase": round((idx / total) * 100, 1),
                     },
                 )

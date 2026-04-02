@@ -1234,6 +1234,11 @@ export function App() {
                 Tải âm thanh: {latestDubJob.artifacts.dub_output_key}
               </a>
             ) : null}
+            {latestDubJob?.artifacts?.dubbed_audio ? (
+              <p className="hint">
+                Đường dẫn file âm thanh: {latestDubJob.artifacts.dubbed_audio}
+              </p>
+            ) : null}
           </section>
         </aside>
 

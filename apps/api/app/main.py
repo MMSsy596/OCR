@@ -110,11 +110,17 @@ def start_pipeline(project_id: str, payload: schemas.PipelineStartRequest, db: S
             job.id,
             gemini_api_key=payload.gemini_api_key,
             voice_map=payload.voice_map,
+            scan_interval_sec=payload.scan_interval_sec,
             job_id=job.id,
         )
     except Exception:
         # Fallback local mode when Redis/worker is unavailable.
-        run_pipeline(job.id, gemini_api_key=payload.gemini_api_key, voice_map=payload.voice_map)
+        run_pipeline(
+            job.id,
+            gemini_api_key=payload.gemini_api_key,
+            voice_map=payload.voice_map,
+            scan_interval_sec=payload.scan_interval_sec,
+        )
     return job
 
 

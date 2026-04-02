@@ -50,6 +50,7 @@ export function App() {
   const [pipelineForm, setPipelineForm] = useState({
     gemini_api_key: "",
     voiceMapText: "character_a=male-deep\ncharacter_b=female-bright\nnarrator=narrator-neutral",
+    scan_interval_sec: 1.0,
   });
   const [exportForm, setExportForm] = useState({
     export_format: "srt",
@@ -273,6 +274,7 @@ export function App() {
         body: JSON.stringify({
           gemini_api_key: pipelineForm.gemini_api_key || null,
           voice_map: parseVoiceMap(pipelineForm.voiceMapText),
+          scan_interval_sec: Number(pipelineForm.scan_interval_sec) || 1.0,
         }),
       });
       setIsEditingSegments(false);
@@ -490,6 +492,17 @@ export function App() {
               Ánh xạ giọng đọc
               <textarea rows={3} value={pipelineForm.voiceMapText} onChange={(e) => setPipelineForm((f) => ({ ...f, voiceMapText: e.target.value }))} />
             </label>
+            <label>
+              Khoảng quét OCR (giây/lần)
+              <input
+                type="number"
+                step="0.1"
+                min="0.1"
+                max="10"
+                value={pipelineForm.scan_interval_sec}
+                onChange={(e) => setPipelineForm((f) => ({ ...f, scan_interval_sec: Number(e.target.value) }))}
+              />
+            </label>
             <button disabled={loading} onClick={startPipeline}>Chạy pipeline</button>
             {latestJob ? (
               <div className="info">
@@ -608,6 +621,15 @@ export function App() {
             </div>
             <div className="table-wrap">
               <table>
+                <colgroup>
+                  <col className="col-id" />
+                  <col className="col-time" />
+                  <col className="col-time" />
+                  <col className="col-text" />
+                  <col className="col-text" />
+                  <col className="col-meta" />
+                  <col className="col-meta" />
+                </colgroup>
                 <thead>
                   <tr>
                     <th>#</th>

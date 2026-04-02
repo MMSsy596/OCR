@@ -51,7 +51,7 @@ def _fake_ocr_segments(project: Project) -> list[dict[str, Any]]:
     return output
 
 
-def _ocr_segments_from_video(project: Project) -> list[dict[str, Any]]:
+def _ocr_segments_from_video(project: Project, scan_interval_sec: float = 1.0) -> list[dict[str, Any]]:
     if not project.video_path:
         return []
     video_path = Path(project.video_path)
@@ -69,7 +69,7 @@ def _ocr_segments_from_video(project: Project) -> list[dict[str, Any]]:
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 24
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    sample_step = int(max(1, fps))  # sample moi giay
+    sample_step = int(max(1, fps * max(0.1, scan_interval_sec)))
 
     engine = RapidOCR()
     segments = []
@@ -123,11 +123,14 @@ def _ocr_segments_from_video(project: Project) -> list[dict[str, Any]]:
             idx += sample_step
             continue
         if text == last_text:
+            if segments:
+                extended_end = (idx / fps) + max(0.5, scan_interval_sec)
+                segments[-1]["end_sec"] = max(float(segments[-1]["end_sec"]), float(extended_end))
             idx += sample_step
             continue
 
         start_sec = idx / fps
-        end_sec = start_sec + 2.8
+        end_sec = start_sec + max(1.2, scan_interval_sec * 1.5)
         last_text = text
         segments.append(
             {
@@ -297,7 +300,12 @@ def retranslate_project_segments(project_id: str, gemini_api_key: str | None = N
         db.close()
 
 
-def run_pipeline(job_id: str, gemini_api_key: str | None = None, voice_map: dict[str, str] | None = None) -> dict[str, Any]:
+def run_pipeline(
+    job_id: str,
+    gemini_api_key: str | None = None,
+    voice_map: dict[str, str] | None = None,
+    scan_interval_sec: float = 1.0,
+) -> dict[str, Any]:
     db = SessionLocal()
     voice_map = voice_map or {}
     try:
@@ -315,7 +323,7 @@ def run_pipeline(job_id: str, gemini_api_key: str | None = None, voice_map: dict
         db.commit()
 
         _update_job(db, job, JobStatus.running, 5, "ocr")
-        segments = _ocr_segments_from_video(project)
+        segments = _ocr_segments_from_video(project, scan_interval_sec=scan_interval_sec)
         if not segments:
             segments = _fake_ocr_segments(project)
         replace_segments(db, project.id, segments)

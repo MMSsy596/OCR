@@ -315,19 +315,21 @@ button:disabled {
   overflow: auto;
   border-radius: 10px;
   border: 1px solid var(--line);
+  max-height: 72vh;
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 980px;
+  min-width: 1100px;
+  table-layout: fixed;
 }
 
 th,
 td {
   border-bottom: 1px solid var(--line);
   padding: 8px;
-  vertical-align: top;
+  vertical-align: middle;
 }
 
 th {
@@ -338,12 +340,39 @@ th {
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.2px;
+  text-align: center;
 }
 
 td input,
 td textarea {
   margin-top: 0;
   font-size: 13px;
+}
+
+td input {
+  height: 38px;
+}
+
+td textarea {
+  min-height: 58px;
+  max-height: 110px;
+  line-height: 1.35;
+}
+
+.col-id {
+  width: 44px;
+}
+
+.col-time {
+  width: 120px;
+}
+
+.col-text {
+  width: 290px;
+}
+
+.col-meta {
+  width: 180px;
 }
 
 .active-row td {
@@ -372,4 +401,3 @@ td textarea {
     flex-wrap: wrap;
   }
 }
-

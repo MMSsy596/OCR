@@ -72,7 +72,7 @@ export function App() {
   const [dubbing, setDubbing] = useState(false);
   const [lastExport, setLastExport] = useState(null);
   const [projectForm, setProjectForm] = useState({
-    name: "NanBao Project",
+    name: "Dự án NanBao",
     source_lang: "zh",
     target_lang: "vi",
     prompt: "Dịch theo văn phong phim cổ trang, tự nhiên, ngắn gọn.",
@@ -353,16 +353,16 @@ export function App() {
       });
       await loadProjectsSafe();
       setSelectedProjectId(created.id);
-      setMessage(`Đã tạo project: ${created.name}`);
+      setMessage(`Đã tạo dự án: ${created.name}`);
     } catch (err) {
-      setMessage(`Lỗi tạo project: ${err.message}`);
+      setMessage(`Lỗi tạo dự án: ${err.message}`);
     } finally {
       setCreating(false);
     }
   }
 
   async function clearOldSessions() {
-    if (!window.confirm("Bạn có chắc muốn xóa toàn bộ session cũ (không ở trạng thái processing)?")) {
+    if (!window.confirm("Bạn có chắc muốn xóa toàn bộ phiên cũ (không ở trạng thái đang xử lý)?")) {
       return;
     }
     setClearingSessions(true);
@@ -383,10 +383,10 @@ export function App() {
         setJobs([]);
       }
       setMessage(
-        `Đã xóa ${out.deleted_projects} session cũ, bỏ qua ${out.skipped_processing_projects} session đang chạy.`,
+        `Đã xóa ${out.deleted_projects} phiên cũ, bỏ qua ${out.skipped_processing_projects} phiên đang chạy.`,
       );
     } catch (err) {
-      setMessage(`Lỗi clear sessions: ${err.message}`);
+      setMessage(`Lỗi dọn phiên: ${err.message}`);
     } finally {
       setClearingSessions(false);
     }
@@ -394,7 +394,7 @@ export function App() {
 
   async function forceClearAllSessions() {
     const step1 = window.confirm(
-      "CẢNH BÁO: thao tác này sẽ xóa TẤT CẢ session, kể cả processing. Bạn tiếp tục?",
+      "CẢNH BÁO: thao tác này sẽ xóa TẤT CẢ phiên, kể cả phiên đang xử lý. Bạn tiếp tục?",
     );
     if (!step1) return;
     const token = window.prompt(
@@ -402,7 +402,7 @@ export function App() {
       "",
     );
     if (token !== "FORCE CLEAR ALL") {
-      setMessage("Đã hủy force clear do xác nhận không hợp lệ.");
+      setMessage("Đã hủy thao tác xóa cưỡng bức do xác nhận không hợp lệ.");
       return;
     }
     setForceClearingSessions(true);
@@ -421,10 +421,10 @@ export function App() {
       setEditableSegments([]);
       setJobs([]);
       setMessage(
-        `Force clear xong: đã xóa ${out.deleted_projects} session; dọn ${out.removed_storage_dirs} thư mục.`,
+        `Đã xóa cưỡng bức: ${out.deleted_projects} phiên; dọn ${out.removed_storage_dirs} thư mục.`,
       );
     } catch (err) {
-      setMessage(`Lỗi force clear sessions: ${err.message}`);
+      setMessage(`Lỗi xóa cưỡng bức phiên: ${err.message}`);
     } finally {
       setForceClearingSessions(false);
     }
@@ -432,7 +432,7 @@ export function App() {
 
   async function uploadVideo() {
     if (!selectedProjectId || !videoFile) {
-      setMessage("Chọn project và file video trước.");
+      setMessage("Chọn dự án và tệp video trước.");
       return;
     }
     setLoading(true);
@@ -448,9 +448,9 @@ export function App() {
       });
       await loadProjectsSafe();
       await loadProjectData(selectedProjectId);
-      setMessage("Upload video thành công.");
+      setMessage("Tải video lên thành công.");
     } catch (err) {
-      setMessage(`Lỗi upload: ${err.message}`);
+      setMessage(`Lỗi tải lên: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -458,7 +458,7 @@ export function App() {
 
   async function uploadExternalSrt() {
     if (!selectedProjectId || !srtUploadFile) {
-      setMessage("Chọn project và file SRT trước.");
+      setMessage("Chọn dự án và tệp SRT trước.");
       return;
     }
     setUploadingSrt(true);
@@ -475,9 +475,9 @@ export function App() {
       }
       const out = await res.json();
       setDubForm((prev) => ({ ...prev, srt_key: out.output_key }));
-      setMessage(`Đã upload SRT: ${out.output_key}`);
+      setMessage(`Đã tải lên SRT: ${out.output_key}`);
     } catch (err) {
-      setMessage(`Lỗi upload SRT: ${err.message}`);
+      setMessage(`Lỗi tải lên SRT: ${err.message}`);
     } finally {
       setUploadingSrt(false);
     }
@@ -485,7 +485,7 @@ export function App() {
 
   async function saveSelectedRoi() {
     if (!selectedProjectId) {
-      setMessage("Chọn project trước khi lưu ROI.");
+      setMessage("Chọn dự án trước khi lưu ROI.");
       return;
     }
     setSavingRoi(true);
@@ -503,7 +503,7 @@ export function App() {
         prev.map((item) => (item.id === updated.id ? updated : item)),
       );
       setRoiDraft(normalizeRoi(updated.roi));
-      setMessage("Đã lưu ROI cho project.");
+      setMessage("Đã lưu ROI cho dự án.");
     } catch (err) {
       setMessage(`Lỗi lưu ROI: ${err.message}`);
     } finally {
@@ -525,7 +525,7 @@ export function App() {
 
   async function startPipeline() {
     if (!selectedProjectId) {
-      setMessage("Chọn project trước.");
+      setMessage("Chọn dự án trước.");
       return;
     }
     setLoading(true);
@@ -545,9 +545,9 @@ export function App() {
       );
       setIsEditingSegments(false);
       await loadProjectData(selectedProjectId);
-      setMessage("Pipeline đã được enqueue.");
+      setMessage("Đã đưa quy trình xử lý vào hàng đợi.");
     } catch (err) {
-      setMessage(`Lỗi chạy pipeline: ${err.message}`);
+      setMessage(`Lỗi chạy quy trình xử lý: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -651,7 +651,7 @@ export function App() {
 
   async function saveSegments() {
     if (!selectedProjectId) {
-      setMessage("Chọn project trước.");
+      setMessage("Chọn dự án trước.");
       return;
     }
     setSavingSegments(true);
@@ -678,9 +678,9 @@ export function App() {
       setUndoStack([]);
       setRedoStack([]);
       setIsEditingSegments(false);
-      setMessage("Đã lưu subtitle chỉnh sửa.");
+      setMessage("Đã lưu phụ đề đã chỉnh sửa.");
     } catch (err) {
-      setMessage(`Lỗi lưu subtitle: ${err.message}`);
+      setMessage(`Lỗi lưu phụ đề: ${err.message}`);
     } finally {
       setSavingSegments(false);
     }
@@ -688,7 +688,7 @@ export function App() {
 
   async function retranslateOnly() {
     if (!selectedProjectId) {
-      setMessage("Chọn project trước.");
+      setMessage("Chọn dự án trước.");
       return;
     }
     setRetranslating(true);
@@ -732,7 +732,7 @@ export function App() {
 
   async function exportSubtitle() {
     if (!selectedProjectId) {
-      setMessage("Chọn project trước.");
+      setMessage("Chọn dự án trước.");
       return;
     }
     setExporting(true);
@@ -751,7 +751,7 @@ export function App() {
         `Đã xuất ${exportForm.export_format.toUpperCase()} (${exportForm.content_mode}).`,
       );
     } catch (err) {
-      setMessage(`Lỗi xuất file: ${err.message}`);
+      setMessage(`Lỗi xuất tệp: ${err.message}`);
     } finally {
       setExporting(false);
     }
@@ -759,7 +759,7 @@ export function App() {
 
   async function startDubAudio() {
     if (!selectedProjectId) {
-      setMessage("Chọn project trước.");
+      setMessage("Chọn dự án trước.");
       return;
     }
     setDubbing(true);
@@ -772,10 +772,10 @@ export function App() {
       });
       await loadProjectData(selectedProjectId);
       setMessage(
-        "Đã bắt đầu dựng audio lồng tiếng theo timestamp.",
+        "Đã bắt đầu dựng âm thanh lồng tiếng theo mốc thời gian.",
       );
     } catch (err) {
-      setMessage(`Lỗi dựng audio: ${err.message}`);
+      setMessage(`Lỗi dựng âm thanh: ${err.message}`);
     } finally {
       setDubbing(false);
     }
@@ -783,7 +783,7 @@ export function App() {
 
   async function retryStuckJobs() {
     if (!selectedProjectId) {
-      setMessage("Chọn project trước.");
+      setMessage("Chọn dự án trước.");
       return;
     }
     setRetryingStuckJobs(true);
@@ -797,10 +797,10 @@ export function App() {
       );
       await loadProjectData(selectedProjectId, { includeSegments: false });
       setMessage(
-        `Đã retry ${out.retried_count} job bị kẹt. Bỏ qua ${out.skipped_count}.`,
+        `Đã thử lại ${out.retried_count} tác vụ bị kẹt. Bỏ qua ${out.skipped_count}.`,
       );
     } catch (err) {
-      setMessage(`Lỗi retry queued jobs: ${err.message}`);
+      setMessage(`Lỗi thử lại tác vụ trong hàng đợi: ${err.message}`);
     } finally {
       setRetryingStuckJobs(false);
     }
@@ -810,7 +810,7 @@ export function App() {
     <div className="app-shell">
       <header className="app-header">
         <div>
-          <h1>NanBao OCR Studio</h1>
+          <h1>NanBao OCR Phụ Đề</h1>
           <p>
             OCR, dịch, chỉnh sửa và xuất phụ đề trong một không
             gian làm việc tập trung.
@@ -829,9 +829,9 @@ export function App() {
       <main className="workspace">
         <aside className="sidebar card">
           <section className="block">
-            <h2>Project</h2>
+            <h2>Dự án</h2>
             <label>
-              Chọn project
+              Chọn dự án
               <select
                 value={selectedProjectId}
                 onChange={(e) => setSelectedProjectId(e.target.value)}
@@ -845,20 +845,20 @@ export function App() {
               </select>
             </label>
             <button disabled={clearingSessions} onClick={clearOldSessions}>
-              {clearingSessions ? "Đang dọn session..." : "Dọn session cũ"}
+              {clearingSessions ? "Đang dọn phiên..." : "Dọn phiên cũ"}
             </button>
             <button
               disabled={forceClearingSessions}
               onClick={forceClearAllSessions}
             >
               {forceClearingSessions
-                ? "Đang force clear..."
-                : "Force clear all (kể cả processing)"}
+                ? "Đang xóa cưỡng bức..."
+                : "Xóa cưỡng bức tất cả (kể cả đang xử lý)"}
             </button>
             <details>
-              <summary>Tạo project mới</summary>
+              <summary>Tạo dự án mới</summary>
               <label>
-                Tên project
+                Tên dự án
                 <input
                   value={projectForm.name}
                   onChange={(e) =>
@@ -893,7 +893,7 @@ export function App() {
                 </label>
               </div>
               <label>
-                Prompt
+                Lời nhắc
                 <textarea
                   rows={2}
                   value={projectForm.prompt}
@@ -903,7 +903,7 @@ export function App() {
                 />
               </label>
               <label>
-                Glossary
+                Bảng thuật ngữ
                 <textarea
                   rows={3}
                   value={projectForm.glossary}
@@ -913,13 +913,13 @@ export function App() {
                 />
               </label>
               <button disabled={creating} onClick={createProject}>
-                {creating ? "Đang tạo..." : "Tạo project"}
+                {creating ? "Đang tạo..." : "Tạo dự án"}
               </button>
             </details>
           </section>
 
           <section className="block">
-            <h2>Pipeline</h2>
+            <h2>Tiến trình xử lý</h2>
             <label>
               Tệp video
               <input
@@ -932,7 +932,7 @@ export function App() {
               Tải video lên
             </button>
             <label>
-              Gemini API key (tùy chọn)
+              Khóa API Gemini (tùy chọn)
               <input
                 type="password"
                 value={pipelineForm.gemini_api_key}
@@ -974,15 +974,15 @@ export function App() {
               />
             </label>
             <button disabled={loading} onClick={startPipeline}>
-              Chạy pipeline
+              Chạy quy trình
             </button>
             <button
               disabled={retryingStuckJobs || loading}
               onClick={retryStuckJobs}
             >
               {retryingStuckJobs
-                ? "Đang retry queued jobs..."
-                : "Retry queued jobs cũ"}
+                ? "Đang thử lại tác vụ trong hàng đợi..."
+                : "Thử lại tác vụ trong hàng đợi cũ"}
             </button>
             {latestJob ? (
               <div className="info">
@@ -1022,7 +1022,7 @@ export function App() {
                 ) : null}
                 {latestJobEvents.length > 0 ? (
                   <details>
-                    <summary>Timeline xử lý (log chi tiết)</summary>
+                    <summary>Tiến trình xử lý (nhật ký chi tiết)</summary>
                     <div style={{ maxHeight: 220, overflow: "auto", marginTop: 8 }}>
                       {latestJobEvents.map((event, idx) => (
                         <p key={`${event.time || idx}-${idx}`}>
@@ -1037,12 +1037,12 @@ export function App() {
           </section>
 
           <section className="block">
-            <h2>Subtitle Tools</h2>
+            <h2>Công cụ phụ đề</h2>
             <button
               disabled={savingSegments || editableSegments.length === 0}
               onClick={saveSegments}
             >
-              {savingSegments ? "Đang lưu subtitle..." : "Lưu subtitle"}
+              {savingSegments ? "Đang lưu phụ đề..." : "Lưu phụ đề"}
             </button>
             <button
               disabled={undoStack.length === 0}
@@ -1097,7 +1097,7 @@ export function App() {
           </section>
 
           <section className="block">
-            <h2>Dub & Export</h2>
+            <h2>Lồng tiếng và xuất tệp</h2>
             <label>
               Chế độ nội dung
               <select
@@ -1112,7 +1112,7 @@ export function App() {
               </select>
             </label>
             <label>
-              Định dạng subtitle
+              Định dạng phụ đề
               <select
                 value={exportForm.export_format}
                 onChange={(e) =>
@@ -1133,11 +1133,11 @@ export function App() {
               disabled={exporting || editableSegments.length === 0}
               onClick={exportSubtitle}
             >
-              {exporting ? "Đang xuất subtitle..." : "Xuất subtitle"}
+              {exporting ? "Đang xuất phụ đề..." : "Xuất phụ đề"}
             </button>
 
             <label>
-              Chèn file SRT khác
+              Chèn tệp SRT khác
               <input
                 type="file"
                 accept=".srt"
@@ -1148,7 +1148,7 @@ export function App() {
               disabled={uploadingSrt || !srtUploadFile || !selectedProjectId}
               onClick={uploadExternalSrt}
             >
-              {uploadingSrt ? "Đang upload SRT..." : "Upload SRT vào project"}
+              {uploadingSrt ? "Đang tải lên SRT..." : "Tải lên SRT vào dự án"}
             </button>
 
             <label>
@@ -1183,7 +1183,7 @@ export function App() {
                 />
               </label>
               <label>
-                Format audio
+                Định dạng âm thanh
                 <select
                   value={dubForm.output_format}
                   onChange={(e) =>
@@ -1212,7 +1212,7 @@ export function App() {
               disabled={dubbing || editableSegments.length === 0}
               onClick={startDubAudio}
             >
-              {dubbing ? "Đang dựng audio..." : "Tạo audio lồng tiếng"}
+              {dubbing ? "Đang dựng âm thanh..." : "Tạo âm thanh lồng tiếng"}
             </button>
             {lastExport ? (
               <a
@@ -1221,7 +1221,7 @@ export function App() {
                 target="_blank"
                 rel="noreferrer"
               >
-                Tải subtitle: {lastExport.output_key}
+                Tải phụ đề: {lastExport.output_key}
               </a>
             ) : null}
             {latestDubJob?.artifacts?.dub_output_key ? (
@@ -1231,7 +1231,7 @@ export function App() {
                 target="_blank"
                 rel="noreferrer"
               >
-                Tải audio: {latestDubJob.artifacts.dub_output_key}
+                Tải âm thanh: {latestDubJob.artifacts.dub_output_key}
               </a>
             ) : null}
           </section>
@@ -1258,8 +1258,8 @@ export function App() {
               <>
                 <p className="hint">
                   {roiEditMode
-                    ? "Shift + kéo để tạo khung mới. Kéo khung/góc để chỉnh."
-                    : "Tua video để kiểm tra subtitle có nằm đúng ROI không."}
+                    ? "Giữ Shift + kéo để tạo khung mới. Kéo khung/góc để chỉnh."
+                    : "Tua video để kiểm tra phụ đề có nằm đúng ROI không."}
                 </p>
                 <div
                   className="preview-stage"
@@ -1318,14 +1318,14 @@ export function App() {
                         {Number(activeSegment.end_sec).toFixed(2)})
                       </p>
                       <p>
-                        <strong>Raw:</strong> {activeSegment.raw_text}
+                        <strong>Gốc:</strong> {activeSegment.raw_text}
                       </p>
                       <p>
                         <strong>Dịch:</strong> {activeSegment.translated_text}
                       </p>
                     </>
                   ) : (
-                    <p>Không có subtitle tại mốc này.</p>
+                    <p>Không có phụ đề tại mốc này.</p>
                   )}
                 </div>
               </>
@@ -1338,7 +1338,7 @@ export function App() {
 
           <section className="card editor-card">
             <div className="row-head">
-              <h2>Chỉnh sửa subtitle</h2>
+              <h2>Chỉnh sửa phụ đề</h2>
               <span>{editableSegments.length} dòng</span>
             </div>
             <div className="table-wrap">

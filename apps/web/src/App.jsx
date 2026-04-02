@@ -42,8 +42,8 @@ export function App() {
     name: "NanBao Project",
     source_lang: "zh",
     target_lang: "vi",
-    prompt: "Dich theo van phong phim co trang, tu nhien, ngan gon.",
-    glossary: "Dao huynh=Su huynh\nTien ton=Tien Ton",
+    prompt: "Dịch theo văn phong phim cổ trang, tự nhiên, ngắn gọn.",
+    glossary: "Đạo huynh=Sư huynh\nTiên tôn=Tiên Tôn",
     roi: { x: 0.1, y: 0.75, w: 0.8, h: 0.2 },
   });
   const [videoFile, setVideoFile] = useState(null);
@@ -75,6 +75,13 @@ export function App() {
     );
   }, [editableSegments, currentVideoTime]);
   const latestJob = jobs[0];
+  const statusLabel = (status) => {
+    if (status === "draft") return "nháp";
+    if (status === "processing") return "đang xử lý";
+    if (status === "ready") return "sẵn sàng";
+    if (status === "failed") return "lỗi";
+    return status || "";
+  };
 
   useEffect(() => {
     loadProjectsSafe();
@@ -153,7 +160,7 @@ export function App() {
       if (!selectedProjectId && data.length) setSelectedProjectId(data[0].id);
     } catch (err) {
       setApiStatus("offline");
-      setMessage(`Khong ket noi duoc API ${API_BASE}. Hay chay backend.`);
+      setMessage(`Không kết nối được API ${API_BASE}. Hãy chạy backend.`);
       console.error(err);
     }
   }
@@ -184,9 +191,9 @@ export function App() {
       });
       await loadProjectsSafe();
       setSelectedProjectId(created.id);
-      setMessage(`Da tao project: ${created.name}`);
+      setMessage(`Đã tạo project: ${created.name}`);
     } catch (err) {
-      setMessage(`Loi tao project: ${err.message}`);
+      setMessage(`Lỗi tạo project: ${err.message}`);
     } finally {
       setCreating(false);
     }
@@ -194,7 +201,7 @@ export function App() {
 
   async function uploadVideo() {
     if (!selectedProjectId || !videoFile) {
-      setMessage("Chon project va file video truoc.");
+      setMessage("Chọn project và file video trước.");
       return;
     }
     setLoading(true);
@@ -209,9 +216,9 @@ export function App() {
       );
       await loadProjectsSafe();
       await loadProjectData(selectedProjectId);
-      setMessage("Upload video thanh cong.");
+      setMessage("Upload video thành công.");
     } catch (err) {
-      setMessage(`Loi upload: ${err.message}`);
+      setMessage(`Lỗi upload: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -219,7 +226,7 @@ export function App() {
 
   async function saveSelectedRoi() {
     if (!selectedProjectId) {
-      setMessage("Chon project truoc khi luu ROI.");
+      setMessage("Chọn project trước khi lưu ROI.");
       return;
     }
     setSavingRoi(true);
@@ -232,9 +239,9 @@ export function App() {
       });
       setProjects((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
       setRoiDraft(normalizeRoi(updated.roi));
-      setMessage("Da luu ROI cho project.");
+      setMessage("Đã lưu ROI cho project.");
     } catch (err) {
-      setMessage(`Loi luu ROI: ${err.message}`);
+      setMessage(`Lỗi lưu ROI: ${err.message}`);
     } finally {
       setSavingRoi(false);
     }
@@ -254,7 +261,7 @@ export function App() {
 
   async function startPipeline() {
     if (!selectedProjectId) {
-      setMessage("Chon project truoc.");
+      setMessage("Chọn project trước.");
       return;
     }
     setLoading(true);
@@ -270,9 +277,9 @@ export function App() {
       });
       setIsEditingSegments(false);
       await loadProjectData(selectedProjectId);
-      setMessage("Pipeline da duoc enqueue.");
+      setMessage("Pipeline đã được enqueue.");
     } catch (err) {
-      setMessage(`Loi start pipeline: ${err.message}`);
+      setMessage(`Lỗi chạy pipeline: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -318,7 +325,7 @@ export function App() {
 
   async function saveSegments() {
     if (!selectedProjectId) {
-      setMessage("Chon project truoc.");
+      setMessage("Chọn project trước.");
       return;
     }
     setSavingSegments(true);
@@ -340,9 +347,9 @@ export function App() {
       });
       setEditableSegments(updated.map((row) => ({ ...row })));
       setIsEditingSegments(false);
-      setMessage("Da luu subtitle chinh sua.");
+      setMessage("Đã lưu subtitle chỉnh sửa.");
     } catch (err) {
-      setMessage(`Loi luu subtitle: ${err.message}`);
+      setMessage(`Lỗi lưu subtitle: ${err.message}`);
     } finally {
       setSavingSegments(false);
     }
@@ -350,7 +357,7 @@ export function App() {
 
   async function retranslateOnly() {
     if (!selectedProjectId) {
-      setMessage("Chon project truoc.");
+      setMessage("Chọn project trước.");
       return;
     }
     setRetranslating(true);
@@ -377,9 +384,9 @@ export function App() {
       });
       setEditableSegments((out.segments || []).map((row) => ({ ...row })));
       setIsEditingSegments(false);
-      setMessage(`Da dich lai. Stats: ${JSON.stringify(out.translation_stats || {})}`);
+      setMessage(`Đã dịch lại. Thống kê: ${JSON.stringify(out.translation_stats || {})}`);
     } catch (err) {
-      setMessage(`Loi dich lai: ${err.message}`);
+      setMessage(`Lỗi dịch lại: ${err.message}`);
     } finally {
       setRetranslating(false);
     }
@@ -387,7 +394,7 @@ export function App() {
 
   async function exportSubtitle() {
     if (!selectedProjectId) {
-      setMessage("Chon project truoc.");
+      setMessage("Chọn project trước.");
       return;
     }
     setExporting(true);
@@ -399,9 +406,9 @@ export function App() {
         body: JSON.stringify(exportForm),
       });
       setLastExport({ ...out, url: `${API_BASE}${out.download_url}` });
-      setMessage(`Da export ${exportForm.export_format.toUpperCase()} (${exportForm.content_mode}).`);
+      setMessage(`Đã xuất ${exportForm.export_format.toUpperCase()} (${exportForm.content_mode}).`);
     } catch (err) {
-      setMessage(`Loi export: ${err.message}`);
+      setMessage(`Lỗi xuất file: ${err.message}`);
     } finally {
       setExporting(false);
     }
@@ -412,10 +419,10 @@ export function App() {
       <header className="app-header">
         <div>
           <h1>NanBao OCR Studio</h1>
-          <p>OCR, translate, edit, export subtitle in one focused workspace.</p>
+          <p>OCR, dịch, chỉnh sửa và xuất phụ đề trong một không gian làm việc tập trung.</p>
         </div>
         <div className={`status-pill ${apiStatus}`}>
-          API {apiStatus}
+          API {apiStatus === "online" ? "đang hoạt động" : apiStatus === "offline" ? "mất kết nối" : "đang kiểm tra"}
         </div>
       </header>
 
@@ -424,32 +431,32 @@ export function App() {
           <section className="block">
             <h2>Project</h2>
             <label>
-              Chon project
+              Chọn project
               <select value={selectedProjectId} onChange={(e) => setSelectedProjectId(e.target.value)}>
-                <option value="">-- Chon --</option>
+                <option value="">-- Chọn --</option>
                 {projects.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.name} ({p.status})
+                    {p.name} ({statusLabel(p.status)})
                   </option>
                 ))}
               </select>
             </label>
             <details>
-              <summary>Tao project moi</summary>
+              <summary>Tạo project mới</summary>
               <label>
-                Ten project
+                Tên project
                 <input value={projectForm.name} onChange={(e) => setProjectForm((f) => ({ ...f, name: e.target.value }))} />
               </label>
               <div className="inline-two">
                 <label>
-                  Source
+                  Ngôn ngữ nguồn
                   <input
                     value={projectForm.source_lang}
                     onChange={(e) => setProjectForm((f) => ({ ...f, source_lang: e.target.value }))}
                   />
                 </label>
                 <label>
-                  Target
+                  Ngôn ngữ đích
                   <input
                     value={projectForm.target_lang}
                     onChange={(e) => setProjectForm((f) => ({ ...f, target_lang: e.target.value }))}
@@ -464,48 +471,48 @@ export function App() {
                 Glossary
                 <textarea rows={3} value={projectForm.glossary} onChange={(e) => setProjectForm((f) => ({ ...f, glossary: e.target.value }))} />
               </label>
-              <button disabled={creating} onClick={createProject}>{creating ? "Dang tao..." : "Tao project"}</button>
+              <button disabled={creating} onClick={createProject}>{creating ? "Đang tạo..." : "Tạo project"}</button>
             </details>
           </section>
 
           <section className="block">
             <h2>Pipeline</h2>
             <label>
-              Video file
+              Tệp video
               <input type="file" accept="video/*" onChange={(e) => setVideoFile(e.target.files?.[0] || null)} />
             </label>
-            <button disabled={loading} onClick={uploadVideo}>Upload video</button>
+            <button disabled={loading} onClick={uploadVideo}>Tải video lên</button>
             <label>
-              Gemini API key (optional)
+              Gemini API key (tùy chọn)
               <input type="password" value={pipelineForm.gemini_api_key} onChange={(e) => setPipelineForm((f) => ({ ...f, gemini_api_key: e.target.value }))} />
             </label>
             <label>
-              Voice map
+              Ánh xạ giọng đọc
               <textarea rows={3} value={pipelineForm.voiceMapText} onChange={(e) => setPipelineForm((f) => ({ ...f, voiceMapText: e.target.value }))} />
             </label>
-            <button disabled={loading} onClick={startPipeline}>Start pipeline</button>
+            <button disabled={loading} onClick={startPipeline}>Chạy pipeline</button>
             {latestJob ? (
               <div className="info">
-                <p><strong>Step:</strong> {latestJob.step}</p>
-                <p><strong>Progress:</strong> {latestJob.progress}%</p>
-                {latestJob.artifacts?.translation_stats ? <p><strong>Translate:</strong> {JSON.stringify(latestJob.artifacts.translation_stats)}</p> : null}
+                <p><strong>Bước:</strong> {latestJob.step}</p>
+                <p><strong>Tiến độ:</strong> {latestJob.progress}%</p>
+                {latestJob.artifacts?.translation_stats ? <p><strong>Dịch:</strong> {JSON.stringify(latestJob.artifacts.translation_stats)}</p> : null}
                 {latestJob.artifacts?.translation_error_hint ? <p className="error">{latestJob.artifacts.translation_error_hint}</p> : null}
               </div>
             ) : null}
           </section>
 
           <section className="block">
-            <h2>Export</h2>
+            <h2>Xuất file</h2>
             <label>
-              Content mode
+              Chế độ nội dung
               <select value={exportForm.content_mode} onChange={(e) => setExportForm((f) => ({ ...f, content_mode: e.target.value }))}>
-                <option value="raw">Chi ban goc</option>
-                <option value="translated">Chi ban dich</option>
-                <option value="bilingual">Song ngu</option>
+                <option value="raw">Chỉ bản gốc</option>
+                <option value="translated">Chỉ bản dịch</option>
+                <option value="bilingual">Song ngữ</option>
               </select>
             </label>
             <label>
-              Format
+              Định dạng
               <select value={exportForm.export_format} onChange={(e) => setExportForm((f) => ({ ...f, export_format: e.target.value }))}>
                 <option value="srt">SRT (CapCut)</option>
                 <option value="vtt">VTT</option>
@@ -515,17 +522,17 @@ export function App() {
               </select>
             </label>
             <button disabled={savingSegments || editableSegments.length === 0} onClick={saveSegments}>
-              {savingSegments ? "Dang luu..." : "Luu subtitle"}
+              {savingSegments ? "Đang lưu..." : "Lưu subtitle"}
             </button>
             <button disabled={retranslating || editableSegments.length === 0} onClick={retranslateOnly}>
-              {retranslating ? "Dang dich lai..." : "Dich lai"}
+              {retranslating ? "Đang dịch lại..." : "Dịch lại"}
             </button>
             <button disabled={exporting || editableSegments.length === 0} onClick={exportSubtitle}>
-              {exporting ? "Dang export..." : "Export"}
+              {exporting ? "Đang xuất..." : "Xuất file"}
             </button>
             {lastExport ? (
               <a className="download-link" href={lastExport.url} target="_blank" rel="noreferrer">
-                Tai file: {lastExport.output_key}
+                Tải file: {lastExport.output_key}
               </a>
             ) : null}
           </section>
@@ -534,18 +541,18 @@ export function App() {
         <section className="content">
           <section className="card preview-card">
             <div className="row-head">
-              <h2>Preview ROI</h2>
+              <h2>Xem trước ROI</h2>
               <div className="row-actions">
-                <button type="button" onClick={() => setRoiEditMode((v) => !v)}>{roiEditMode ? "Tat ROI Edit" : "Bat ROI Edit"}</button>
-                <button type="button" disabled={savingRoi} onClick={saveSelectedRoi}>{savingRoi ? "Dang luu..." : "Luu ROI"}</button>
+                <button type="button" onClick={() => setRoiEditMode((v) => !v)}>{roiEditMode ? "Tắt chỉnh ROI" : "Bật chỉnh ROI"}</button>
+                <button type="button" disabled={savingRoi} onClick={saveSelectedRoi}>{savingRoi ? "Đang lưu..." : "Lưu ROI"}</button>
               </div>
             </div>
             {selectedProject?.video_path ? (
               <>
                 <p className="hint">
                   {roiEditMode
-                    ? "Shift + keo de tao khung moi. Keo khung/goc de chinh."
-                    : "Tua video de kiem tra subtitle co nam dung ROI khong."}
+                    ? "Shift + kéo để tạo khung mới. Kéo khung/góc để chỉnh."
+                    : "Tua video để kiểm tra subtitle có nằm đúng ROI không."}
                 </p>
                 <div className="preview-stage" ref={stageRef} onMouseDown={beginDraw}>
                   <video
@@ -577,45 +584,45 @@ export function App() {
                   </div>
                 </div>
                 <div className="timeline-card">
-                  <p><strong>Time:</strong> {currentVideoTime.toFixed(2)}s</p>
+                  <p><strong>Thời gian:</strong> {currentVideoTime.toFixed(2)}s</p>
                   {activeSegment ? (
                     <>
-                      <p><strong>Active:</strong> #{activeSegment.id} ({Number(activeSegment.start_sec).toFixed(2)} - {Number(activeSegment.end_sec).toFixed(2)})</p>
+                      <p><strong>Đang hiển thị:</strong> #{activeSegment.id} ({Number(activeSegment.start_sec).toFixed(2)} - {Number(activeSegment.end_sec).toFixed(2)})</p>
                       <p><strong>Raw:</strong> {activeSegment.raw_text}</p>
-                      <p><strong>Translated:</strong> {activeSegment.translated_text}</p>
+                      <p><strong>Dịch:</strong> {activeSegment.translated_text}</p>
                     </>
                   ) : (
-                    <p>Khong co subtitle tai moc nay.</p>
+                    <p>Không có subtitle tại mốc này.</p>
                   )}
                 </div>
               </>
             ) : (
-              <p className="hint">Upload video de bat dau preview.</p>
+              <p className="hint">Tải video lên để bắt đầu xem trước.</p>
             )}
           </section>
 
           <section className="card editor-card">
             <div className="row-head">
-              <h2>Subtitle Editor</h2>
-              <span>{editableSegments.length} segments</span>
+              <h2>Chỉnh sửa subtitle</h2>
+              <span>{editableSegments.length} dòng</span>
             </div>
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
                     <th>#</th>
-                    <th>Start</th>
-                    <th>End</th>
-                    <th>Raw</th>
-                    <th>Translated</th>
-                    <th>Speaker</th>
-                    <th>Voice</th>
+                    <th>Bắt đầu</th>
+                    <th>Kết thúc</th>
+                    <th>Gốc</th>
+                    <th>Bản dịch</th>
+                    <th>Nhân vật</th>
+                    <th>Giọng</th>
                   </tr>
                 </thead>
                 <tbody>
                   {editableSegments.length === 0 ? (
                     <tr>
-                      <td colSpan={7}>Chua co du lieu</td>
+                      <td colSpan={7}>Chưa có dữ liệu</td>
                     </tr>
                   ) : (
                     editableSegments.map((s) => (

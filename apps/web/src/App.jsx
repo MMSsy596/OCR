@@ -37,6 +37,19 @@ function cloneSegments(segments) {
   return (segments || []).map((row) => ({ ...row }));
 }
 
+function formatEventTime(isoText) {
+  if (!isoText) return "-";
+  const date = new Date(isoText);
+  if (Number.isNaN(date.getTime())) return isoText;
+  return date.toLocaleTimeString("vi-VN", { hour12: false });
+}
+
+function formatValue(value) {
+  if (value === null || value === undefined) return "-";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
 export function App() {
   const MAX_HISTORY = 100;
   const [projects, setProjects] = useState([]);
@@ -116,6 +129,14 @@ export function App() {
           job?.step === "stitch_timeline",
       ),
     [jobs],
+  );
+  const latestJobEvents = useMemo(
+    () => [...(latestJob?.artifacts?.events || [])].slice(-30).reverse(),
+    [latestJob],
+  );
+  const latestJobStats = useMemo(
+    () => latestJob?.artifacts?.stats || {},
+    [latestJob],
   );
   const statusLabel = (status) => {
     if (status === "draft") return "nháp";
@@ -816,14 +837,14 @@ export function App() {
             {latestJob ? (
               <div className="info">
                 <p>
-                  <strong>Bước:</strong> {latestJob.step}
+                  <strong>B??c:</strong> {latestJob.step}
                 </p>
                 <p>
-                  <strong>Tiến độ:</strong> {latestJob.progress}%
+                  <strong>Ti?n ??:</strong> {latestJob.progress}%
                 </p>
                 {latestJob.artifacts?.translation_stats ? (
                   <p>
-                    <strong>Dịch:</strong>{" "}
+                    <strong>D?ch:</strong>{" "}
                     {JSON.stringify(latestJob.artifacts.translation_stats)}
                   </p>
                 ) : null}
@@ -831,6 +852,35 @@ export function App() {
                   <p className="error">
                     {latestJob.artifacts.translation_error_hint}
                   </p>
+                ) : null}
+                {Object.keys(latestJobStats).length > 0 ? (
+                  <details>
+                    <summary>Chi ti?t th?ng s? x? l?</summary>
+                    {Object.entries(latestJobStats).map(([phase, payload]) => (
+                      <div key={phase} style={{ marginTop: 8 }}>
+                        <p>
+                          <strong>{phase}</strong>
+                        </p>
+                        {Object.entries(payload || {}).map(([k, v]) => (
+                          <p key={`${phase}-${k}`}>
+                            {k}: {formatValue(v)}
+                          </p>
+                        ))}
+                      </div>
+                    ))}
+                  </details>
+                ) : null}
+                {latestJobEvents.length > 0 ? (
+                  <details>
+                    <summary>Timeline x? l? (log chi ti?t)</summary>
+                    <div style={{ maxHeight: 220, overflow: "auto", marginTop: 8 }}>
+                      {latestJobEvents.map((event, idx) => (
+                        <p key={`${event.time || idx}-${idx}`}>
+                          [{formatEventTime(event.time)}] [{event.phase}] [{event.level || "info"}] ({event.progress ?? "-"}%): {event.message}
+                        </p>
+                      ))}
+                    </div>
+                  </details>
                 ) : null}
               </div>
             ) : null}

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 from urllib import error, request
 from difflib import SequenceMatcher
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -24,6 +25,43 @@ def _update_job(db: Session, job: PipelineJob, status: JobStatus, progress: int,
     db.add(job)
     db.commit()
     db.refresh(job)
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _job_artifacts(job: PipelineJob) -> dict[str, Any]:
+    base = job.artifacts if isinstance(job.artifacts, dict) else {}
+    base.setdefault("events", [])
+    base.setdefault("stats", {})
+    return base
+
+
+def _push_event(
+    artifacts: dict[str, Any],
+    phase: str,
+    message: str,
+    progress: int,
+    level: str = "info",
+) -> None:
+    events = artifacts.setdefault("events", [])
+    events.append(
+        {
+            "time": _utc_now_iso(),
+            "phase": phase,
+            "level": level,
+            "progress": int(progress),
+            "message": message,
+        }
+    )
+    if len(events) > 400:
+        artifacts["events"] = events[-400:]
+
+
+def _set_stat(artifacts: dict[str, Any], phase: str, payload: dict[str, Any]) -> None:
+    stats = artifacts.setdefault("stats", {})
+    stats[phase] = payload
 
 
 def _fake_ocr_segments(project: Project) -> list[dict[str, Any]]:
@@ -53,36 +91,61 @@ def _fake_ocr_segments(project: Project) -> list[dict[str, Any]]:
     return output
 
 
-def _ocr_segments_from_video(project: Project, scan_interval_sec: float = 1.0) -> list[dict[str, Any]]:
+def _ocr_segments_from_video(project: Project, scan_interval_sec: float = 1.0) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    meta: dict[str, Any] = {
+        "engine": "rapidocr",
+        "scan_interval_sec": float(scan_interval_sec),
+        "video_path": str(project.video_path or ""),
+        "frames_total": 0,
+        "frames_sampled": 0,
+        "frames_read_ok": 0,
+        "frames_read_failed": 0,
+        "roi_empty_count": 0,
+        "ocr_hit_frames": 0,
+        "duplicate_extend_count": 0,
+        "ignored_short_text": 0,
+        "segments_before_merge": 0,
+    }
     if not project.video_path:
-        return []
+        meta["engine"] = "missing_video"
+        return [], meta
     video_path = Path(project.video_path)
     if not video_path.exists():
-        return []
+        meta["engine"] = "missing_video_file"
+        return [], meta
     try:
         import cv2  # type: ignore
         from rapidocr_onnxruntime import RapidOCR  # type: ignore
     except Exception:
-        return []
+        meta["engine"] = "rapidocr_unavailable"
+        return [], meta
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
-        return []
+        meta["engine"] = "video_open_failed"
+        return [], meta
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 24
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     sample_step = int(max(1, fps * max(0.1, scan_interval_sec)))
+    meta["fps"] = float(fps)
+    meta["frames_total"] = total_frames
+    meta["sample_step_frames"] = int(sample_step)
+    meta["estimated_samples"] = int(total_frames // sample_step) + (1 if total_frames % sample_step else 0)
 
     engine = RapidOCR()
     segments = []
     idx = 0
     last_text = ""
     while idx < total_frames:
+        meta["frames_sampled"] = int(meta["frames_sampled"]) + 1
         cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ok, frame = cap.read()
         if not ok or frame is None:
+            meta["frames_read_failed"] = int(meta["frames_read_failed"]) + 1
             idx += sample_step
             continue
+        meta["frames_read_ok"] = int(meta["frames_read_ok"]) + 1
 
         h, w = frame.shape[:2]
         x = int(project.roi_x * w)
@@ -91,6 +154,7 @@ def _ocr_segments_from_video(project: Project, scan_interval_sec: float = 1.0) -
         rh = int(project.roi_h * h)
         crop = frame[y : y + rh, x : x + rw]
         if crop.size == 0:
+            meta["roi_empty_count"] = int(meta["roi_empty_count"]) + 1
             idx += sample_step
             continue
 
@@ -101,6 +165,7 @@ def _ocr_segments_from_video(project: Project, scan_interval_sec: float = 1.0) -
         if not ocr_result:
             idx += sample_step
             continue
+        meta["ocr_hit_frames"] = int(meta["ocr_hit_frames"]) + 1
 
         texts = []
         scores = []
@@ -122,12 +187,14 @@ def _ocr_segments_from_video(project: Project, scan_interval_sec: float = 1.0) -
         text = " ".join(texts).strip()
         text = " ".join(text.split())
         if len(text) < 2:
+            meta["ignored_short_text"] = int(meta["ignored_short_text"]) + 1
             idx += sample_step
             continue
         if text == last_text:
             if segments:
                 extended_end = (idx / fps) + max(0.5, scan_interval_sec)
                 segments[-1]["end_sec"] = max(float(segments[-1]["end_sec"]), float(extended_end))
+                meta["duplicate_extend_count"] = int(meta["duplicate_extend_count"]) + 1
             idx += sample_step
             continue
 
@@ -148,7 +215,8 @@ def _ocr_segments_from_video(project: Project, scan_interval_sec: float = 1.0) -
         idx += sample_step
 
     cap.release()
-    return segments
+    meta["segments_before_merge"] = len(segments)
+    return segments, meta
 
 
 def _apply_glossary(text: str, glossary: str) -> str:
@@ -290,12 +358,15 @@ def _translate_project_segments(
     project: Project,
     resolved_api_key: str | None,
     voice_map: dict[str, str] | None = None,
-) -> tuple[list[dict[str, Any]], dict[str, int], str]:
+) -> tuple[list[dict[str, Any]], dict[str, int], str, dict[str, Any]]:
     voice_map = voice_map or {}
     db_segments = list_segments(db, project.id)
     normalized = []
     translation_stats = {"gemini": 0, "deep_translator": 0, "fallback_tag": 0}
     first_translation_error = ""
+    fallback_samples: list[dict[str, Any]] = []
+    gemini_error_count = 0
+    deep_translator_error_count = 0
     for seg in db_segments:
         txt, provider, err = _translate_with_fallback(
             seg.raw_text,
@@ -308,6 +379,19 @@ def _translate_project_segments(
             translation_stats[provider] += 1
         if err and not first_translation_error:
             first_translation_error = err
+        if "gemini_" in err:
+            gemini_error_count += 1
+        if "deep_translator_" in err:
+            deep_translator_error_count += 1
+        if provider != "gemini" and len(fallback_samples) < 12:
+            fallback_samples.append(
+                {
+                    "segment_id": seg.id,
+                    "provider": provider,
+                    "error": err[:240] if err else "",
+                    "raw_excerpt": (seg.raw_text or "")[:80],
+                }
+            )
         txt = _apply_glossary(txt, project.glossary)
         speaker = seg.speaker
         voice = voice_map.get(speaker, seg.voice)
@@ -322,7 +406,15 @@ def _translate_project_segments(
                 "confidence": seg.confidence,
             }
         )
-    return normalized, translation_stats, first_translation_error
+    translate_detail = {
+        "total_segments": len(db_segments),
+        "used_runtime_key": bool(resolved_api_key),
+        "provider_counts": translation_stats.copy(),
+        "gemini_error_count": gemini_error_count,
+        "deep_translator_error_count": deep_translator_error_count,
+        "fallback_samples": fallback_samples,
+    }
+    return normalized, translation_stats, first_translation_error, translate_detail
 
 
 def retranslate_project_segments(project_id: str, gemini_api_key: str | None = None) -> dict[str, Any]:
@@ -332,7 +424,7 @@ def retranslate_project_segments(project_id: str, gemini_api_key: str | None = N
         if not project:
             return {"ok": False, "error": "project_not_found"}
         resolved_api_key = _resolve_gemini_key(gemini_api_key)
-        normalized, translation_stats, first_translation_error = _translate_project_segments(
+        normalized, translation_stats, first_translation_error, _ = _translate_project_segments(
             db,
             project,
             resolved_api_key,
@@ -374,39 +466,155 @@ def run_pipeline(
         db.add(project)
         db.commit()
 
-        _update_job(db, job, JobStatus.running, 5, "ocr")
-        segments = _ocr_segments_from_video(project, scan_interval_sec=scan_interval_sec)
+        artifacts = _job_artifacts(job)
+        _push_event(
+            artifacts,
+            "pipeline",
+            f"Bat dau pipeline, interval OCR={scan_interval_sec:.2f}s, voice_map={len(voice_map)}.",
+            1,
+        )
+        _set_stat(
+            artifacts,
+            "pipeline",
+            {
+                "project_id": project.id,
+                "source_lang": project.source_lang,
+                "target_lang": project.target_lang,
+                "scan_interval_sec": float(scan_interval_sec),
+                "voice_map_size": len(voice_map),
+                "gemini_key_present": bool(resolved_api_key),
+            },
+        )
+        _update_job(db, job, JobStatus.running, 1, "init", artifacts=artifacts)
+
+        _push_event(artifacts, "ocr", "Dang tach video thanh frame va OCR...", 5)
+        _update_job(db, job, JobStatus.running, 5, "ocr", artifacts=artifacts)
+        segments, ocr_meta = _ocr_segments_from_video(project, scan_interval_sec=scan_interval_sec)
+        ocr_source = "rapidocr"
         if not segments:
+            _push_event(
+                artifacts,
+                "ocr",
+                "OCR that khong co ket qua, fallback sang mau subtitle gia lap.",
+                12,
+                level="warning",
+            )
             segments = _fake_ocr_segments(project)
+            ocr_source = "fake_fallback"
+            ocr_meta = {
+                **ocr_meta,
+                "engine": "fake_fallback",
+                "segments_before_merge": len(segments),
+            }
+        _set_stat(
+            artifacts,
+            "ocr",
+            {
+                **ocr_meta,
+                "source": ocr_source,
+                "segments_raw": len(segments),
+            },
+        )
+        _push_event(
+            artifacts,
+            "ocr",
+            f"OCR xong: {len(segments)} doan text (source={ocr_source}).",
+            28,
+        )
         segments = _merge_adjacent_similar_segments(segments, max_gap_sec=max(0.8, scan_interval_sec * 1.5), ratio_threshold=0.9)
+        _set_stat(
+            artifacts,
+            "dedupe_ocr",
+            {
+                "before": int(ocr_meta.get("segments_before_merge", len(segments))),
+                "after": len(segments),
+            },
+        )
+        _push_event(artifacts, "ocr", f"Sau merge OCR: {len(segments)} doan.", 34)
         replace_segments(db, project.id, segments)
 
-        _update_job(db, job, JobStatus.running, 35, "translate")
-        normalized, translation_stats, first_translation_error = _translate_project_segments(
+        _push_event(
+            artifacts,
+            "translate",
+            f"Bat dau dich {len(segments)} doan, gemini_key={'co' if resolved_api_key else 'khong'}.",
+            35,
+        )
+        _update_job(db, job, JobStatus.running, 35, "translate", artifacts=artifacts)
+        normalized, translation_stats, first_translation_error, translate_detail = _translate_project_segments(
             db,
             project,
             resolved_api_key,
             voice_map=voice_map,
         )
+        _set_stat(
+            artifacts,
+            "translate",
+            {
+                **translate_detail,
+                "first_error": first_translation_error[:320] if first_translation_error else "",
+            },
+        )
+        if translation_stats.get("fallback_tag", 0) > 0:
+            _push_event(
+                artifacts,
+                "translate",
+                f"Co {translation_stats['fallback_tag']} doan fallback tag vi dich that bai.",
+                58,
+                level="warning",
+            )
+        if translation_stats.get("deep_translator", 0) > 0:
+            _push_event(
+                artifacts,
+                "translate",
+                f"Deep-translator duoc dung cho {translation_stats['deep_translator']} doan.",
+                60,
+            )
+        _push_event(
+            artifacts,
+            "translate",
+            f"Dich xong: gemini={translation_stats.get('gemini', 0)}, deep_translator={translation_stats.get('deep_translator', 0)}, fallback={translation_stats.get('fallback_tag', 0)}.",
+            64,
+        )
         replace_segments(db, project.id, normalized)
 
-        _update_job(db, job, JobStatus.running, 65, "dedupe_merge")
+        _push_event(artifacts, "dedupe_merge", "Dang merge subtitle trung lap lan cuoi...", 65)
+        _update_job(db, job, JobStatus.running, 65, "dedupe_merge", artifacts=artifacts)
         # MVP: bo qua merge nang cao, chi loai dong trung lien tiep.
         deduped = _merge_adjacent_similar_segments(
             normalized,
             max_gap_sec=max(0.8, scan_interval_sec * 1.5),
             ratio_threshold=0.92,
         )
+        _set_stat(
+            artifacts,
+            "dedupe_final",
+            {
+                "before": len(normalized),
+                "after": len(deduped),
+                "removed": max(0, len(normalized) - len(deduped)),
+            },
+        )
+        _push_event(artifacts, "dedupe_merge", f"Merge xong: {len(normalized)} -> {len(deduped)} doan.", 78)
         replace_segments(db, project.id, deduped)
 
-        _update_job(db, job, JobStatus.running, 80, "tts")
+        _push_event(artifacts, "tts", "Dang tao tts_lines.txt cho long tieng...", 80)
+        _update_job(db, job, JobStatus.running, 80, "tts", artifacts=artifacts)
         project_dir = Path(project.video_path).parent if project.video_path else Path.cwd()
         tts_script = project_dir / "tts_lines.txt"
         with tts_script.open("w", encoding="utf-8") as f:
             for seg in deduped:
                 f.write(f"{seg['start_sec']:.2f}-{seg['end_sec']:.2f} [{seg['voice']}] {seg['translated_text']}\n")
+        _set_stat(
+            artifacts,
+            "tts_script",
+            {
+                "path": str(tts_script),
+                "lines": len(deduped),
+            },
+        )
 
-        _update_job(db, job, JobStatus.running, 90, "export")
+        _push_event(artifacts, "export", "Dang xuat SRT + JSON...", 90)
+        _update_job(db, job, JobStatus.running, 90, "export", artifacts=artifacts)
         srt_path = project_dir / "output.vi.srt"
         json_path = project_dir / "output.project.json"
 
@@ -432,12 +640,23 @@ def run_pipeline(
             )
 
         artifacts = {
+            **artifacts,
             "srt": str(srt_path),
             "json": str(json_path),
             "tts_script": str(tts_script),
             "translation_stats": translation_stats,
             "translation_error_hint": first_translation_error,
         }
+        _set_stat(
+            artifacts,
+            "export",
+            {
+                "srt_path": str(srt_path),
+                "json_path": str(json_path),
+                "segments": len(deduped),
+            },
+        )
+        _push_event(artifacts, "done", "Pipeline hoan tat.", 100)
         _update_job(db, job, JobStatus.done, 100, "done", artifacts=artifacts)
         project.status = ProjectStatus.ready
         db.add(project)
@@ -446,7 +665,15 @@ def run_pipeline(
     except Exception as ex:
         job = db.get(PipelineJob, job_id)
         if job:
-            _update_job(db, job, JobStatus.failed, job.progress if job.progress else 0, "error", str(ex))
+            artifacts = _job_artifacts(job)
+            _push_event(
+                artifacts,
+                "error",
+                f"Pipeline loi: {str(ex)[:320]}",
+                int(job.progress if job.progress else 0),
+                level="error",
+            )
+            _update_job(db, job, JobStatus.failed, job.progress if job.progress else 0, "error", str(ex), artifacts=artifacts)
         project = db.get(Project, job.project_id) if job else None
         if project:
             project.status = ProjectStatus.failed

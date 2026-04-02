@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import wave
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -43,6 +44,37 @@ def _update_job(
     db.add(job)
     db.commit()
     db.refresh(job)
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _job_artifacts(job: PipelineJob) -> dict:
+    base = job.artifacts if isinstance(job.artifacts, dict) else {}
+    base.setdefault("events", [])
+    base.setdefault("stats", {})
+    return base
+
+
+def _push_event(artifacts: dict, phase: str, message: str, progress: int, level: str = "info") -> None:
+    events = artifacts.setdefault("events", [])
+    events.append(
+        {
+            "time": _utc_now_iso(),
+            "phase": phase,
+            "level": level,
+            "progress": int(progress),
+            "message": message,
+        }
+    )
+    if len(events) > 400:
+        artifacts["events"] = events[-400:]
+
+
+def _set_stat(artifacts: dict, phase: str, payload: dict) -> None:
+    stats = artifacts.setdefault("stats", {})
+    stats[phase] = payload
 
 
 def _parse_timestamp(ts: str) -> float:
@@ -188,22 +220,52 @@ def run_dub_job(
         project.status = ProjectStatus.processing
         db.add(project)
         db.commit()
+        artifacts = _job_artifacts(job)
+        _set_stat(
+            artifacts,
+            "dub",
+            {
+                "voice": voice,
+                "rate": rate,
+                "volume": volume,
+                "pitch": pitch,
+                "output_format": output_format,
+                "match_video_duration": bool(match_video_duration),
+            },
+        )
+        _push_event(artifacts, "dub", "Bat dau job long tieng tu SRT.", 1)
+        _update_job(db, job, JobStatus.running, 1, "init", artifacts=artifacts)
 
         project_dir = Path(project.video_path).parent
         srt_path = _resolve_srt_path(project_dir, srt_key)
         if not srt_path:
-            _update_job(db, job, JobStatus.failed, 0, "error", "srt_not_found")
+            _push_event(artifacts, "dub", f"Khong tim thay SRT: {srt_key}", 1, level="error")
+            _update_job(db, job, JobStatus.failed, 0, "error", "srt_not_found", artifacts=artifacts)
             return {"ok": False, "error": "srt_not_found"}
 
-        _update_job(db, job, JobStatus.running, 5, "parse_srt")
+        _push_event(artifacts, "parse_srt", f"Dang parse SRT: {srt_path.name}", 5)
+        _update_job(db, job, JobStatus.running, 5, "parse_srt", artifacts=artifacts)
         cues = _parse_srt(srt_path)
         if not cues:
-            _update_job(db, job, JobStatus.failed, 5, "error", "srt_empty")
+            _push_event(artifacts, "parse_srt", "SRT rong hoac khong parse duoc cue.", 5, level="error")
+            _update_job(db, job, JobStatus.failed, 5, "error", "srt_empty", artifacts=artifacts)
             return {"ok": False, "error": "srt_empty"}
+        _set_stat(
+            artifacts,
+            "parse_srt",
+            {
+                "srt_path": str(srt_path),
+                "cue_count": len(cues),
+                "first_start_sec": cues[0].start_sec,
+                "last_end_sec": cues[-1].end_sec,
+            },
+        )
+        _push_event(artifacts, "parse_srt", f"Parse xong {len(cues)} cue.", 8)
 
         fmt = (output_format or "wav").lower().strip()
         if fmt not in {"wav", "mp3"}:
-            _update_job(db, job, JobStatus.failed, 5, "error", "invalid_output_format")
+            _push_event(artifacts, "dub", f"Output format khong hop le: {output_format}", 8, level="error")
+            _update_job(db, job, JobStatus.failed, 5, "error", "invalid_output_format", artifacts=artifacts)
             return {"ok": False, "error": "invalid_output_format"}
 
         tmp_dir = project_dir / "_dub_tmp" / job_id
@@ -211,10 +273,13 @@ def run_dub_job(
             shutil.rmtree(tmp_dir, ignore_errors=True)
         tmp_dir.mkdir(parents=True, exist_ok=True)
 
-        _update_job(db, job, JobStatus.running, 10, "synthesize_tts")
+        _push_event(artifacts, "synthesize_tts", "Dang synth TTS tung cue...", 10)
+        _update_job(db, job, JobStatus.running, 10, "synthesize_tts", artifacts=artifacts)
         cache: dict[tuple[str, str, str, str, str], Path] = {}
         rendered_wavs: list[tuple[SrtCue, Path]] = []
         total = len(cues)
+        cache_hit = 0
+        cache_miss = 0
         for idx, cue in enumerate(cues, start=1):
             slot_sec = max(0.05, cue.end_sec - cue.start_sec)
             dynamic_rate = _adaptive_rate(cue.text, slot_sec, rate)
@@ -222,7 +287,9 @@ def run_dub_job(
 
             if cache_key in cache:
                 seg_wav = cache[cache_key]
+                cache_hit += 1
             else:
+                cache_miss += 1
                 raw_mp3 = tmp_dir / f"seg_{idx:06d}.mp3"
                 seg_wav = tmp_dir / f"seg_{idx:06d}.wav"
                 asyncio.run(
@@ -255,9 +322,27 @@ def run_dub_job(
 
             if idx == total or idx % max(1, total // 10) == 0:
                 progress = 10 + int((idx / total) * 70)
-                _update_job(db, job, JobStatus.running, min(progress, 80), "synthesize_tts")
+                _set_stat(
+                    artifacts,
+                    "synthesize_tts",
+                    {
+                        "total_cues": total,
+                        "processed_cues": idx,
+                        "cache_hit": cache_hit,
+                        "cache_miss": cache_miss,
+                        "percent_in_phase": round((idx / total) * 100, 1),
+                    },
+                )
+                _push_event(
+                    artifacts,
+                    "synthesize_tts",
+                    f"Synth {idx}/{total} cue ({round((idx / total) * 100, 1)}%).",
+                    min(progress, 80),
+                )
+                _update_job(db, job, JobStatus.running, min(progress, 80), "synthesize_tts", artifacts=artifacts)
 
-        _update_job(db, job, JobStatus.running, 85, "stitch_timeline")
+        _push_event(artifacts, "stitch_timeline", "Dang ghep audio vao timeline...", 85)
+        _update_job(db, job, JobStatus.running, 85, "stitch_timeline", artifacts=artifacts)
         output_basename = f"dub.{srt_path.stem}.{fmt}"
         output_path = project_dir / output_basename
         wav_output = output_path if fmt == "wav" else (tmp_dir / "dub.final.wav")
@@ -301,9 +386,21 @@ def run_dub_job(
             if written_frames < target_total_frames:
                 tail = target_total_frames - written_frames
                 out_wav.writeframesraw(b"\x00" * (tail * frame_bytes))
+        _set_stat(
+            artifacts,
+            "stitch_timeline",
+            {
+                "sample_rate": sample_rate,
+                "target_total_frames": target_total_frames,
+                "written_frames": written_frames,
+                "target_duration_sec": round(total_duration, 3),
+                "tail_padding_frames": max(0, target_total_frames - written_frames),
+            },
+        )
 
         if fmt == "mp3":
-            _update_job(db, job, JobStatus.running, 95, "encode_output")
+            _push_event(artifacts, "encode_output", "Dang encode WAV -> MP3...", 95)
+            _update_job(db, job, JobStatus.running, 95, "encode_output", artifacts=artifacts)
             _run_cmd(
                 [
                     "ffmpeg",
@@ -319,6 +416,7 @@ def run_dub_job(
             )
 
         artifacts = {
+            **artifacts,
             "dubbed_audio": str(output_path),
             "dub_srt": str(srt_path),
             "dub_voice": voice,
@@ -327,6 +425,7 @@ def run_dub_job(
             "dub_pitch": pitch,
             "dub_output_key": output_basename,
         }
+        _push_event(artifacts, "done", f"Long tieng xong: {output_basename}", 100)
         _update_job(db, job, JobStatus.done, 100, "done", artifacts=artifacts)
         project.status = ProjectStatus.ready
         db.add(project)
@@ -336,7 +435,15 @@ def run_dub_job(
     except Exception as ex:
         job = db.get(PipelineJob, job_id)
         if job:
-            _update_job(db, job, JobStatus.failed, job.progress if job.progress else 0, "error", str(ex))
+            artifacts = _job_artifacts(job)
+            _push_event(
+                artifacts,
+                "error",
+                f"Dub loi: {str(ex)[:320]}",
+                int(job.progress if job.progress else 0),
+                level="error",
+            )
+            _update_job(db, job, JobStatus.failed, job.progress if job.progress else 0, "error", str(ex), artifacts=artifacts)
         if job:
             project = db.get(Project, job.project_id)
             if project:

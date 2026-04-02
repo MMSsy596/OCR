@@ -3,7 +3,8 @@ import sys
 from pathlib import Path
 
 from redis import Redis
-from rq import Connection, Worker
+from rq import Connection, SimpleWorker, Worker
+from rq.timeouts import TimerDeathPenalty
 
 
 def main() -> None:
@@ -20,10 +21,13 @@ def main() -> None:
     # RQ worker can resolve "app.pipeline.run_pipeline"
     os.environ.setdefault("PYTHONPATH", str(api_dir))
     with Connection(redis_conn):
-        worker = Worker(["pipeline"])
+        # Windows does not support os.fork used by default Worker.
+        worker_cls = SimpleWorker if os.name == "nt" else Worker
+        worker = worker_cls(["pipeline"])
+        if os.name == "nt":
+            worker.death_penalty_class = TimerDeathPenalty
         worker.work(with_scheduler=False)
 
 
 if __name__ == "__main__":
     main()
-

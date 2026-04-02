@@ -65,6 +65,7 @@ export function App() {
   const [savingRoi, setSavingRoi] = useState(false);
   const [savingSegments, setSavingSegments] = useState(false);
   const [retranslating, setRetranslating] = useState(false);
+  const [uploadingSrt, setUploadingSrt] = useState(false);
   const [isEditingSegments, setIsEditingSegments] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [dubbing, setDubbing] = useState(false);
@@ -78,6 +79,7 @@ export function App() {
     roi: { x: 0.1, y: 0.75, w: 0.8, h: 0.2 },
   });
   const [videoFile, setVideoFile] = useState(null);
+  const [srtUploadFile, setSrtUploadFile] = useState(null);
   const [pipelineForm, setPipelineForm] = useState({
     gemini_api_key: "",
     voiceMapText:
@@ -106,6 +108,7 @@ export function App() {
 
   const stageRef = useRef(null);
   const segmentsRef = useRef([]);
+  const pollTickRef = useRef(0);
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId) || null,
@@ -163,8 +166,13 @@ export function App() {
 
   useEffect(() => {
     if (!selectedProjectId) return;
-    loadProjectData(selectedProjectId);
-    const timer = setInterval(() => loadProjectData(selectedProjectId), 2000);
+    pollTickRef.current = 0;
+    loadProjectData(selectedProjectId, { includeSegments: true });
+    const timer = setInterval(() => {
+      pollTickRef.current += 1;
+      const includeSegments = !isEditingSegments && pollTickRef.current % 4 === 0;
+      loadProjectData(selectedProjectId, { includeSegments });
+    }, 2500);
     return () => clearInterval(timer);
   }, [selectedProjectId, isEditingSegments]);
 
@@ -310,14 +318,15 @@ export function App() {
     }
   }
 
-  async function loadProjectData(projectId) {
+  async function loadProjectData(projectId, options = {}) {
+    const includeSegments = options.includeSegments ?? true;
     try {
-      const [s, j, p] = await Promise.all([
-        jsonFetch(`${API_BASE}/projects/${projectId}/segments`),
+      const [j, p] = await Promise.all([
         jsonFetch(`${API_BASE}/projects/${projectId}/jobs`),
         jsonFetch(`${API_BASE}/projects/${projectId}`),
       ]);
-      if (!isEditingSegments) {
+      if (includeSegments && !isEditingSegments) {
+        const s = await jsonFetch(`${API_BASE}/projects/${projectId}/segments`);
         setEditableSegments(s.map((row) => ({ ...row })));
         setUndoStack([]);
         setRedoStack([]);
@@ -443,6 +452,33 @@ export function App() {
       setMessage(`Lỗi upload: ${err.message}`);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function uploadExternalSrt() {
+    if (!selectedProjectId || !srtUploadFile) {
+      setMessage("Chon project va file SRT truoc.");
+      return;
+    }
+    setUploadingSrt(true);
+    setMessage("");
+    try {
+      const form = new FormData();
+      form.append("file", srtUploadFile);
+      const res = await fetch(`${API_BASE}/projects/${selectedProjectId}/srt/upload`, {
+        method: "POST",
+        body: form,
+      });
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      const out = await res.json();
+      setDubForm((prev) => ({ ...prev, srt_key: out.output_key }));
+      setMessage(`Da upload SRT: ${out.output_key}`);
+    } catch (err) {
+      setMessage(`Loi upload SRT: ${err.message}`);
+    } finally {
+      setUploadingSrt(false);
     }
   }
 
@@ -969,43 +1005,12 @@ export function App() {
           </section>
 
           <section className="block">
-            <h2>Xuất file</h2>
-            <label>
-              Chế độ nội dung
-              <select
-                value={exportForm.content_mode}
-                onChange={(e) =>
-                  setExportForm((f) => ({ ...f, content_mode: e.target.value }))
-                }
-              >
-                <option value="raw">Chỉ bản gốc</option>
-                <option value="translated">Chỉ bản dịch</option>
-                <option value="bilingual">Song ngữ</option>
-              </select>
-            </label>
-            <label>
-              Định dạng
-              <select
-                value={exportForm.export_format}
-                onChange={(e) =>
-                  setExportForm((f) => ({
-                    ...f,
-                    export_format: e.target.value,
-                  }))
-                }
-              >
-                <option value="srt">SRT (CapCut)</option>
-                <option value="vtt">VTT</option>
-                <option value="csv">CSV</option>
-                <option value="txt">TXT</option>
-                <option value="json">JSON</option>
-              </select>
-            </label>
+            <h2>Subtitle Tools</h2>
             <button
               disabled={savingSegments || editableSegments.length === 0}
               onClick={saveSegments}
             >
-              {savingSegments ? "Đang lưu..." : "Lưu subtitle"}
+              {savingSegments ? "Dang luu subtitle..." : "Luu subtitle"}
             </button>
             <button
               disabled={undoStack.length === 0}
@@ -1023,7 +1028,7 @@ export function App() {
                 });
               }}
             >
-              Hoàn tác (Ctrl+Z)
+              Hoan tac (Ctrl+Z)
             </button>
             <button
               disabled={redoStack.length === 0}
@@ -1043,28 +1048,79 @@ export function App() {
                 });
               }}
             >
-              Làm lại (Ctrl+Y)
-            </button>{" "}
+              Lam lai (Ctrl+Y)
+            </button>
             <button
               disabled={editableSegments.length === 0}
               onClick={mergeAdjacentDuplicateSegments}
             >
-              Gộp dòng trùng kề nhau
+              Gop dong trung ke nhau
             </button>
             <button
               disabled={retranslating || editableSegments.length === 0}
               onClick={retranslateOnly}
             >
-              {retranslating ? "Đang dịch lại..." : "Dịch lại"}
+              {retranslating ? "Dang dich lai..." : "Dich lai"}
             </button>
+          </section>
+
+          <section className="block">
+            <h2>Dub & Export</h2>
+            <label>
+              Che do noi dung
+              <select
+                value={exportForm.content_mode}
+                onChange={(e) =>
+                  setExportForm((f) => ({ ...f, content_mode: e.target.value }))
+                }
+              >
+                <option value="raw">Ban goc</option>
+                <option value="translated">Ban dich</option>
+                <option value="bilingual">Song ngu</option>
+              </select>
+            </label>
+            <label>
+              Dinh dang subtitle
+              <select
+                value={exportForm.export_format}
+                onChange={(e) =>
+                  setExportForm((f) => ({
+                    ...f,
+                    export_format: e.target.value,
+                  }))
+                }
+              >
+                <option value="srt">SRT (CapCut)</option>
+                <option value="vtt">VTT</option>
+                <option value="csv">CSV</option>
+                <option value="txt">TXT</option>
+                <option value="json">JSON</option>
+              </select>
+            </label>
             <button
               disabled={exporting || editableSegments.length === 0}
               onClick={exportSubtitle}
             >
-              {exporting ? "Đang xuất..." : "Xuất file"}
+              {exporting ? "Dang xuat subtitle..." : "Xuat subtitle"}
             </button>
+
             <label>
-              SRT dùng để lồng tiếng
+              Chen file SRT khac
+              <input
+                type="file"
+                accept=".srt"
+                onChange={(e) => setSrtUploadFile(e.target.files?.[0] || null)}
+              />
+            </label>
+            <button
+              disabled={uploadingSrt || !srtUploadFile || !selectedProjectId}
+              onClick={uploadExternalSrt}
+            >
+              {uploadingSrt ? "Dang upload SRT..." : "Upload SRT vao project"}
+            </button>
+
+            <label>
+              SRT dung de long tieng
               <input
                 value={dubForm.srt_key}
                 onChange={(e) =>
@@ -1074,7 +1130,7 @@ export function App() {
               />
             </label>
             <label>
-              Giọng đọc
+              Giong doc
               <input
                 value={dubForm.voice}
                 onChange={(e) =>
@@ -1085,7 +1141,7 @@ export function App() {
             </label>
             <div className="inline-two">
               <label>
-                Tốc độ
+                Toc do
                 <input
                   value={dubForm.rate}
                   onChange={(e) =>
@@ -1118,14 +1174,14 @@ export function App() {
                   }))
                 }
               />
-              Khớp đúng tổng thời lượng video gốc
+              Khop tong thoi luong video goc
             </label>
             <button
               disabled={dubbing || editableSegments.length === 0}
               onClick={startDubAudio}
             >
-              {dubbing ? "Đang dựng audio..." : "Tạo audio lồng tiếng"}
-            </button>{" "}
+              {dubbing ? "Dang dung audio..." : "Tao audio long tieng"}
+            </button>
             {lastExport ? (
               <a
                 className="download-link"
@@ -1133,9 +1189,9 @@ export function App() {
                 target="_blank"
                 rel="noreferrer"
               >
-                Tải file: {lastExport.output_key}
+                Tai subtitle: {lastExport.output_key}
               </a>
-            ) : null}{" "}
+            ) : null}
             {latestDubJob?.artifacts?.dub_output_key ? (
               <a
                 className="download-link"
@@ -1143,7 +1199,7 @@ export function App() {
                 target="_blank"
                 rel="noreferrer"
               >
-                Tải audio: {latestDubJob.artifacts.dub_output_key}
+                Tai audio: {latestDubJob.artifacts.dub_output_key}
               </a>
             ) : null}
           </section>

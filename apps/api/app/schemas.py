@@ -115,6 +115,11 @@ class ClearSessionsResponse(BaseModel):
     failed_storage_dirs: list[str]
 
 
+class SrtUploadResponse(BaseModel):
+    output_key: str
+    output_path: str
+
+
 class JobRead(BaseModel):
     id: str
     project_id: str

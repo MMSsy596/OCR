@@ -114,6 +114,32 @@ def upload_video(project_id: str, file: UploadFile = File(...), db: Session = De
     return _to_project_read(project)
 
 
+@app.post("/projects/{project_id}/srt/upload", response_model=schemas.SrtUploadResponse)
+def upload_srt_file(project_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="project_not_found")
+    project_dir = settings.storage_path / project_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    src_name = Path(file.filename or "manual.external.srt")
+    ext = src_name.suffix.lower()
+    if ext != ".srt":
+        raise HTTPException(status_code=400, detail="srt_required")
+
+    stem = src_name.stem.strip() or "manual.external"
+    safe_stem = "".join(ch if (ch.isalnum() or ch in {"-", "_", "."}) else "_" for ch in stem)[:80].strip("._")
+    safe_stem = safe_stem or "manual.external"
+    output_key = f"{safe_stem}.srt"
+    output_path = project_dir / output_key
+    with output_path.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+    return schemas.SrtUploadResponse(
+        output_key=output_key,
+        output_path=str(output_path),
+    )
+
+
 @app.get("/projects/{project_id}/video")
 def stream_video(project_id: str, db: Session = Depends(get_db)):
     project = crud.get_project(db, project_id)

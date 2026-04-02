@@ -136,6 +136,17 @@ export function App() {
       ),
     [jobs],
   );
+  const latestDubAudioUrl = useMemo(
+    () =>
+      latestDubJob?.artifacts?.dubbed_audio
+        ? `${API_BASE}/jobs/${latestDubJob.id}/artifact/dubbed_audio`
+        : "",
+    [latestDubJob],
+  );
+  const latestDubAudioName = useMemo(
+    () => latestDubJob?.artifacts?.dub_output_key || "dub-output.wav",
+    [latestDubJob],
+  );
   const latestJobEvents = useMemo(
     () => [...(latestJob?.artifacts?.events || [])].slice(-30).reverse(),
     [latestJob],
@@ -781,6 +792,31 @@ export function App() {
     }
   }
 
+  async function downloadDubAudio() {
+    if (!latestDubAudioUrl) {
+      setMessage("Chưa có file âm thanh để tải.");
+      return;
+    }
+    try {
+      const res = await fetch(latestDubAudioUrl);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = latestDubAudioName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(blobUrl);
+      setMessage(`Đã tải file âm thanh: ${latestDubAudioName}`);
+    } catch (err) {
+      setMessage(`Lỗi tải file âm thanh: ${err.message}`);
+    }
+  }
+
   async function retryStuckJobs() {
     if (!selectedProjectId) {
       setMessage("Chọn dự án trước.");
@@ -1234,6 +1270,13 @@ export function App() {
                 Tải âm thanh: {latestDubJob.artifacts.dub_output_key}
               </a>
             ) : null}
+            <button
+              type="button"
+              disabled={!latestDubAudioUrl}
+              onClick={downloadDubAudio}
+            >
+              Tải file âm thanh về máy
+            </button>
             {latestDubJob?.artifacts?.dubbed_audio ? (
               <p className="hint">
                 Đường dẫn file âm thanh: {latestDubJob.artifacts.dubbed_audio}

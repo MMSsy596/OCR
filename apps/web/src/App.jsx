@@ -61,6 +61,7 @@ export function App() {
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [clearingSessions, setClearingSessions] = useState(false);
+  const [forceClearingSessions, setForceClearingSessions] = useState(false);
   const [savingRoi, setSavingRoi] = useState(false);
   const [savingSegments, setSavingSegments] = useState(false);
   const [retranslating, setRetranslating] = useState(false);
@@ -378,6 +379,44 @@ export function App() {
       setMessage(`Loi clear sessions: ${err.message}`);
     } finally {
       setClearingSessions(false);
+    }
+  }
+
+  async function forceClearAllSessions() {
+    const step1 = window.confirm(
+      "CANH BAO: thao tac nay se xoa TAT CA session, ke ca processing. Ban tiep tuc?",
+    );
+    if (!step1) return;
+    const token = window.prompt(
+      "Buoc 2/2: Nhap CHINH XAC 'FORCE CLEAR ALL' de xac nhan:",
+      "",
+    );
+    if (token !== "FORCE CLEAR ALL") {
+      setMessage("Da huy force clear do xac nhan khong hop le.");
+      return;
+    }
+    setForceClearingSessions(true);
+    setMessage("");
+    try {
+      const out = await jsonFetch(`${API_BASE}/projects/clear-sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          include_processing: true,
+          delete_storage: true,
+        }),
+      });
+      await loadProjectsSafe();
+      setSelectedProjectId("");
+      setEditableSegments([]);
+      setJobs([]);
+      setMessage(
+        `Force clear xong: da xoa ${out.deleted_projects} session, dọn ${out.removed_storage_dirs} thu muc.`,
+      );
+    } catch (err) {
+      setMessage(`Loi force clear sessions: ${err.message}`);
+    } finally {
+      setForceClearingSessions(false);
     }
   }
 
@@ -747,6 +786,14 @@ export function App() {
             </label>
             <button disabled={clearingSessions} onClick={clearOldSessions}>
               {clearingSessions ? "Dang clear sessions..." : "Clear session cu"}
+            </button>
+            <button
+              disabled={forceClearingSessions}
+              onClick={forceClearAllSessions}
+            >
+              {forceClearingSessions
+                ? "Dang force clear..."
+                : "Force clear all (ke ca processing)"}
             </button>
             <details>
               <summary>Tạo project mới</summary>

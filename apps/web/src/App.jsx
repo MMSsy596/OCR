@@ -34,6 +34,7 @@ export function App() {
   const [creating, setCreating] = useState(false);
   const [savingRoi, setSavingRoi] = useState(false);
   const [savingSegments, setSavingSegments] = useState(false);
+  const [retranslating, setRetranslating] = useState(false);
   const [isEditingSegments, setIsEditingSegments] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [lastExport, setLastExport] = useState(null);
@@ -347,6 +348,43 @@ export function App() {
     }
   }
 
+  async function retranslateOnly() {
+    if (!selectedProjectId) {
+      setMessage("Chon project truoc.");
+      return;
+    }
+    setRetranslating(true);
+    setMessage("");
+    try {
+      const payload = editableSegments.map((row) => ({
+        id: row.id,
+        start_sec: Number(row.start_sec),
+        end_sec: Number(row.end_sec),
+        raw_text: row.raw_text ?? "",
+        translated_text: row.translated_text ?? "",
+        speaker: row.speaker ?? "narrator",
+        voice: row.voice ?? "narrator-neutral",
+      }));
+      await jsonFetch(`${API_BASE}/projects/${selectedProjectId}/segments`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const out = await jsonFetch(`${API_BASE}/projects/${selectedProjectId}/segments/retranslate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gemini_api_key: pipelineForm.gemini_api_key || null }),
+      });
+      setEditableSegments((out.segments || []).map((row) => ({ ...row })));
+      setIsEditingSegments(false);
+      setMessage(`Da dich lai. Stats: ${JSON.stringify(out.translation_stats || {})}`);
+    } catch (err) {
+      setMessage(`Loi dich lai: ${err.message}`);
+    } finally {
+      setRetranslating(false);
+    }
+  }
+
   async function exportSubtitle() {
     if (!selectedProjectId) {
       setMessage("Chon project truoc.");
@@ -479,6 +517,9 @@ export function App() {
             <button disabled={savingSegments || editableSegments.length === 0} onClick={saveSegments}>
               {savingSegments ? "Dang luu..." : "Luu subtitle"}
             </button>
+            <button disabled={retranslating || editableSegments.length === 0} onClick={retranslateOnly}>
+              {retranslating ? "Dang dich lai..." : "Dich lai"}
+            </button>
             <button disabled={exporting || editableSegments.length === 0} onClick={exportSubtitle}>
               {exporting ? "Dang export..." : "Export"}
             </button>
@@ -600,4 +641,3 @@ export function App() {
     </div>
   );
 }
-

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from . import crud, models, schemas
 from .db import Base, engine, get_db
 from .exporter import export_subtitle_file
-from .pipeline import run_pipeline
+from .pipeline import retranslate_project_segments, run_pipeline
 from .queue import get_queue
 from .settings import get_settings
 
@@ -133,6 +133,21 @@ def save_segments(project_id: str, payload: list[schemas.SegmentUpdate], db: Ses
         raise HTTPException(status_code=404, detail="project_not_found")
     updates = [item.model_dump() for item in payload]
     return crud.update_segments(db, project_id, updates)
+
+
+@app.post("/projects/{project_id}/segments/retranslate", response_model=schemas.RetranslateResponse)
+def retranslate_segments(project_id: str, payload: schemas.RetranslateRequest, db: Session = Depends(get_db)):
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="project_not_found")
+    result = retranslate_project_segments(project_id, gemini_api_key=payload.gemini_api_key)
+    if not result.get("ok"):
+        raise HTTPException(status_code=500, detail=result.get("error", "retranslate_failed"))
+    return schemas.RetranslateResponse(
+        translation_stats=result.get("translation_stats", {"gemini": 0, "deep_translator": 0, "fallback_tag": 0}),
+        translation_error_hint=result.get("translation_error_hint", ""),
+        segments=result.get("segments", []),
+    )
 
 
 @app.post("/projects/{project_id}/export", response_model=schemas.ExportResponse)

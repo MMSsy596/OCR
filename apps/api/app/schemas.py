@@ -76,6 +76,16 @@ class ExportResponse(BaseModel):
     output_path: str
 
 
+class RetranslateRequest(BaseModel):
+    gemini_api_key: str | None = None
+
+
+class RetranslateResponse(BaseModel):
+    translation_stats: dict[str, int]
+    translation_error_hint: str
+    segments: list[SegmentRead]
+
+
 class PipelineStartRequest(BaseModel):
     gemini_api_key: str | None = None
     voice_map: dict[str, str] = Field(default_factory=dict)

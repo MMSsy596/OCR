@@ -230,6 +230,73 @@ def _resolve_gemini_key(runtime_key: str | None) -> str | None:
     return first or None
 
 
+def _translate_project_segments(
+    db: Session,
+    project: Project,
+    resolved_api_key: str | None,
+    voice_map: dict[str, str] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, int], str]:
+    voice_map = voice_map or {}
+    db_segments = list_segments(db, project.id)
+    normalized = []
+    translation_stats = {"gemini": 0, "deep_translator": 0, "fallback_tag": 0}
+    first_translation_error = ""
+    for seg in db_segments:
+        txt, provider, err = _translate_with_fallback(
+            seg.raw_text,
+            project.prompt,
+            resolved_api_key,
+            project.source_lang,
+            project.target_lang,
+        )
+        if provider in translation_stats:
+            translation_stats[provider] += 1
+        if err and not first_translation_error:
+            first_translation_error = err
+        txt = _apply_glossary(txt, project.glossary)
+        speaker = seg.speaker
+        voice = voice_map.get(speaker, seg.voice)
+        normalized.append(
+            {
+                "start_sec": seg.start_sec,
+                "end_sec": seg.end_sec,
+                "raw_text": seg.raw_text,
+                "translated_text": txt,
+                "speaker": speaker,
+                "voice": voice,
+                "confidence": seg.confidence,
+            }
+        )
+    return normalized, translation_stats, first_translation_error
+
+
+def retranslate_project_segments(project_id: str, gemini_api_key: str | None = None) -> dict[str, Any]:
+    db = SessionLocal()
+    try:
+        project = db.get(Project, project_id)
+        if not project:
+            return {"ok": False, "error": "project_not_found"}
+        resolved_api_key = _resolve_gemini_key(gemini_api_key)
+        normalized, translation_stats, first_translation_error = _translate_project_segments(
+            db,
+            project,
+            resolved_api_key,
+            voice_map={},
+        )
+        replace_segments(db, project.id, normalized)
+        updated = list_segments(db, project.id)
+        return {
+            "ok": True,
+            "translation_stats": translation_stats,
+            "translation_error_hint": first_translation_error,
+            "segments": updated,
+        }
+    except Exception as ex:
+        return {"ok": False, "error": str(ex)}
+    finally:
+        db.close()
+
+
 def run_pipeline(job_id: str, gemini_api_key: str | None = None, voice_map: dict[str, str] | None = None) -> dict[str, Any]:
     db = SessionLocal()
     voice_map = voice_map or {}
@@ -254,36 +321,12 @@ def run_pipeline(job_id: str, gemini_api_key: str | None = None, voice_map: dict
         replace_segments(db, project.id, segments)
 
         _update_job(db, job, JobStatus.running, 35, "translate")
-        db_segments = list_segments(db, project.id)
-        normalized = []
-        translation_stats = {"gemini": 0, "deep_translator": 0, "fallback_tag": 0}
-        first_translation_error = ""
-        for seg in db_segments:
-            txt, provider, err = _translate_with_fallback(
-                seg.raw_text,
-                project.prompt,
-                resolved_api_key,
-                project.source_lang,
-                project.target_lang,
-            )
-            if provider in translation_stats:
-                translation_stats[provider] += 1
-            if err and not first_translation_error:
-                first_translation_error = err
-            txt = _apply_glossary(txt, project.glossary)
-            speaker = seg.speaker
-            voice = voice_map.get(speaker, seg.voice)
-            normalized.append(
-                {
-                    "start_sec": seg.start_sec,
-                    "end_sec": seg.end_sec,
-                    "raw_text": seg.raw_text,
-                    "translated_text": txt,
-                    "speaker": speaker,
-                    "voice": voice,
-                    "confidence": seg.confidence,
-                }
-            )
+        normalized, translation_stats, first_translation_error = _translate_project_segments(
+            db,
+            project,
+            resolved_api_key,
+            voice_map=voice_map,
+        )
         replace_segments(db, project.id, normalized)
 
         _update_job(db, job, JobStatus.running, 65, "dedupe_merge")

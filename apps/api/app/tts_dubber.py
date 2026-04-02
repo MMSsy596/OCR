@@ -159,6 +159,77 @@ def _adaptive_rate(text: str, slot_sec: float, base_rate: str) -> str:
     return f"{final:+d}%"
 
 
+def _build_atempo_chain(speed_ratio: float) -> str:
+    # ffmpeg atempo supports [0.5, 2.0] per filter; chain for >2.0.
+    ratio = max(1.0, float(speed_ratio))
+    parts: list[str] = []
+    while ratio > 2.0:
+        parts.append("atempo=2.0")
+        ratio /= 2.0
+    parts.append(f"atempo={ratio:.6f}")
+    return ",".join(parts)
+
+
+def _fit_wav_to_slot(input_wav: Path, output_wav: Path, slot_sec: float) -> tuple[bool, float, float]:
+    """Speed up wav with atempo to fit slot_sec. Returns (applied, before_sec, after_sec)."""
+    with wave.open(str(input_wav), "rb") as wav_in:
+        frame_rate = wav_in.getframerate() or 24000
+        before_sec = wav_in.getnframes() / max(1, frame_rate)
+    if slot_sec <= 0:
+        return False, before_sec, before_sec
+    if before_sec <= slot_sec:
+        shutil.copy2(input_wav, output_wav)
+        return False, before_sec, before_sec
+
+    speed_ratio = before_sec / slot_sec
+    atempo_chain = _build_atempo_chain(speed_ratio)
+    _run_cmd(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(input_wav),
+            "-filter:a",
+            atempo_chain,
+            "-ac",
+            "1",
+            "-ar",
+            "24000",
+            "-sample_fmt",
+            "s16",
+            str(output_wav),
+        ]
+    )
+    with wave.open(str(output_wav), "rb") as wav_out:
+        after_sec = wav_out.getnframes() / max(1, wav_out.getframerate() or 24000)
+    # Fine tune once if still slightly above slot due rounding/resample.
+    if after_sec > (slot_sec * 1.001):
+        adjust_ratio = max(1.0, after_sec / slot_sec * 1.02)
+        adjust_chain = _build_atempo_chain(adjust_ratio)
+        tmp_adjust = output_wav.with_suffix(".fit2.wav")
+        _run_cmd(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(output_wav),
+                "-filter:a",
+                adjust_chain,
+                "-ac",
+                "1",
+                "-ar",
+                "24000",
+                "-sample_fmt",
+                "s16",
+                str(tmp_adjust),
+            ]
+        )
+        tmp_adjust.replace(output_wav)
+        with wave.open(str(output_wav), "rb") as wav_out:
+            after_sec = wav_out.getnframes() / max(1, wav_out.getframerate() or 24000)
+    return True, before_sec, after_sec
+
+
 async def _save_edge_tts(
     text: str,
     output_path: Path,
@@ -344,6 +415,9 @@ def run_dub_job(
         gtts_ok = 0
         gtts_failed = 0
         gtts_lang = _map_gtts_lang(project.target_lang, voice)
+        fit_applied = 0
+        fit_total_ms_saved = 0.0
+        fit_max_speed = 1.0
         for idx, cue in enumerate(cues, start=1):
             slot_sec = max(0.05, cue.end_sec - cue.start_sec)
             dynamic_rate = _adaptive_rate(cue.text, slot_sec, rate)
@@ -423,7 +497,24 @@ def run_dub_job(
                                 f"edge={str(edge_ex)[:120]} | gtts={str(gtts_ex)[:120]} | pyttsx3={str(py_ex)[:120]}"
                             ) from py_ex
                 cache[cache_key] = seg_wav
-            rendered_wavs.append((cue, seg_wav))
+
+            # Auto-fit by duration: if segment exceeds slot, speed up with atempo chain.
+            fitted_wav = tmp_dir / f"seg_{idx:06d}.fit.wav"
+            fit_used, before_sec, after_sec = _fit_wav_to_slot(seg_wav, fitted_wav, slot_sec)
+            if fit_used:
+                fit_applied += 1
+                fit_total_ms_saved += max(0.0, (before_sec - after_sec) * 1000.0)
+                if slot_sec > 0:
+                    fit_max_speed = max(fit_max_speed, before_sec / slot_sec)
+                _push_event(
+                    artifacts,
+                    "auto_fit",
+                    f"Cue {idx}: auto-fit {before_sec:.2f}s -> {after_sec:.2f}s (slot {slot_sec:.2f}s).",
+                    min(80, 10 + int((idx / total) * 70)),
+                )
+                rendered_wavs.append((cue, fitted_wav))
+            else:
+                rendered_wavs.append((cue, fitted_wav if fitted_wav.exists() else seg_wav))
 
             if idx == total or idx % max(1, total // 10) == 0:
                 progress = 10 + int((idx / total) * 70)
@@ -442,6 +533,10 @@ def run_dub_job(
                         "gtts_lang": gtts_lang,
                         "pyttsx3_ok": pyttsx3_ok,
                         "pyttsx3_failed": pyttsx3_failed,
+                        "auto_fit_applied": fit_applied,
+                        "auto_fit_ratio_percent": round((fit_applied / max(1, idx)) * 100, 1),
+                        "auto_fit_saved_ms": round(fit_total_ms_saved, 1),
+                        "auto_fit_max_speed_ratio": round(fit_max_speed, 3),
                         "percent_in_phase": round((idx / total) * 100, 1),
                     },
                 )

@@ -71,3 +71,40 @@ pip install -r requirements.txt
 
 Khong can cai Tesseract ngoai he dieu hanh. Neu OCR lib chua san sang, app tu fallback sang mode OCR mau.
 Neu Gemini khong phan hoi, he thong co fallback dich bang `deep-translator`.
+
+## 6) Deploy Railway (khuyen nghi)
+
+Do `api` va `worker` can doc/ghi cung thu muc file (`storage/projects`), can deploy theo 2 service:
+
+1. `ocr-core` (1 container chay ca API + worker)
+2. `ocr-web` (frontend React static)
+
+### 6.1 Service `ocr-core`
+
+- Root directory: repo root
+- Dockerfile path: `Dockerfile`
+- Gan 1 Railway Volume vao duong dan `/data`
+- Env can set:
+
+```bash
+PORT=8000
+WEB_ORIGIN=https://<domain-ocr-web>
+REDIS_URL=<Redis private url tren Railway>
+DATABASE_URL=sqlite+pysqlite:////data/ocr.db
+STORAGE_ROOT=/data/projects
+```
+
+`Dockerfile` se tu chay `worker` nen + `uvicorn` trong cung container, tranh loi lech file giua 2 service.
+
+### 6.2 Service `ocr-web`
+
+- Root directory: repo root
+- Dockerfile path: `Dockerfile.web`
+- Env build/runtime:
+
+```bash
+PORT=8080
+VITE_API_BASE=https://<domain-ocr-core>
+```
+
+Sau khi deploy xong, cap nhat lai `WEB_ORIGIN` cua `ocr-core` = domain thuc te cua `ocr-web`.

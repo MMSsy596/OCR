@@ -1,0 +1,15 @@
+.git
+.gitignore
+.env
+.env.*
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+**/.venv
+**/node_modules
+logs
+apps/storage/projects/*
+!apps/storage/projects/.gitkeep
+storage/projects/*
+!storage/projects/.gitkeep

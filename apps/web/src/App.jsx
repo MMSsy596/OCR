@@ -59,14 +59,22 @@ export function App() {
   const [apiStatus, setApiStatus] = useState("checking");
   const [roiDraft, setRoiDraft] = useState({ x: 0.1, y: 0.75, w: 0.8, h: 0.2 });
   const [dragState, setDragState] = useState(null);
+  const [currentVideoTime, setCurrentVideoTime] = useState(0);
+  const [roiEditMode, setRoiEditMode] = useState(false);
 
   const stageRef = useRef(null);
+  const videoRef = useRef(null);
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId) || null,
     [projects, selectedProjectId],
   );
   const videoSrc = selectedProjectId ? `${API_BASE}/projects/${selectedProjectId}/video` : "";
+  const activeSegment = useMemo(() => {
+    return editableSegments.find(
+      (seg) => currentVideoTime >= Number(seg.start_sec) && currentVideoTime <= Number(seg.end_sec),
+    );
+  }, [editableSegments, currentVideoTime]);
 
   useEffect(() => {
     loadProjectsSafe();
@@ -293,13 +301,16 @@ export function App() {
   }
 
   function beginDraw(event) {
+    if (!roiEditMode) return;
     if (!selectedProject?.video_path) return;
+    if (!event.shiftKey) return;
     const start = eventToPoint(event);
     if (!start) return;
     setDragState({ mode: "draw", start, base: roiDraft, handle: null });
   }
 
   function beginMove(event) {
+    if (!roiEditMode) return;
     event.stopPropagation();
     const start = eventToPoint(event);
     if (!start) return;
@@ -307,10 +318,15 @@ export function App() {
   }
 
   function beginResize(handle, event) {
+    if (!roiEditMode) return;
     event.stopPropagation();
     const start = eventToPoint(event);
     if (!start) return;
     setDragState({ mode: "resize", start, base: roiDraft, handle });
+  }
+
+  function onVideoTimeUpdate(event) {
+    setCurrentVideoTime(event.currentTarget.currentTime || 0);
   }
 
   function updateEditableSegment(id, field, value) {
@@ -537,17 +553,33 @@ export function App() {
                   ROI: x={roiDraft.x.toFixed(3)} y={roiDraft.y.toFixed(3)} w={roiDraft.w.toFixed(3)} h=
                   {roiDraft.h.toFixed(3)}
                 </div>
+                <button
+                  type="button"
+                  className="save-roi-btn"
+                  onClick={() => setRoiEditMode((v) => !v)}
+                >
+                  {roiEditMode ? "Tat che do chinh ROI" : "Bat che do chinh ROI"}
+                </button>
                 <button disabled={savingRoi} onClick={saveSelectedRoi} className="save-roi-btn">
                   {savingRoi ? "Dang luu ROI..." : "Luu ROI cho project"}
                 </button>
               </div>
               <p className="preview-hint">
-                Keo tren video de ve ROI moi. Keo khung xanh de di chuyen. Keo 4 goc de resize.
+                {roiEditMode
+                  ? "Dang chinh ROI: giu Shift + keo de ve khung, keo khung de di chuyen, keo 4 goc de resize."
+                  : "Dang xem video: ban co the play/pause/tua de kiem tra do lech subtitle."}
               </p>
               <div className="preview-stage" ref={stageRef} onMouseDown={beginDraw}>
-                <video src={videoSrc} controls className="preview-video" />
+                <video
+                  ref={videoRef}
+                  src={videoSrc}
+                  controls
+                  className="preview-video"
+                  onTimeUpdate={onVideoTimeUpdate}
+                  onSeeked={onVideoTimeUpdate}
+                />
                 <div
-                  className="roi-box"
+                  className={`roi-box ${roiEditMode ? "editable" : "readonly"}`}
                   style={{
                     left: `${roiDraft.x * 100}%`,
                     top: `${roiDraft.y * 100}%`,
@@ -557,11 +589,36 @@ export function App() {
                   onMouseDown={beginMove}
                 >
                   <div className="roi-label">OCR ROI</div>
-                  <div className="roi-handle nw" onMouseDown={(e) => beginResize("nw", e)} />
-                  <div className="roi-handle ne" onMouseDown={(e) => beginResize("ne", e)} />
-                  <div className="roi-handle sw" onMouseDown={(e) => beginResize("sw", e)} />
-                  <div className="roi-handle se" onMouseDown={(e) => beginResize("se", e)} />
+                  {roiEditMode ? (
+                    <>
+                      <div className="roi-handle nw" onMouseDown={(e) => beginResize("nw", e)} />
+                      <div className="roi-handle ne" onMouseDown={(e) => beginResize("ne", e)} />
+                      <div className="roi-handle sw" onMouseDown={(e) => beginResize("sw", e)} />
+                      <div className="roi-handle se" onMouseDown={(e) => beginResize("se", e)} />
+                    </>
+                  ) : null}
                 </div>
+              </div>
+              <div className="status-box">
+                <p>
+                  <strong>Current time:</strong> {currentVideoTime.toFixed(2)}s
+                </p>
+                {activeSegment ? (
+                  <>
+                    <p>
+                      <strong>Active segment:</strong> #{activeSegment.id} ({Number(activeSegment.start_sec).toFixed(2)}
+                      s - {Number(activeSegment.end_sec).toFixed(2)}s)
+                    </p>
+                    <p>
+                      <strong>Raw:</strong> {activeSegment.raw_text}
+                    </p>
+                    <p>
+                      <strong>Translated:</strong> {activeSegment.translated_text}
+                    </p>
+                  </>
+                ) : (
+                  <p>Khong co subtitle tai moc thoi gian hien tai.</p>
+                )}
               </div>
             </>
           ) : (
@@ -630,7 +687,7 @@ export function App() {
                 </tr>
               ) : (
                 editableSegments.map((s) => (
-                  <tr key={s.id}>
+                  <tr key={s.id} className={activeSegment?.id === s.id ? "active-row" : ""}>
                     <td>{s.id}</td>
                     <td>
                       <input

@@ -145,6 +145,11 @@ th {
   background: #f8e4c3;
 }
 
+.active-row td {
+  background: #fff0c9;
+  border-color: #d99c18;
+}
+
 .message {
   margin: 0 16px 16px;
   background: var(--accent-soft);
@@ -217,7 +222,15 @@ th {
   position: absolute;
   border: 2px solid #00d1b2;
   background: rgba(0, 209, 178, 0.15);
+}
+
+.roi-box.editable {
   cursor: move;
+  pointer-events: auto;
+}
+
+.roi-box.readonly {
+  pointer-events: none;
 }
 
 .roi-label {

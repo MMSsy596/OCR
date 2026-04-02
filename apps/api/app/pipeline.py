@@ -1,7 +1,9 @@
 import json
+import re
 from pathlib import Path
 from typing import Any
 from urllib import error, request
+from difflib import SequenceMatcher
 
 from sqlalchemy.orm import Session
 
@@ -157,6 +159,56 @@ def _apply_glossary(text: str, glossary: str) -> str:
         src, dst = row.split("=", 1)
         text = text.replace(src.strip(), dst.strip())
     return text
+
+
+def _normalize_text_for_compare(text: str) -> str:
+    text = (text or "").strip().lower()
+    text = re.sub(r"\s+", "", text)
+    # Remove common punctuation so OCR jitter does not create false new lines.
+    text = re.sub(r"[.,;:!?\"'`~\-_=+*/\\|()[\]{}<>，。！？；：、]", "", text)
+    return text
+
+
+def _is_similar_text(a: str, b: str, ratio_threshold: float = 0.9) -> bool:
+    na = _normalize_text_for_compare(a)
+    nb = _normalize_text_for_compare(b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    if len(na) >= 6 and (na in nb or nb in na):
+        return True
+    ratio = SequenceMatcher(None, na, nb).ratio()
+    return ratio >= ratio_threshold
+
+
+def _merge_adjacent_similar_segments(
+    segments: list[dict[str, Any]],
+    max_gap_sec: float = 1.0,
+    ratio_threshold: float = 0.9,
+) -> list[dict[str, Any]]:
+    if not segments:
+        return []
+    ordered = sorted(segments, key=lambda x: float(x["start_sec"]))
+    merged: list[dict[str, Any]] = [ordered[0].copy()]
+    for seg in ordered[1:]:
+        prev = merged[-1]
+        gap = float(seg["start_sec"]) - float(prev["end_sec"])
+        if gap <= max_gap_sec and _is_similar_text(prev.get("raw_text", ""), seg.get("raw_text", ""), ratio_threshold):
+            prev["end_sec"] = max(float(prev["end_sec"]), float(seg["end_sec"]))
+            prev_raw = str(prev.get("raw_text", "")).strip()
+            cur_raw = str(seg.get("raw_text", "")).strip()
+            # Keep the longer candidate as representative source text.
+            if len(cur_raw) > len(prev_raw):
+                prev["raw_text"] = cur_raw
+            prev_translated = str(prev.get("translated_text", "")).strip()
+            cur_translated = str(seg.get("translated_text", "")).strip()
+            if len(cur_translated) > len(prev_translated):
+                prev["translated_text"] = cur_translated
+            prev["confidence"] = max(float(prev.get("confidence", 0.0)), float(seg.get("confidence", 0.0)))
+            continue
+        merged.append(seg.copy())
+    return merged
 
 
 def _call_gemini_translate(text: str, prompt: str, api_key: str, source_lang: str, target_lang: str) -> tuple[str, str]:
@@ -326,6 +378,7 @@ def run_pipeline(
         segments = _ocr_segments_from_video(project, scan_interval_sec=scan_interval_sec)
         if not segments:
             segments = _fake_ocr_segments(project)
+        segments = _merge_adjacent_similar_segments(segments, max_gap_sec=max(0.8, scan_interval_sec * 1.5), ratio_threshold=0.9)
         replace_segments(db, project.id, segments)
 
         _update_job(db, job, JobStatus.running, 35, "translate")
@@ -339,14 +392,11 @@ def run_pipeline(
 
         _update_job(db, job, JobStatus.running, 65, "dedupe_merge")
         # MVP: bo qua merge nang cao, chi loai dong trung lien tiep.
-        deduped = []
-        prev = None
-        for seg in normalized:
-            if prev and prev["translated_text"] == seg["translated_text"]:
-                prev["end_sec"] = seg["end_sec"]
-                continue
-            prev = seg.copy()
-            deduped.append(prev)
+        deduped = _merge_adjacent_similar_segments(
+            normalized,
+            max_gap_sec=max(0.8, scan_interval_sec * 1.5),
+            ratio_threshold=0.92,
+        )
         replace_segments(db, project.id, deduped)
 
         _update_job(db, job, JobStatus.running, 80, "tts")

@@ -20,6 +20,27 @@ class Settings(BaseSettings):
     default_target_lang: str = "vi"
 
     @property
+    def resolved_database_url(self) -> str:
+        url = (self.database_url or "").strip()
+        sqlite_prefixes = ("sqlite+pysqlite:///", "sqlite:///")
+        for prefix in sqlite_prefixes:
+            if not url.startswith(prefix):
+                continue
+            raw_path = url[len(prefix) :]
+            if not raw_path:
+                break
+            if raw_path.startswith("/") and len(raw_path) >= 3 and raw_path[2] == ":":
+                # form /C:/path
+                return url
+            path_obj = Path(raw_path)
+            if path_obj.is_absolute():
+                return url
+            api_root = Path(__file__).resolve().parents[1]
+            abs_path = (api_root / raw_path).resolve()
+            return f"{prefix}{abs_path.as_posix()}"
+        return url
+
+    @property
     def storage_path(self) -> Path:
         base = Path(__file__).resolve().parent
         return (base / self.storage_root).resolve()

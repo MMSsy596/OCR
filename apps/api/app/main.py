@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from . import crud, models, schemas
 from .db import Base, engine, get_db
 from .exporter import export_subtitle_file
+from .models import JobStatus
 from .pipeline import retranslate_project_segments, run_pipeline
 from .queue import get_queue
 from .settings import get_settings
@@ -36,6 +37,35 @@ def on_startup() -> None:
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+def _enqueue_pipeline_job(job_id: str, payload: schemas.PipelineStartRequest) -> None:
+    q = get_queue()
+    q.enqueue(
+        "app.pipeline.run_pipeline",
+        job_id,
+        gemini_api_key=payload.gemini_api_key,
+        voice_map=payload.voice_map,
+        scan_interval_sec=payload.scan_interval_sec,
+        job_id=job_id,
+    )
+
+
+def _enqueue_dub_job(job_id: str, payload: schemas.DubStartRequest) -> None:
+    q = get_queue()
+    q.enqueue(
+        "app.tts_dubber.run_dub_job",
+        job_id,
+        srt_key=payload.srt_key,
+        output_format=payload.output_format,
+        voice=payload.voice,
+        rate=payload.rate,
+        volume=payload.volume,
+        pitch=payload.pitch,
+        match_video_duration=payload.match_video_duration,
+        job_id=job_id,
+        job_timeout=14400,
+    )
 
 
 @app.post("/projects", response_model=schemas.ProjectRead)
@@ -162,16 +192,15 @@ def start_pipeline(project_id: str, payload: schemas.PipelineStartRequest, db: S
         raise HTTPException(status_code=400, detail="video_required")
 
     job = crud.create_job(db, project_id)
+    job.artifacts = {
+        "job_kind": "pipeline",
+        "request_payload": payload.model_dump(),
+    }
+    db.add(job)
+    db.commit()
+    db.refresh(job)
     try:
-        q = get_queue()
-        q.enqueue(
-            "app.pipeline.run_pipeline",
-            job.id,
-            gemini_api_key=payload.gemini_api_key,
-            voice_map=payload.voice_map,
-            scan_interval_sec=payload.scan_interval_sec,
-            job_id=job.id,
-        )
+        _enqueue_pipeline_job(job.id, payload)
     except Exception:
         # Fallback local mode when Redis/worker is unavailable.
         run_pipeline(
@@ -192,21 +221,15 @@ def start_dub(project_id: str, payload: schemas.DubStartRequest, db: Session = D
         raise HTTPException(status_code=400, detail="video_required")
 
     job = crud.create_job(db, project_id)
+    job.artifacts = {
+        "job_kind": "dub",
+        "request_payload": payload.model_dump(),
+    }
+    db.add(job)
+    db.commit()
+    db.refresh(job)
     try:
-        q = get_queue()
-        q.enqueue(
-            "app.tts_dubber.run_dub_job",
-            job.id,
-            srt_key=payload.srt_key,
-            output_format=payload.output_format,
-            voice=payload.voice,
-            rate=payload.rate,
-            volume=payload.volume,
-            pitch=payload.pitch,
-            match_video_duration=payload.match_video_duration,
-            job_id=job.id,
-            job_timeout=14400,
-        )
+        _enqueue_dub_job(job.id, payload)
     except Exception:
         run_dub_job(
             job.id,
@@ -309,6 +332,90 @@ def list_project_jobs(project_id: str, db: Session = Depends(get_db)):
     if not project:
         raise HTTPException(status_code=404, detail="project_not_found")
     return crud.list_jobs(db, project_id)
+
+
+@app.post("/projects/{project_id}/jobs/retry-stuck", response_model=schemas.RetryJobsResponse)
+def retry_stuck_jobs(project_id: str, db: Session = Depends(get_db)):
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="project_not_found")
+    if not project.video_path:
+        raise HTTPException(status_code=400, detail="video_required")
+
+    jobs = crud.list_jobs(db, project_id)
+    stuck = [
+        job
+        for job in jobs
+        if job.status in {JobStatus.queued, JobStatus.failed}
+        and (job.progress or 0) < 100
+    ]
+
+    retried_from: list[str] = []
+    created: list[str] = []
+    skipped = 0
+
+    for old_job in stuck:
+        artifacts = old_job.artifacts if isinstance(old_job.artifacts, dict) else {}
+        kind = artifacts.get("job_kind", "")
+        request_payload = artifacts.get("request_payload", {}) if isinstance(artifacts.get("request_payload"), dict) else {}
+
+        if kind == "dub":
+            payload = schemas.DubStartRequest(**request_payload) if request_payload else schemas.DubStartRequest()
+        elif kind in {"pipeline", ""}:
+            payload = schemas.PipelineStartRequest(**request_payload) if request_payload else schemas.PipelineStartRequest()
+            kind = "pipeline"
+        else:
+            skipped += 1
+            continue
+
+        new_job = crud.create_job(db, project_id)
+        new_job.artifacts = {
+            "job_kind": kind,
+            "request_payload": payload.model_dump(),
+            "retried_from_job_id": old_job.id,
+        }
+        db.add(new_job)
+        old_job.status = JobStatus.failed
+        old_job.step = "superseded"
+        old_job.error_message = f"superseded_by_retry:{new_job.id}"
+        db.add(old_job)
+        db.commit()
+        db.refresh(new_job)
+
+        try:
+            if kind == "dub":
+                _enqueue_dub_job(new_job.id, payload)  # type: ignore[arg-type]
+            else:
+                _enqueue_pipeline_job(new_job.id, payload)  # type: ignore[arg-type]
+        except Exception:
+            if kind == "dub":
+                run_dub_job(
+                    new_job.id,
+                    srt_key=payload.srt_key,  # type: ignore[attr-defined]
+                    output_format=payload.output_format,  # type: ignore[attr-defined]
+                    voice=payload.voice,  # type: ignore[attr-defined]
+                    rate=payload.rate,  # type: ignore[attr-defined]
+                    volume=payload.volume,  # type: ignore[attr-defined]
+                    pitch=payload.pitch,  # type: ignore[attr-defined]
+                    match_video_duration=payload.match_video_duration,  # type: ignore[attr-defined]
+                )
+            else:
+                run_pipeline(
+                    new_job.id,
+                    gemini_api_key=payload.gemini_api_key,  # type: ignore[attr-defined]
+                    voice_map=payload.voice_map,  # type: ignore[attr-defined]
+                    scan_interval_sec=payload.scan_interval_sec,  # type: ignore[attr-defined]
+                )
+
+        retried_from.append(old_job.id)
+        created.append(new_job.id)
+
+    return schemas.RetryJobsResponse(
+        retried_count=len(created),
+        retried_from_job_ids=retried_from,
+        created_job_ids=created,
+        skipped_count=skipped,
+    )
 
 
 @app.get("/jobs/{job_id}", response_model=schemas.JobRead)

@@ -120,6 +120,13 @@ class SrtUploadResponse(BaseModel):
     output_path: str
 
 
+class RetryJobsResponse(BaseModel):
+    retried_count: int
+    retried_from_job_ids: list[str]
+    created_job_ids: list[str]
+    skipped_count: int
+
+
 class JobRead(BaseModel):
     id: str
     project_id: str

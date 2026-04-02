@@ -66,6 +66,7 @@ export function App() {
   const [savingSegments, setSavingSegments] = useState(false);
   const [retranslating, setRetranslating] = useState(false);
   const [uploadingSrt, setUploadingSrt] = useState(false);
+  const [retryingStuckJobs, setRetryingStuckJobs] = useState(false);
   const [isEditingSegments, setIsEditingSegments] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [dubbing, setDubbing] = useState(false);
@@ -782,6 +783,31 @@ export function App() {
     }
   }
 
+  async function retryStuckJobs() {
+    if (!selectedProjectId) {
+      setMessage("Chon project truoc.");
+      return;
+    }
+    setRetryingStuckJobs(true);
+    setMessage("");
+    try {
+      const out = await jsonFetch(
+        `${API_BASE}/projects/${selectedProjectId}/jobs/retry-stuck`,
+        {
+          method: "POST",
+        },
+      );
+      await loadProjectData(selectedProjectId, { includeSegments: false });
+      setMessage(
+        `Da retry ${out.retried_count} job bi ket. Skip ${out.skipped_count}.`,
+      );
+    } catch (err) {
+      setMessage(`Loi retry queued jobs: ${err.message}`);
+    } finally {
+      setRetryingStuckJobs(false);
+    }
+  }
+
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -951,6 +977,14 @@ export function App() {
             </label>
             <button disabled={loading} onClick={startPipeline}>
               Chạy pipeline
+            </button>
+            <button
+              disabled={retryingStuckJobs || loading}
+              onClick={retryStuckJobs}
+            >
+              {retryingStuckJobs
+                ? "Dang retry queued jobs..."
+                : "Retry queued jobs cu"}
             </button>
             {latestJob ? (
               <div className="info">

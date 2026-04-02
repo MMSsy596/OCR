@@ -288,21 +288,39 @@ def _merge_adjacent_similar_segments(
     return merged
 
 
-def _call_gemini_translate(text: str, prompt: str, api_key: str, source_lang: str, target_lang: str) -> tuple[str, str]:
+def _call_gemini_translate(
+    text: str,
+    prompt: str,
+    api_key: str,
+    source_lang: str,
+    target_lang: str,
+    context_before: str = "",
+    context_after: str = "",
+) -> tuple[str, str]:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
     system_prompt = (
-        "You are subtitle translator. Keep tone natural, concise, and cinematic. "
+        "You are expert subtitle translator. Keep tone natural, concise, and cinematic. "
         f"Translate from {source_lang} to {target_lang}. "
-        "Return only translated text."
+        "Preserve meaning, intent, and implied context. Keep pronouns and relationship terms consistent. "
+        "Return only translated text for CURRENT_LINE."
     )
     if prompt:
-        system_prompt = f"{system_prompt}\nExtra style prompt: {prompt}"
+        system_prompt = f"{system_prompt}\nStyle and domain instructions:\n{prompt}"
+    user_payload = (
+        "CONTEXT_BEFORE:\n"
+        f"{context_before or '(none)'}\n\n"
+        "CURRENT_LINE:\n"
+        f"{text}\n\n"
+        "CONTEXT_AFTER:\n"
+        f"{context_after or '(none)'}\n\n"
+        "Output only the translation of CURRENT_LINE."
+    )
     body = {
         "contents": [
             {
                 "parts": [
                     {"text": system_prompt},
-                    {"text": text},
+                    {"text": user_payload},
                 ]
             }
         ]
@@ -333,9 +351,25 @@ def _call_gemini_translate(text: str, prompt: str, api_key: str, source_lang: st
         return "", f"gemini_exception:{str(ex)[:300]}"
 
 
-def _translate_with_fallback(text: str, prompt: str, api_key: str | None, source_lang: str, target_lang: str) -> tuple[str, str, str]:
+def _translate_with_fallback(
+    text: str,
+    prompt: str,
+    api_key: str | None,
+    source_lang: str,
+    target_lang: str,
+    context_before: str = "",
+    context_after: str = "",
+) -> tuple[str, str, str]:
     if api_key:
-        translated, err = _call_gemini_translate(text, prompt, api_key, source_lang, target_lang)
+        translated, err = _call_gemini_translate(
+            text,
+            prompt,
+            api_key,
+            source_lang,
+            target_lang,
+            context_before=context_before,
+            context_after=context_after,
+        )
         if translated:
             return translated, "gemini", ""
     try:
@@ -377,13 +411,17 @@ def _translate_project_segments(
     fallback_samples: list[dict[str, Any]] = []
     gemini_error_count = 0
     deep_translator_error_count = 0
-    for seg in db_segments:
+    for idx, seg in enumerate(db_segments):
+        prev_text = db_segments[idx - 1].raw_text if idx > 0 else ""
+        next_text = db_segments[idx + 1].raw_text if idx + 1 < len(db_segments) else ""
         txt, provider, err = _translate_with_fallback(
             seg.raw_text,
             project.prompt,
             resolved_api_key,
             project.source_lang,
             project.target_lang,
+            context_before=prev_text,
+            context_after=next_text,
         )
         if provider in translation_stats:
             translation_stats[provider] += 1

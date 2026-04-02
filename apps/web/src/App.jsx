@@ -50,6 +50,71 @@ function formatValue(value) {
   return String(value);
 }
 
+const PROMPT_PRESETS = {
+  historical: {
+    label: "Phim co trang",
+    text:
+      "Dich theo van phong co trang, tu nhien, de nghe, giu than thai hoi thoai. " +
+      "Uu tien xung ho theo quan he nhan vat va cap bac. Khong dich tho va khong viet dai dong.",
+  },
+  modern_short: {
+    label: "Phim ngan hien dai",
+    text:
+      "Dich theo van phong hien dai, doi thoai gon, doi thuong, tu nhien nhu nguoi Viet noi. " +
+      "Uu tien toc do doc subtitle, tranh cau qua dai.",
+  },
+  fantasy: {
+    label: "Phim huyen huyen",
+    text:
+      "Dich theo phong cach huyen huyen, tao cam giac ky ao nhung van ro nghia. " +
+      "Thuat ngu suc manh va boi canh can nhat quan.",
+  },
+  cultivation: {
+    label: "Tu tien",
+    text:
+      "Dich dung van mach tu tien, giu tinh than cap bac tu vi, cong phap, linh can, canh gioi. " +
+      "Uu tien nhat quan thuat ngu theo glossary.",
+  },
+  reincarnation: {
+    label: "Chuyen sinh",
+    text:
+      "Dich ro cau truc ke chuyen chuyen sinh, giu logic thoi gian truoc/sau chuyen sinh. " +
+      "Han che lap lai va tao nhip ke chuyen mach lac.",
+  },
+  review: {
+    label: "Review phim",
+    text:
+      "Dich theo van review phim, ro y, de hieu, lien ket nguyen nhan-ket qua. " +
+      "Khi can, dien dat thanh cau nhan xet tu nhien cho nguoi xem Viet.",
+  },
+};
+
+const TONE_PRESETS = {
+  accurate: "Giong dieu chinh xac, trung lap, uu tien sat nghia va ro y.",
+  natural: "Giong dieu tu nhien, mem mai, doi thoai nhu nguoi Viet ban dia.",
+  witty: "Giong dieu di dom, co chut hai huoc nhe nhung khong lech nghia.",
+  teasing: "Giong dieu treu gheo nhe, lanh loi, van lich su va dung ngu canh.",
+  dramatic: "Giong dieu kich tinh, day cam xuc, phu hop canh cao trao.",
+};
+
+function composePromptFromPreset(presetKey, toneKey, extraRule) {
+  const presetText = PROMPT_PRESETS[presetKey]?.text || PROMPT_PRESETS.historical.text;
+  const toneText = TONE_PRESETS[toneKey] || TONE_PRESETS.accurate;
+  const extra = String(extraRule || "").trim();
+  const lines = [
+    "Muc tieu: dich subtitle dung ngu canh, giu y nghia day du, ngon ngu tu nhien.",
+    `The loai: ${presetText}`,
+    `Giong dieu: ${toneText}`,
+    "Rang buoc: Khong tu y them y moi. Neu cau goc mo ho, uu tien cach noi tu nhien nhat theo ngu canh truoc/sau.",
+    "Rang buoc: Giu nhat quan cach xung ho, ten rieng, thuat ngu va glossary.",
+    "Rang buoc: Tra ve cau dich gon, de doc tren subtitle, khong kem giai thich.",
+  ];
+  if (extra) {
+    lines.push(`Yeu cau bo sung: ${extra}`);
+  }
+  return lines.join("\n");
+}
+
 export function App() {
   const MAX_HISTORY = 100;
   const [projects, setProjects] = useState([]);
@@ -79,6 +144,10 @@ export function App() {
     glossary: "Đạo huynh=Sư huynh\nTiên tôn=Tiên Tôn",
     roi: { x: 0.1, y: 0.75, w: 0.8, h: 0.2 },
   });
+  const [translationPreset, setTranslationPreset] = useState("historical");
+  const [translationTone, setTranslationTone] = useState("accurate");
+  const [translationExtraRule, setTranslationExtraRule] = useState("");
+  const [autoApplyPromptPreset, setAutoApplyPromptPreset] = useState(true);
   const [videoFile, setVideoFile] = useState(null);
   const [srtUploadFile, setSrtUploadFile] = useState(null);
   const [pipelineForm, setPipelineForm] = useState({
@@ -542,6 +611,7 @@ export function App() {
     setLoading(true);
     setMessage("");
     try {
+      await syncPromptPresetForCurrentProjectIfEnabled();
       await jsonFetch(
         `${API_BASE}/projects/${selectedProjectId}/pipeline/start`,
         {
@@ -705,6 +775,7 @@ export function App() {
     setRetranslating(true);
     setMessage("");
     try {
+      await syncPromptPresetForCurrentProjectIfEnabled();
       const payload = editableSegments.map((row) => ({
         id: row.id,
         start_sec: Number(row.start_sec),
@@ -790,6 +861,60 @@ export function App() {
     } finally {
       setDubbing(false);
     }
+  }
+
+  function applyPresetToCreateForm() {
+    const prompt = composePromptFromPreset(
+      translationPreset,
+      translationTone,
+      translationExtraRule,
+    );
+    setProjectForm((prev) => ({ ...prev, prompt }));
+    setMessage("Da nap prompt preset vao o 'Loi nhac'.");
+  }
+
+  async function applyPresetToCurrentProject() {
+    if (!selectedProjectId) {
+      setMessage("Chon du an truoc.");
+      return;
+    }
+    const prompt = composePromptFromPreset(
+      translationPreset,
+      translationTone,
+      translationExtraRule,
+    );
+    try {
+      const updated = await jsonFetch(`${API_BASE}/projects/${selectedProjectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+      });
+      setProjects((prev) =>
+        prev.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      setProjectForm((prev) => ({ ...prev, prompt }));
+      setMessage("Da ap dung prompt preset vao du an hien tai.");
+    } catch (err) {
+      setMessage(`Loi cap nhat prompt du an: ${err.message}`);
+    }
+  }
+
+  async function syncPromptPresetForCurrentProjectIfEnabled() {
+    if (!autoApplyPromptPreset || !selectedProjectId) return;
+    const prompt = composePromptFromPreset(
+      translationPreset,
+      translationTone,
+      translationExtraRule,
+    );
+    if ((selectedProject?.prompt || "").trim() === prompt.trim()) return;
+    const updated = await jsonFetch(`${API_BASE}/projects/${selectedProjectId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    });
+    setProjects((prev) =>
+      prev.map((item) => (item.id === updated.id ? updated : item)),
+    );
   }
 
   async function downloadDubAudio() {
@@ -938,6 +1063,45 @@ export function App() {
                   }
                 />
               </label>
+              <div className="inline-two">
+                <label>
+                  Preset ngữ cảnh
+                  <select
+                    value={translationPreset}
+                    onChange={(e) => setTranslationPreset(e.target.value)}
+                  >
+                    {Object.entries(PROMPT_PRESETS).map(([key, item]) => (
+                      <option key={key} value={key}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Giọng điệu
+                  <select
+                    value={translationTone}
+                    onChange={(e) => setTranslationTone(e.target.value)}
+                  >
+                    <option value="accurate">Chính xác</option>
+                    <option value="natural">Tự nhiên</option>
+                    <option value="witty">Dí dỏm</option>
+                    <option value="teasing">Trêu ghẹo</option>
+                    <option value="dramatic">Kịch tính</option>
+                  </select>
+                </label>
+              </div>
+              <label>
+                Yêu cầu bổ sung (tùy chọn)
+                <input
+                  value={translationExtraRule}
+                  onChange={(e) => setTranslationExtraRule(e.target.value)}
+                  placeholder="Ví dụ: dùng xưng hô huynh - muội cho cặp chính"
+                />
+              </label>
+              <button type="button" onClick={applyPresetToCreateForm}>
+                Nạp preset vào lời nhắc
+              </button>
               <label>
                 Bảng thuật ngữ
                 <textarea
@@ -980,6 +1144,53 @@ export function App() {
                 }
               />
             </label>
+            <div className="inline-two">
+              <label>
+                Preset ngữ cảnh dịch
+                <select
+                  value={translationPreset}
+                  onChange={(e) => setTranslationPreset(e.target.value)}
+                >
+                  {Object.entries(PROMPT_PRESETS).map(([key, item]) => (
+                    <option key={key} value={key}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Tone dịch
+                <select
+                  value={translationTone}
+                  onChange={(e) => setTranslationTone(e.target.value)}
+                >
+                  <option value="accurate">Chính xác</option>
+                  <option value="natural">Tự nhiên</option>
+                  <option value="witty">Dí dỏm</option>
+                  <option value="teasing">Trêu ghẹo</option>
+                  <option value="dramatic">Kịch tính</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              Rule bổ sung cho ngữ cảnh dịch
+              <input
+                value={translationExtraRule}
+                onChange={(e) => setTranslationExtraRule(e.target.value)}
+                placeholder="Ví dụ: hội thoại nam chính nói ngắn, lạnh"
+              />
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={autoApplyPromptPreset}
+                onChange={(e) => setAutoApplyPromptPreset(e.target.checked)}
+              />
+              Tự áp preset/tone vào prompt dự án trước khi chạy dịch
+            </label>
+            <button type="button" onClick={applyPresetToCurrentProject}>
+              Áp preset vào dự án hiện tại
+            </button>
             <label>
               Ánh xạ giọng đọc
               <textarea

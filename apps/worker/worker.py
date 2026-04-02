@@ -7,6 +7,10 @@ from rq import Connection, SimpleWorker, Worker
 from rq.timeouts import TimerDeathPenalty
 
 
+class WindowsSimpleWorker(SimpleWorker):
+    death_penalty_class = TimerDeathPenalty
+
+
 def main() -> None:
     base = Path(__file__).resolve().parents[1]
     api_dir = base / "api"
@@ -22,10 +26,8 @@ def main() -> None:
     os.environ.setdefault("PYTHONPATH", str(api_dir))
     with Connection(redis_conn):
         # Windows does not support os.fork used by default Worker.
-        worker_cls = SimpleWorker if os.name == "nt" else Worker
+        worker_cls = WindowsSimpleWorker if os.name == "nt" else Worker
         worker = worker_cls(["pipeline"])
-        if os.name == "nt":
-            worker.death_penalty_class = TimerDeathPenalty
         worker.work(with_scheduler=False)
 
 

@@ -1,7 +1,7 @@
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib import error, request
 from difflib import SequenceMatcher
 from datetime import datetime, timezone
@@ -91,7 +91,11 @@ def _fake_ocr_segments(project: Project) -> list[dict[str, Any]]:
     return output
 
 
-def _ocr_segments_from_video(project: Project, scan_interval_sec: float = 1.0) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _ocr_segments_from_video(
+    project: Project,
+    scan_interval_sec: float = 1.0,
+    progress_hook: Callable[[dict[str, Any]], None] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     meta: dict[str, Any] = {
         "engine": "rapidocr",
         "scan_interval_sec": float(scan_interval_sec),
@@ -214,8 +218,13 @@ def _ocr_segments_from_video(project: Project, scan_interval_sec: float = 1.0) -
         )
         idx += sample_step
 
+        if progress_hook and (int(meta["frames_sampled"]) % 3 == 0):
+            progress_hook(meta.copy())
+
     cap.release()
     meta["segments_before_merge"] = len(segments)
+    if progress_hook:
+        progress_hook(meta.copy())
     return segments, meta
 
 
@@ -358,6 +367,7 @@ def _translate_project_segments(
     project: Project,
     resolved_api_key: str | None,
     voice_map: dict[str, str] | None = None,
+    progress_hook: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int], str, dict[str, Any]]:
     voice_map = voice_map or {}
     db_segments = list_segments(db, project.id)
@@ -406,6 +416,14 @@ def _translate_project_segments(
                 "confidence": seg.confidence,
             }
         )
+        if progress_hook:
+            progress_hook(
+                {
+                    "done": len(normalized),
+                    "total": len(db_segments),
+                    "provider_counts": translation_stats.copy(),
+                }
+            )
     translate_detail = {
         "total_segments": len(db_segments),
         "used_runtime_key": bool(resolved_api_key),
@@ -489,7 +507,34 @@ def run_pipeline(
 
         _push_event(artifacts, "ocr", "Dang tach video thanh frame va OCR...", 5)
         _update_job(db, job, JobStatus.running, 5, "ocr", artifacts=artifacts)
-        segments, ocr_meta = _ocr_segments_from_video(project, scan_interval_sec=scan_interval_sec)
+        last_ocr_progress = 5
+
+        def _on_ocr_progress(live_meta: dict[str, Any]) -> None:
+            nonlocal last_ocr_progress, artifacts
+            sampled = int(live_meta.get("frames_sampled", 0) or 0)
+            estimated = int(live_meta.get("estimated_samples", 0) or 0)
+            if estimated <= 0:
+                return
+            progress = min(30, max(5, 5 + int((sampled / max(1, estimated)) * 25)))
+            if progress <= last_ocr_progress:
+                return
+            last_ocr_progress = progress
+            _set_stat(
+                artifacts,
+                "ocr_live",
+                {
+                    "frames_sampled": sampled,
+                    "estimated_samples": estimated,
+                    "ocr_hit_frames": int(live_meta.get("ocr_hit_frames", 0) or 0),
+                },
+            )
+            _update_job(db, job, JobStatus.running, progress, "ocr", artifacts=artifacts)
+
+        segments, ocr_meta = _ocr_segments_from_video(
+            project,
+            scan_interval_sec=scan_interval_sec,
+            progress_hook=_on_ocr_progress,
+        )
         ocr_source = "rapidocr"
         if not segments:
             _push_event(
@@ -540,11 +585,35 @@ def run_pipeline(
             35,
         )
         _update_job(db, job, JobStatus.running, 35, "translate", artifacts=artifacts)
+        last_translate_progress = 35
+
+        def _on_translate_progress(live: dict[str, Any]) -> None:
+            nonlocal last_translate_progress, artifacts
+            total = int(live.get("total", 0) or 0)
+            done = int(live.get("done", 0) or 0)
+            if total <= 0:
+                return
+            progress = min(64, max(35, 35 + int((done / total) * 29)))
+            if progress <= last_translate_progress:
+                return
+            last_translate_progress = progress
+            _set_stat(
+                artifacts,
+                "translate_live",
+                {
+                    "done": done,
+                    "total": total,
+                    "provider_counts": live.get("provider_counts", {}),
+                },
+            )
+            _update_job(db, job, JobStatus.running, progress, "translate", artifacts=artifacts)
+
         normalized, translation_stats, first_translation_error, translate_detail = _translate_project_segments(
             db,
             project,
             resolved_api_key,
             voice_map=voice_map,
+            progress_hook=_on_translate_progress,
         )
         _set_stat(
             artifacts,

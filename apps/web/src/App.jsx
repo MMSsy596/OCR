@@ -362,7 +362,7 @@ export function App() {
   }
 
   async function clearOldSessions() {
-    if (!window.confirm("Ban co chac muon xoa toan bo session cu (khong o trang thai processing)?")) {
+    if (!window.confirm("Bạn có chắc muốn xóa toàn bộ session cũ (không ở trạng thái processing)?")) {
       return;
     }
     setClearingSessions(true);
@@ -383,10 +383,10 @@ export function App() {
         setJobs([]);
       }
       setMessage(
-        `Da xoa ${out.deleted_projects} session cu, skip ${out.skipped_processing_projects} session dang chay.`,
+        `Đã xóa ${out.deleted_projects} session cũ, bỏ qua ${out.skipped_processing_projects} session đang chạy.`,
       );
     } catch (err) {
-      setMessage(`Loi clear sessions: ${err.message}`);
+      setMessage(`Lỗi clear sessions: ${err.message}`);
     } finally {
       setClearingSessions(false);
     }
@@ -394,15 +394,15 @@ export function App() {
 
   async function forceClearAllSessions() {
     const step1 = window.confirm(
-      "CANH BAO: thao tac nay se xoa TAT CA session, ke ca processing. Ban tiep tuc?",
+      "CẢNH BÁO: thao tác này sẽ xóa TẤT CẢ session, kể cả processing. Bạn tiếp tục?",
     );
     if (!step1) return;
     const token = window.prompt(
-      "Buoc 2/2: Nhap CHINH XAC 'FORCE CLEAR ALL' de xac nhan:",
+      "Bước 2/2: Nhập CHÍNH XÁC 'FORCE CLEAR ALL' để xác nhận:",
       "",
     );
     if (token !== "FORCE CLEAR ALL") {
-      setMessage("Da huy force clear do xac nhan khong hop le.");
+      setMessage("Đã hủy force clear do xác nhận không hợp lệ.");
       return;
     }
     setForceClearingSessions(true);
@@ -421,10 +421,10 @@ export function App() {
       setEditableSegments([]);
       setJobs([]);
       setMessage(
-        `Force clear xong: da xoa ${out.deleted_projects} session, dọn ${out.removed_storage_dirs} thu muc.`,
+        `Force clear xong: đã xóa ${out.deleted_projects} session; dọn ${out.removed_storage_dirs} thư mục.`,
       );
     } catch (err) {
-      setMessage(`Loi force clear sessions: ${err.message}`);
+      setMessage(`Lỗi force clear sessions: ${err.message}`);
     } finally {
       setForceClearingSessions(false);
     }
@@ -458,7 +458,7 @@ export function App() {
 
   async function uploadExternalSrt() {
     if (!selectedProjectId || !srtUploadFile) {
-      setMessage("Chon project va file SRT truoc.");
+      setMessage("Chọn project và file SRT trước.");
       return;
     }
     setUploadingSrt(true);
@@ -475,9 +475,9 @@ export function App() {
       }
       const out = await res.json();
       setDubForm((prev) => ({ ...prev, srt_key: out.output_key }));
-      setMessage(`Da upload SRT: ${out.output_key}`);
+      setMessage(`Đã upload SRT: ${out.output_key}`);
     } catch (err) {
-      setMessage(`Loi upload SRT: ${err.message}`);
+      setMessage(`Lỗi upload SRT: ${err.message}`);
     } finally {
       setUploadingSrt(false);
     }
@@ -722,9 +722,7 @@ export function App() {
       setUndoStack([]);
       setRedoStack([]);
       setIsEditingSegments(false);
-      setMessage(
-        `Đã dịch lại. Thống kê: ${JSON.stringify(out.translation_stats || {})}`,
-      );
+      setMessage(`Đã dịch lại. Thống kê: ${JSON.stringify(out.translation_stats || {})}`);
     } catch (err) {
       setMessage(`Lỗi dịch lại: ${err.message}`);
     } finally {
@@ -785,7 +783,7 @@ export function App() {
 
   async function retryStuckJobs() {
     if (!selectedProjectId) {
-      setMessage("Chon project truoc.");
+      setMessage("Chọn project trước.");
       return;
     }
     setRetryingStuckJobs(true);
@@ -799,10 +797,10 @@ export function App() {
       );
       await loadProjectData(selectedProjectId, { includeSegments: false });
       setMessage(
-        `Da retry ${out.retried_count} job bi ket. Skip ${out.skipped_count}.`,
+        `Đã retry ${out.retried_count} job bị kẹt. Bỏ qua ${out.skipped_count}.`,
       );
     } catch (err) {
-      setMessage(`Loi retry queued jobs: ${err.message}`);
+      setMessage(`Lỗi retry queued jobs: ${err.message}`);
     } finally {
       setRetryingStuckJobs(false);
     }
@@ -847,15 +845,15 @@ export function App() {
               </select>
             </label>
             <button disabled={clearingSessions} onClick={clearOldSessions}>
-              {clearingSessions ? "Dang clear sessions..." : "Clear session cu"}
+              {clearingSessions ? "Đang dọn session..." : "Dọn session cũ"}
             </button>
             <button
               disabled={forceClearingSessions}
               onClick={forceClearAllSessions}
             >
               {forceClearingSessions
-                ? "Dang force clear..."
-                : "Force clear all (ke ca processing)"}
+                ? "Đang force clear..."
+                : "Force clear all (kể cả processing)"}
             </button>
             <details>
               <summary>Tạo project mới</summary>
@@ -983,20 +981,20 @@ export function App() {
               onClick={retryStuckJobs}
             >
               {retryingStuckJobs
-                ? "Dang retry queued jobs..."
-                : "Retry queued jobs cu"}
+                ? "Đang retry queued jobs..."
+                : "Retry queued jobs cũ"}
             </button>
             {latestJob ? (
               <div className="info">
                 <p>
-                  <strong>B??c:</strong> {latestJob.step}
+                  <strong>Bước:</strong> {latestJob.step}
                 </p>
                 <p>
-                  <strong>Ti?n ??:</strong> {latestJob.progress}%
+                  <strong>Tiến độ:</strong> {latestJob.progress}%
                 </p>
                 {latestJob.artifacts?.translation_stats ? (
                   <p>
-                    <strong>D?ch:</strong>{" "}
+                    <strong>Dịch:</strong>{" "}
                     {JSON.stringify(latestJob.artifacts.translation_stats)}
                   </p>
                 ) : null}
@@ -1007,7 +1005,7 @@ export function App() {
                 ) : null}
                 {Object.keys(latestJobStats).length > 0 ? (
                   <details>
-                    <summary>Chi ti?t th?ng s? x? l?</summary>
+                    <summary>Chi tiết thông số xử lý</summary>
                     {Object.entries(latestJobStats).map(([phase, payload]) => (
                       <div key={phase} style={{ marginTop: 8 }}>
                         <p>
@@ -1024,7 +1022,7 @@ export function App() {
                 ) : null}
                 {latestJobEvents.length > 0 ? (
                   <details>
-                    <summary>Timeline x? l? (log chi ti?t)</summary>
+                    <summary>Timeline xử lý (log chi tiết)</summary>
                     <div style={{ maxHeight: 220, overflow: "auto", marginTop: 8 }}>
                       {latestJobEvents.map((event, idx) => (
                         <p key={`${event.time || idx}-${idx}`}>
@@ -1044,7 +1042,7 @@ export function App() {
               disabled={savingSegments || editableSegments.length === 0}
               onClick={saveSegments}
             >
-              {savingSegments ? "Dang luu subtitle..." : "Luu subtitle"}
+              {savingSegments ? "Đang lưu subtitle..." : "Lưu subtitle"}
             </button>
             <button
               disabled={undoStack.length === 0}
@@ -1062,7 +1060,7 @@ export function App() {
                 });
               }}
             >
-              Hoan tac (Ctrl+Z)
+              Hoàn tác (Ctrl+Z)
             </button>
             <button
               disabled={redoStack.length === 0}
@@ -1082,39 +1080,39 @@ export function App() {
                 });
               }}
             >
-              Lam lai (Ctrl+Y)
+              Làm lại (Ctrl+Y)
             </button>
             <button
               disabled={editableSegments.length === 0}
               onClick={mergeAdjacentDuplicateSegments}
             >
-              Gop dong trung ke nhau
+              Gộp dòng trùng kề nhau
             </button>
             <button
               disabled={retranslating || editableSegments.length === 0}
               onClick={retranslateOnly}
             >
-              {retranslating ? "Dang dich lai..." : "Dich lai"}
+              {retranslating ? "Đang dịch lại..." : "Dịch lại"}
             </button>
           </section>
 
           <section className="block">
             <h2>Dub & Export</h2>
             <label>
-              Che do noi dung
+              Chế độ nội dung
               <select
                 value={exportForm.content_mode}
                 onChange={(e) =>
                   setExportForm((f) => ({ ...f, content_mode: e.target.value }))
                 }
               >
-                <option value="raw">Ban goc</option>
-                <option value="translated">Ban dich</option>
-                <option value="bilingual">Song ngu</option>
+                <option value="raw">Bản gốc</option>
+                <option value="translated">Bản dịch</option>
+                <option value="bilingual">Song ngữ</option>
               </select>
             </label>
             <label>
-              Dinh dang subtitle
+              Định dạng subtitle
               <select
                 value={exportForm.export_format}
                 onChange={(e) =>
@@ -1135,11 +1133,11 @@ export function App() {
               disabled={exporting || editableSegments.length === 0}
               onClick={exportSubtitle}
             >
-              {exporting ? "Dang xuat subtitle..." : "Xuat subtitle"}
+              {exporting ? "Đang xuất subtitle..." : "Xuất subtitle"}
             </button>
 
             <label>
-              Chen file SRT khac
+              Chèn file SRT khác
               <input
                 type="file"
                 accept=".srt"
@@ -1150,11 +1148,11 @@ export function App() {
               disabled={uploadingSrt || !srtUploadFile || !selectedProjectId}
               onClick={uploadExternalSrt}
             >
-              {uploadingSrt ? "Dang upload SRT..." : "Upload SRT vao project"}
+              {uploadingSrt ? "Đang upload SRT..." : "Upload SRT vào project"}
             </button>
 
             <label>
-              SRT dung de long tieng
+              SRT dùng để lồng tiếng
               <input
                 value={dubForm.srt_key}
                 onChange={(e) =>
@@ -1164,7 +1162,7 @@ export function App() {
               />
             </label>
             <label>
-              Giong doc
+              Giọng đọc
               <input
                 value={dubForm.voice}
                 onChange={(e) =>
@@ -1175,7 +1173,7 @@ export function App() {
             </label>
             <div className="inline-two">
               <label>
-                Toc do
+                Tốc độ
                 <input
                   value={dubForm.rate}
                   onChange={(e) =>
@@ -1208,13 +1206,13 @@ export function App() {
                   }))
                 }
               />
-              Khop tong thoi luong video goc
+              Khớp tổng thời lượng video gốc
             </label>
             <button
               disabled={dubbing || editableSegments.length === 0}
               onClick={startDubAudio}
             >
-              {dubbing ? "Dang dung audio..." : "Tao audio long tieng"}
+              {dubbing ? "Đang dựng audio..." : "Tạo audio lồng tiếng"}
             </button>
             {lastExport ? (
               <a
@@ -1223,7 +1221,7 @@ export function App() {
                 target="_blank"
                 rel="noreferrer"
               >
-                Tai subtitle: {lastExport.output_key}
+                Tải subtitle: {lastExport.output_key}
               </a>
             ) : null}
             {latestDubJob?.artifacts?.dub_output_key ? (
@@ -1233,7 +1231,7 @@ export function App() {
                 target="_blank"
                 rel="noreferrer"
               >
-                Tai audio: {latestDubJob.artifacts.dub_output_key}
+                Tải audio: {latestDubJob.artifacts.dub_output_key}
               </a>
             ) : null}
           </section>

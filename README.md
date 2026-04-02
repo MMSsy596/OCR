@@ -49,6 +49,7 @@ npm run dev
 3. Nhap ROI + prompt + glossary + API key (neu co)
 4. Bam Start Pipeline
 5. Theo doi tien do va tai file export (`srt`, `json`, `tts script`)
+6. Tao audio long tieng tu SRT theo timestamp (1 file duy nhat, co the khop do dai video goc)
 
 ## 4) Trang thai MVP
 
@@ -71,6 +72,22 @@ pip install -r requirements.txt
 
 Khong can cai Tesseract ngoai he dieu hanh. Neu OCR lib chua san sang, app tu fallback sang mode OCR mau.
 Neu Gemini khong phan hoi, he thong co fallback dich bang `deep-translator`.
+
+## 7) Audio long tieng tu SRT
+
+- Backend co endpoint: `POST /projects/{project_id}/dub/start`
+- Du lieu vao:
+  - `srt_key`: ten file SRT trong thu muc project (mac dinh `manual.translated.srt`)
+  - `voice`: voice Edge TTS (mac dinh `vi-VN-HoaiMyNeural`)
+  - `rate`, `volume`, `pitch`: thong so giong doc
+  - `output_format`: `wav` hoac `mp3`
+  - `match_video_duration`: co pad den dung tong do dai video hay khong
+- Job chay nen qua RQ, xem tien do tai danh sach jobs nhu pipeline OCR.
+- Khi xong, tai file audio qua artifact key `dubbed_audio`.
+
+Yeu cau runtime:
+- Da cai `edge-tts` (co trong `requirements.txt`)
+- He thong co `ffmpeg` + `ffprobe` trong `PATH`
 
 ## 6) Deploy Railway (khuyen nghi)
 

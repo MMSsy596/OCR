@@ -12,6 +12,7 @@ from .exporter import export_subtitle_file
 from .pipeline import retranslate_project_segments, run_pipeline
 from .queue import get_queue
 from .settings import get_settings
+from .tts_dubber import run_dub_job
 
 settings = get_settings()
 settings.storage_path.mkdir(parents=True, exist_ok=True)
@@ -120,6 +121,44 @@ def start_pipeline(project_id: str, payload: schemas.PipelineStartRequest, db: S
             gemini_api_key=payload.gemini_api_key,
             voice_map=payload.voice_map,
             scan_interval_sec=payload.scan_interval_sec,
+        )
+    return job
+
+
+@app.post("/projects/{project_id}/dub/start", response_model=schemas.JobRead)
+def start_dub(project_id: str, payload: schemas.DubStartRequest, db: Session = Depends(get_db)):
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="project_not_found")
+    if not project.video_path:
+        raise HTTPException(status_code=400, detail="video_required")
+
+    job = crud.create_job(db, project_id)
+    try:
+        q = get_queue()
+        q.enqueue(
+            "app.tts_dubber.run_dub_job",
+            job.id,
+            srt_key=payload.srt_key,
+            output_format=payload.output_format,
+            voice=payload.voice,
+            rate=payload.rate,
+            volume=payload.volume,
+            pitch=payload.pitch,
+            match_video_duration=payload.match_video_duration,
+            job_id=job.id,
+            job_timeout=14400,
+        )
+    except Exception:
+        run_dub_job(
+            job.id,
+            srt_key=payload.srt_key,
+            output_format=payload.output_format,
+            voice=payload.voice,
+            rate=payload.rate,
+            volume=payload.volume,
+            pitch=payload.pitch,
+            match_video_duration=payload.match_video_duration,
         )
     return job
 

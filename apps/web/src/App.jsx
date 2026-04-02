@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
@@ -30,13 +30,20 @@ function normalizeTextForMerge(text) {
     .toLowerCase()
     .trim()
     .replace(/\s+/g, "")
-    .replace(/[.,;:!?'"`~\-_=+*/\\|()[\]{}<>，。！？；：、]/g, "");
+    .replace(/[.,;:!?'"`~\-_=+*/\\|()[\]{}<>ï¼Œã€‚ï¼ï¼Ÿï¼›ï¼šã€]/g, "");
+}
+
+function cloneSegments(segments) {
+  return (segments || []).map((row) => ({ ...row }));
 }
 
 export function App() {
+  const MAX_HISTORY = 100;
   const [projects, setProjects] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [editableSegments, setEditableSegments] = useState([]);
+  const [undoStack, setUndoStack] = useState([]);
+  const [redoStack, setRedoStack] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -45,24 +52,35 @@ export function App() {
   const [retranslating, setRetranslating] = useState(false);
   const [isEditingSegments, setIsEditingSegments] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [dubbing, setDubbing] = useState(false);
   const [lastExport, setLastExport] = useState(null);
   const [projectForm, setProjectForm] = useState({
     name: "NanBao Project",
     source_lang: "zh",
     target_lang: "vi",
-    prompt: "Dịch theo văn phong phim cổ trang, tự nhiên, ngắn gọn.",
-    glossary: "Đạo huynh=Sư huynh\nTiên tôn=Tiên Tôn",
+    prompt: "Dá»‹ch theo vÄƒn phong phim cá»• trang, tá»± nhiÃªn, ngáº¯n gá»n.",
+    glossary: "Äáº¡o huynh=SÆ° huynh\nTiÃªn tÃ´n=TiÃªn TÃ´n",
     roi: { x: 0.1, y: 0.75, w: 0.8, h: 0.2 },
   });
   const [videoFile, setVideoFile] = useState(null);
   const [pipelineForm, setPipelineForm] = useState({
     gemini_api_key: "",
-    voiceMapText: "character_a=male-deep\ncharacter_b=female-bright\nnarrator=narrator-neutral",
+    voiceMapText:
+      "character_a=male-deep\ncharacter_b=female-bright\nnarrator=narrator-neutral",
     scan_interval_sec: 1.0,
   });
   const [exportForm, setExportForm] = useState({
     export_format: "srt",
     content_mode: "translated",
+  });
+  const [dubForm, setDubForm] = useState({
+    srt_key: "manual.translated.srt",
+    output_format: "wav",
+    voice: "vi-VN-HoaiMyNeural",
+    rate: "+0%",
+    volume: "+0%",
+    pitch: "+0Hz",
+    match_video_duration: true,
   });
   const [message, setMessage] = useState("");
   const [apiStatus, setApiStatus] = useState("checking");
@@ -72,25 +90,49 @@ export function App() {
   const [roiEditMode, setRoiEditMode] = useState(false);
 
   const stageRef = useRef(null);
+  const segmentsRef = useRef([]);
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId) || null,
     [projects, selectedProjectId],
   );
-  const videoSrc = selectedProjectId ? `${API_BASE}/projects/${selectedProjectId}/video` : "";
+  const videoSrc = selectedProjectId
+    ? `${API_BASE}/projects/${selectedProjectId}/video`
+    : "";
   const activeSegment = useMemo(() => {
     return editableSegments.find(
-      (seg) => currentVideoTime >= Number(seg.start_sec) && currentVideoTime <= Number(seg.end_sec),
+      (seg) =>
+        currentVideoTime >= Number(seg.start_sec) &&
+        currentVideoTime <= Number(seg.end_sec),
     );
   }, [editableSegments, currentVideoTime]);
   const latestJob = jobs[0];
+  const latestDubJob = useMemo(
+    () =>
+      jobs.find(
+        (job) =>
+          job?.artifacts?.dubbed_audio ||
+          job?.step === "synthesize_tts" ||
+          job?.step === "stitch_timeline",
+      ),
+    [jobs],
+  );
   const statusLabel = (status) => {
-    if (status === "draft") return "nháp";
-    if (status === "processing") return "đang xử lý";
-    if (status === "ready") return "sẵn sàng";
-    if (status === "failed") return "lỗi";
+    if (status === "draft") return "nhÃ¡p";
+    if (status === "processing") return "Ä‘ang xá»­ lÃ½";
+    if (status === "ready") return "sáºµn sÃ ng";
+    if (status === "failed") return "lá»—i";
     return status || "";
   };
+
+  function pushUndoSnapshot(snapshot) {
+    setUndoStack((prev) => {
+      const next = [...prev, cloneSegments(snapshot)];
+      if (next.length > MAX_HISTORY) next.shift();
+      return next;
+    });
+    setRedoStack([]);
+  }
 
   useEffect(() => {
     loadProjectsSafe();
@@ -110,6 +152,59 @@ export function App() {
   }, [selectedProjectId]);
 
   useEffect(() => {
+    segmentsRef.current = editableSegments;
+  }, [editableSegments]);
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      const hotkey = event.ctrlKey || event.metaKey;
+      if (!hotkey || event.altKey) return;
+
+      const key = event.key.toLowerCase();
+      const isUndo = key === "z" && !event.shiftKey;
+      const isRedo = key === "y" || (key === "z" && event.shiftKey);
+      if (!isUndo && !isRedo) return;
+
+      if (isUndo && undoStack.length === 0) return;
+      if (isRedo && redoStack.length === 0) return;
+
+      event.preventDefault();
+      if (isUndo) {
+        const current = cloneSegments(segmentsRef.current);
+        setUndoStack((prev) => {
+          if (!prev.length) return prev;
+          const previous = prev[prev.length - 1];
+          setRedoStack((rprev) => {
+            const next = [current, ...rprev];
+            return next.slice(0, MAX_HISTORY);
+          });
+          setEditableSegments(cloneSegments(previous));
+          setIsEditingSegments(true);
+          setMessage("ÄÃ£ hoÃ n tÃ¡c (Ctrl+Z).");
+          return prev.slice(0, -1);
+        });
+      } else {
+        const current = cloneSegments(segmentsRef.current);
+        setRedoStack((prev) => {
+          if (!prev.length) return prev;
+          const nextState = prev[0];
+          setUndoStack((uprev) => {
+            const next = [...uprev, current];
+            if (next.length > MAX_HISTORY) next.shift();
+            return next;
+          });
+          setEditableSegments(cloneSegments(nextState));
+          setIsEditingSegments(true);
+          setMessage("ÄÃ£ lÃ m láº¡i (Ctrl+Y).");
+          return prev.slice(1);
+        });
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [undoStack, redoStack]);
+
+  useEffect(() => {
     if (!dragState) return undefined;
     const onMove = (event) => {
       const pt = eventToPoint(event);
@@ -127,17 +222,33 @@ export function App() {
       if (mode === "move") {
         const dx = pt.x - start.x;
         const dy = pt.y - start.y;
-        setRoiDraft(normalizeRoi({ x: base.x + dx, y: base.y + dy, w: base.w, h: base.h }));
+        setRoiDraft(
+          normalizeRoi({
+            x: base.x + dx,
+            y: base.y + dy,
+            w: base.w,
+            h: base.h,
+          }),
+        );
         return;
       }
       if (mode === "resize") {
         const dx = pt.x - start.x;
         const dy = pt.y - start.y;
         let next = { ...base };
-        if (handle === "nw") next = { x: base.x + dx, y: base.y + dy, w: base.w - dx, h: base.h - dy };
-        if (handle === "ne") next = { x: base.x, y: base.y + dy, w: base.w + dx, h: base.h - dy };
-        if (handle === "sw") next = { x: base.x + dx, y: base.y, w: base.w - dx, h: base.h + dy };
-        if (handle === "se") next = { x: base.x, y: base.y, w: base.w + dx, h: base.h + dy };
+        if (handle === "nw")
+          next = {
+            x: base.x + dx,
+            y: base.y + dy,
+            w: base.w - dx,
+            h: base.h - dy,
+          };
+        if (handle === "ne")
+          next = { x: base.x, y: base.y + dy, w: base.w + dx, h: base.h - dy };
+        if (handle === "sw")
+          next = { x: base.x + dx, y: base.y, w: base.w - dx, h: base.h + dy };
+        if (handle === "se")
+          next = { x: base.x, y: base.y, w: base.w + dx, h: base.h + dy };
         setRoiDraft(normalizeRoi(next));
       }
     };
@@ -169,7 +280,9 @@ export function App() {
       if (!selectedProjectId && data.length) setSelectedProjectId(data[0].id);
     } catch (err) {
       setApiStatus("offline");
-      setMessage(`Không kết nối được API ${API_BASE}. Hãy chạy backend.`);
+      setMessage(
+        `KhÃ´ng káº¿t ná»‘i Ä‘Æ°á»£c API ${API_BASE}. HÃ£y cháº¡y backend.`,
+      );
       console.error(err);
     }
   }
@@ -181,7 +294,11 @@ export function App() {
         jsonFetch(`${API_BASE}/projects/${projectId}/jobs`),
         jsonFetch(`${API_BASE}/projects/${projectId}`),
       ]);
-      if (!isEditingSegments) setEditableSegments(s.map((row) => ({ ...row })));
+      if (!isEditingSegments) {
+        setEditableSegments(s.map((row) => ({ ...row })));
+        setUndoStack([]);
+        setRedoStack([]);
+      }
       setJobs(j);
       setProjects((prev) => prev.map((item) => (item.id === p.id ? p : item)));
     } catch {
@@ -196,13 +313,16 @@ export function App() {
       const created = await jsonFetch(`${API_BASE}/projects`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...projectForm, roi: normalizeRoi(projectForm.roi) }),
+        body: JSON.stringify({
+          ...projectForm,
+          roi: normalizeRoi(projectForm.roi),
+        }),
       });
       await loadProjectsSafe();
       setSelectedProjectId(created.id);
-      setMessage(`Đã tạo project: ${created.name}`);
+      setMessage(`ÄÃ£ táº¡o project: ${created.name}`);
     } catch (err) {
-      setMessage(`Lỗi tạo project: ${err.message}`);
+      setMessage(`Lá»—i táº¡o project: ${err.message}`);
     } finally {
       setCreating(false);
     }
@@ -210,7 +330,7 @@ export function App() {
 
   async function uploadVideo() {
     if (!selectedProjectId || !videoFile) {
-      setMessage("Chọn project và file video trước.");
+      setMessage("Chá»n project vÃ  file video trÆ°á»›c.");
       return;
     }
     setLoading(true);
@@ -218,16 +338,17 @@ export function App() {
     try {
       const form = new FormData();
       form.append("file", videoFile);
-      await fetch(`${API_BASE}/projects/${selectedProjectId}/upload`, { method: "POST", body: form }).then(
-        async (res) => {
-          if (!res.ok) throw new Error(await res.text());
-        },
-      );
+      await fetch(`${API_BASE}/projects/${selectedProjectId}/upload`, {
+        method: "POST",
+        body: form,
+      }).then(async (res) => {
+        if (!res.ok) throw new Error(await res.text());
+      });
       await loadProjectsSafe();
       await loadProjectData(selectedProjectId);
-      setMessage("Upload video thành công.");
+      setMessage("Upload video thÃ nh cÃ´ng.");
     } catch (err) {
-      setMessage(`Lỗi upload: ${err.message}`);
+      setMessage(`Lá»—i upload: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -235,22 +356,27 @@ export function App() {
 
   async function saveSelectedRoi() {
     if (!selectedProjectId) {
-      setMessage("Chọn project trước khi lưu ROI.");
+      setMessage("Chá»n project trÆ°á»›c khi lÆ°u ROI.");
       return;
     }
     setSavingRoi(true);
     setMessage("");
     try {
-      const updated = await jsonFetch(`${API_BASE}/projects/${selectedProjectId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roi: normalizeRoi(roiDraft) }),
-      });
-      setProjects((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      const updated = await jsonFetch(
+        `${API_BASE}/projects/${selectedProjectId}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ roi: normalizeRoi(roiDraft) }),
+        },
+      );
+      setProjects((prev) =>
+        prev.map((item) => (item.id === updated.id ? updated : item)),
+      );
       setRoiDraft(normalizeRoi(updated.roi));
-      setMessage("Đã lưu ROI cho project.");
+      setMessage("ÄÃ£ lÆ°u ROI cho project.");
     } catch (err) {
-      setMessage(`Lỗi lưu ROI: ${err.message}`);
+      setMessage(`Lá»—i lÆ°u ROI: ${err.message}`);
     } finally {
       setSavingRoi(false);
     }
@@ -270,26 +396,29 @@ export function App() {
 
   async function startPipeline() {
     if (!selectedProjectId) {
-      setMessage("Chọn project trước.");
+      setMessage("Chá»n project trÆ°á»›c.");
       return;
     }
     setLoading(true);
     setMessage("");
     try {
-      await jsonFetch(`${API_BASE}/projects/${selectedProjectId}/pipeline/start`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          gemini_api_key: pipelineForm.gemini_api_key || null,
-          voice_map: parseVoiceMap(pipelineForm.voiceMapText),
-          scan_interval_sec: Number(pipelineForm.scan_interval_sec) || 1.0,
-        }),
-      });
+      await jsonFetch(
+        `${API_BASE}/projects/${selectedProjectId}/pipeline/start`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            gemini_api_key: pipelineForm.gemini_api_key || null,
+            voice_map: parseVoiceMap(pipelineForm.voiceMapText),
+            scan_interval_sec: Number(pipelineForm.scan_interval_sec) || 1.0,
+          }),
+        },
+      );
       setIsEditingSegments(false);
       await loadProjectData(selectedProjectId);
-      setMessage("Pipeline đã được enqueue.");
+      setMessage("Pipeline Ä‘Ã£ Ä‘Æ°á»£c enqueue.");
     } catch (err) {
-      setMessage(`Lỗi chạy pipeline: ${err.message}`);
+      setMessage(`Lá»—i cháº¡y pipeline: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -323,11 +452,18 @@ export function App() {
   }
 
   function updateEditableSegment(id, field, value) {
+    pushUndoSnapshot(editableSegments);
     setIsEditingSegments(true);
     setEditableSegments((prev) =>
       prev.map((row) =>
         row.id === id
-          ? { ...row, [field]: field === "start_sec" || field === "end_sec" ? Number(value) : value }
+          ? {
+              ...row,
+              [field]:
+                field === "start_sec" || field === "end_sec"
+                  ? Number(value)
+                  : value,
+            }
           : row,
       ),
     );
@@ -335,10 +471,13 @@ export function App() {
 
   function mergeAdjacentDuplicateSegments() {
     if (!editableSegments.length) {
-      setMessage("Chưa có dữ liệu để gộp.");
+      setMessage("ChÆ°a cÃ³ dá»¯ liá»‡u Ä‘á»ƒ gá»™p.");
       return;
     }
-    const ordered = [...editableSegments].sort((a, b) => Number(a.start_sec) - Number(b.start_sec));
+    pushUndoSnapshot(editableSegments);
+    const ordered = [...editableSegments].sort(
+      (a, b) => Number(a.start_sec) - Number(b.start_sec),
+    );
     const merged = [];
     for (const seg of ordered) {
       const current = { ...seg };
@@ -351,14 +490,22 @@ export function App() {
       const curRaw = normalizeTextForMerge(current.raw_text);
       const prevTrans = normalizeTextForMerge(prev.translated_text);
       const curTrans = normalizeTextForMerge(current.translated_text);
-      const isDuplicate = (prevRaw && curRaw && prevRaw === curRaw) || (prevTrans && curTrans && prevTrans === curTrans);
+      const isDuplicate =
+        (prevRaw && curRaw && prevRaw === curRaw) ||
+        (prevTrans && curTrans && prevTrans === curTrans);
 
       if (isDuplicate) {
         prev.end_sec = Math.max(Number(prev.end_sec), Number(current.end_sec));
-        if (String(current.raw_text || "").length > String(prev.raw_text || "").length) {
+        if (
+          String(current.raw_text || "").length >
+          String(prev.raw_text || "").length
+        ) {
           prev.raw_text = current.raw_text;
         }
-        if (String(current.translated_text || "").length > String(prev.translated_text || "").length) {
+        if (
+          String(current.translated_text || "").length >
+          String(prev.translated_text || "").length
+        ) {
           prev.translated_text = current.translated_text;
         }
       } else {
@@ -368,12 +515,14 @@ export function App() {
 
     setEditableSegments(merged);
     setIsEditingSegments(true);
-    setMessage(`Đã gộp dòng trùng kề nhau: ${editableSegments.length} -> ${merged.length} dòng.`);
+    setMessage(
+      `ÄÃ£ gá»™p dÃ²ng trÃ¹ng ká» nhau: ${editableSegments.length} -> ${merged.length} dÃ²ng.`,
+    );
   }
 
   async function saveSegments() {
     if (!selectedProjectId) {
-      setMessage("Chọn project trước.");
+      setMessage("Chá»n project trÆ°á»›c.");
       return;
     }
     setSavingSegments(true);
@@ -388,16 +537,21 @@ export function App() {
         speaker: row.speaker ?? "narrator",
         voice: row.voice ?? "narrator-neutral",
       }));
-      const updated = await jsonFetch(`${API_BASE}/projects/${selectedProjectId}/segments`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const updated = await jsonFetch(
+        `${API_BASE}/projects/${selectedProjectId}/segments`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+      );
       setEditableSegments(updated.map((row) => ({ ...row })));
+      setUndoStack([]);
+      setRedoStack([]);
       setIsEditingSegments(false);
-      setMessage("Đã lưu subtitle chỉnh sửa.");
+      setMessage("ÄÃ£ lÆ°u subtitle chá»‰nh sá»­a.");
     } catch (err) {
-      setMessage(`Lỗi lưu subtitle: ${err.message}`);
+      setMessage(`Lá»—i lÆ°u subtitle: ${err.message}`);
     } finally {
       setSavingSegments(false);
     }
@@ -405,7 +559,7 @@ export function App() {
 
   async function retranslateOnly() {
     if (!selectedProjectId) {
-      setMessage("Chọn project trước.");
+      setMessage("Chá»n project trÆ°á»›c.");
       return;
     }
     setRetranslating(true);
@@ -425,16 +579,25 @@ export function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const out = await jsonFetch(`${API_BASE}/projects/${selectedProjectId}/segments/retranslate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ gemini_api_key: pipelineForm.gemini_api_key || null }),
-      });
+      const out = await jsonFetch(
+        `${API_BASE}/projects/${selectedProjectId}/segments/retranslate`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            gemini_api_key: pipelineForm.gemini_api_key || null,
+          }),
+        },
+      );
       setEditableSegments((out.segments || []).map((row) => ({ ...row })));
+      setUndoStack([]);
+      setRedoStack([]);
       setIsEditingSegments(false);
-      setMessage(`Đã dịch lại. Thống kê: ${JSON.stringify(out.translation_stats || {})}`);
+      setMessage(
+        `ÄÃ£ dá»‹ch láº¡i. Thá»‘ng kÃª: ${JSON.stringify(out.translation_stats || {})}`,
+      );
     } catch (err) {
-      setMessage(`Lỗi dịch lại: ${err.message}`);
+      setMessage(`Lá»—i dá»‹ch láº¡i: ${err.message}`);
     } finally {
       setRetranslating(false);
     }
@@ -442,23 +605,52 @@ export function App() {
 
   async function exportSubtitle() {
     if (!selectedProjectId) {
-      setMessage("Chọn project trước.");
+      setMessage("Chá»n project trÆ°á»›c.");
       return;
     }
     setExporting(true);
     setMessage("");
     try {
-      const out = await jsonFetch(`${API_BASE}/projects/${selectedProjectId}/export`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(exportForm),
-      });
+      const out = await jsonFetch(
+        `${API_BASE}/projects/${selectedProjectId}/export`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(exportForm),
+        },
+      );
       setLastExport({ ...out, url: `${API_BASE}${out.download_url}` });
-      setMessage(`Đã xuất ${exportForm.export_format.toUpperCase()} (${exportForm.content_mode}).`);
+      setMessage(
+        `ÄÃ£ xuáº¥t ${exportForm.export_format.toUpperCase()} (${exportForm.content_mode}).`,
+      );
     } catch (err) {
-      setMessage(`Lỗi xuất file: ${err.message}`);
+      setMessage(`Lá»—i xuáº¥t file: ${err.message}`);
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function startDubAudio() {
+    if (!selectedProjectId) {
+      setMessage("Chá»n project trÆ°á»›c.");
+      return;
+    }
+    setDubbing(true);
+    setMessage("");
+    try {
+      await jsonFetch(`${API_BASE}/projects/${selectedProjectId}/dub/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(dubForm),
+      });
+      await loadProjectData(selectedProjectId);
+      setMessage(
+        "ÄÃ£ báº¯t Ä‘áº§u dá»±ng audio lá»“ng tiáº¿ng theo timestamp.",
+      );
+    } catch (err) {
+      setMessage(`Lá»—i dá»±ng audio: ${err.message}`);
+    } finally {
+      setDubbing(false);
     }
   }
 
@@ -467,10 +659,18 @@ export function App() {
       <header className="app-header">
         <div>
           <h1>NanBao OCR Studio</h1>
-          <p>OCR, dịch, chỉnh sửa và xuất phụ đề trong một không gian làm việc tập trung.</p>
+          <p>
+            OCR, dá»‹ch, chá»‰nh sá»­a vÃ  xuáº¥t phá»¥ Ä‘á» trong má»™t khÃ´ng
+            gian lÃ m viá»‡c táº­p trung.
+          </p>
         </div>
         <div className={`status-pill ${apiStatus}`}>
-          API {apiStatus === "online" ? "đang hoạt động" : apiStatus === "offline" ? "mất kết nối" : "đang kiểm tra"}
+          API{" "}
+          {apiStatus === "online"
+            ? "Ä‘ang hoáº¡t Ä‘á»™ng"
+            : apiStatus === "offline"
+              ? "máº¥t káº¿t ná»‘i"
+              : "Ä‘ang kiá»ƒm tra"}
         </div>
       </header>
 
@@ -479,9 +679,12 @@ export function App() {
           <section className="block">
             <h2>Project</h2>
             <label>
-              Chọn project
-              <select value={selectedProjectId} onChange={(e) => setSelectedProjectId(e.target.value)}>
-                <option value="">-- Chọn --</option>
+              Chá»n project
+              <select
+                value={selectedProjectId}
+                onChange={(e) => setSelectedProjectId(e.target.value)}
+              >
+                <option value="">-- Chá»n --</option>
                 {projects.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name} ({statusLabel(p.status)})
@@ -490,89 +693,175 @@ export function App() {
               </select>
             </label>
             <details>
-              <summary>Tạo project mới</summary>
+              <summary>Táº¡o project má»›i</summary>
               <label>
-                Tên project
-                <input value={projectForm.name} onChange={(e) => setProjectForm((f) => ({ ...f, name: e.target.value }))} />
+                TÃªn project
+                <input
+                  value={projectForm.name}
+                  onChange={(e) =>
+                    setProjectForm((f) => ({ ...f, name: e.target.value }))
+                  }
+                />
               </label>
               <div className="inline-two">
                 <label>
-                  Ngôn ngữ nguồn
+                  NgÃ´n ngá»¯ nguá»“n
                   <input
                     value={projectForm.source_lang}
-                    onChange={(e) => setProjectForm((f) => ({ ...f, source_lang: e.target.value }))}
+                    onChange={(e) =>
+                      setProjectForm((f) => ({
+                        ...f,
+                        source_lang: e.target.value,
+                      }))
+                    }
                   />
                 </label>
                 <label>
-                  Ngôn ngữ đích
+                  NgÃ´n ngá»¯ Ä‘Ã­ch
                   <input
                     value={projectForm.target_lang}
-                    onChange={(e) => setProjectForm((f) => ({ ...f, target_lang: e.target.value }))}
+                    onChange={(e) =>
+                      setProjectForm((f) => ({
+                        ...f,
+                        target_lang: e.target.value,
+                      }))
+                    }
                   />
                 </label>
               </div>
               <label>
                 Prompt
-                <textarea rows={2} value={projectForm.prompt} onChange={(e) => setProjectForm((f) => ({ ...f, prompt: e.target.value }))} />
+                <textarea
+                  rows={2}
+                  value={projectForm.prompt}
+                  onChange={(e) =>
+                    setProjectForm((f) => ({ ...f, prompt: e.target.value }))
+                  }
+                />
               </label>
               <label>
                 Glossary
-                <textarea rows={3} value={projectForm.glossary} onChange={(e) => setProjectForm((f) => ({ ...f, glossary: e.target.value }))} />
+                <textarea
+                  rows={3}
+                  value={projectForm.glossary}
+                  onChange={(e) =>
+                    setProjectForm((f) => ({ ...f, glossary: e.target.value }))
+                  }
+                />
               </label>
-              <button disabled={creating} onClick={createProject}>{creating ? "Đang tạo..." : "Tạo project"}</button>
+              <button disabled={creating} onClick={createProject}>
+                {creating ? "Äang táº¡o..." : "Táº¡o project"}
+              </button>
             </details>
           </section>
 
           <section className="block">
             <h2>Pipeline</h2>
             <label>
-              Tệp video
-              <input type="file" accept="video/*" onChange={(e) => setVideoFile(e.target.files?.[0] || null)} />
+              Tá»‡p video
+              <input
+                type="file"
+                accept="video/*"
+                onChange={(e) => setVideoFile(e.target.files?.[0] || null)}
+              />
             </label>
-            <button disabled={loading} onClick={uploadVideo}>Tải video lên</button>
+            <button disabled={loading} onClick={uploadVideo}>
+              Táº£i video lÃªn
+            </button>
             <label>
-              Gemini API key (tùy chọn)
-              <input type="password" value={pipelineForm.gemini_api_key} onChange={(e) => setPipelineForm((f) => ({ ...f, gemini_api_key: e.target.value }))} />
+              Gemini API key (tÃ¹y chá»n)
+              <input
+                type="password"
+                value={pipelineForm.gemini_api_key}
+                onChange={(e) =>
+                  setPipelineForm((f) => ({
+                    ...f,
+                    gemini_api_key: e.target.value,
+                  }))
+                }
+              />
             </label>
             <label>
-              Ánh xạ giọng đọc
-              <textarea rows={3} value={pipelineForm.voiceMapText} onChange={(e) => setPipelineForm((f) => ({ ...f, voiceMapText: e.target.value }))} />
+              Ãnh xáº¡ giá»ng Ä‘á»c
+              <textarea
+                rows={3}
+                value={pipelineForm.voiceMapText}
+                onChange={(e) =>
+                  setPipelineForm((f) => ({
+                    ...f,
+                    voiceMapText: e.target.value,
+                  }))
+                }
+              />
             </label>
             <label>
-              Khoảng quét OCR (giây/lần)
+              Khoáº£ng quÃ©t OCR (giÃ¢y/láº§n)
               <input
                 type="number"
                 step="0.1"
                 min="0.1"
                 max="10"
                 value={pipelineForm.scan_interval_sec}
-                onChange={(e) => setPipelineForm((f) => ({ ...f, scan_interval_sec: Number(e.target.value) }))}
+                onChange={(e) =>
+                  setPipelineForm((f) => ({
+                    ...f,
+                    scan_interval_sec: Number(e.target.value),
+                  }))
+                }
               />
             </label>
-            <button disabled={loading} onClick={startPipeline}>Chạy pipeline</button>
+            <button disabled={loading} onClick={startPipeline}>
+              Cháº¡y pipeline
+            </button>
             {latestJob ? (
               <div className="info">
-                <p><strong>Bước:</strong> {latestJob.step}</p>
-                <p><strong>Tiến độ:</strong> {latestJob.progress}%</p>
-                {latestJob.artifacts?.translation_stats ? <p><strong>Dịch:</strong> {JSON.stringify(latestJob.artifacts.translation_stats)}</p> : null}
-                {latestJob.artifacts?.translation_error_hint ? <p className="error">{latestJob.artifacts.translation_error_hint}</p> : null}
+                <p>
+                  <strong>BÆ°á»›c:</strong> {latestJob.step}
+                </p>
+                <p>
+                  <strong>Tiáº¿n Ä‘á»™:</strong> {latestJob.progress}%
+                </p>
+                {latestJob.artifacts?.translation_stats ? (
+                  <p>
+                    <strong>Dá»‹ch:</strong>{" "}
+                    {JSON.stringify(latestJob.artifacts.translation_stats)}
+                  </p>
+                ) : null}
+                {latestJob.artifacts?.translation_error_hint ? (
+                  <p className="error">
+                    {latestJob.artifacts.translation_error_hint}
+                  </p>
+                ) : null}
               </div>
             ) : null}
           </section>
 
           <section className="block">
-            <h2>Xuất file</h2>
+            <h2>Xuáº¥t file</h2>
             <label>
-              Chế độ nội dung
-              <select value={exportForm.content_mode} onChange={(e) => setExportForm((f) => ({ ...f, content_mode: e.target.value }))}>
-                <option value="raw">Chỉ bản gốc</option>
-                <option value="translated">Chỉ bản dịch</option>
-                <option value="bilingual">Song ngữ</option>
+              Cháº¿ Ä‘á»™ ná»™i dung
+              <select
+                value={exportForm.content_mode}
+                onChange={(e) =>
+                  setExportForm((f) => ({ ...f, content_mode: e.target.value }))
+                }
+              >
+                <option value="raw">Chá»‰ báº£n gá»‘c</option>
+                <option value="translated">Chá»‰ báº£n dá»‹ch</option>
+                <option value="bilingual">Song ngá»¯</option>
               </select>
             </label>
             <label>
-              Định dạng
-              <select value={exportForm.export_format} onChange={(e) => setExportForm((f) => ({ ...f, export_format: e.target.value }))}>
+              Äá»‹nh dáº¡ng
+              <select
+                value={exportForm.export_format}
+                onChange={(e) =>
+                  setExportForm((f) => ({
+                    ...f,
+                    export_format: e.target.value,
+                  }))
+                }
+              >
                 <option value="srt">SRT (CapCut)</option>
                 <option value="vtt">VTT</option>
                 <option value="csv">CSV</option>
@@ -580,21 +869,149 @@ export function App() {
                 <option value="json">JSON</option>
               </select>
             </label>
-            <button disabled={savingSegments || editableSegments.length === 0} onClick={saveSegments}>
-              {savingSegments ? "Đang lưu..." : "Lưu subtitle"}
+            <button
+              disabled={savingSegments || editableSegments.length === 0}
+              onClick={saveSegments}
+            >
+              {savingSegments ? "Äang lÆ°u..." : "LÆ°u subtitle"}
             </button>
-            <button disabled={editableSegments.length === 0} onClick={mergeAdjacentDuplicateSegments}>
-              Gộp dòng trùng kề nhau
+            <button
+              disabled={undoStack.length === 0}
+              onClick={() => {
+                const current = cloneSegments(segmentsRef.current);
+                setUndoStack((prev) => {
+                  if (!prev.length) return prev;
+                  const previous = prev[prev.length - 1];
+                  setRedoStack((rprev) =>
+                    [current, ...rprev].slice(0, MAX_HISTORY),
+                  );
+                  setEditableSegments(cloneSegments(previous));
+                  setIsEditingSegments(true);
+                  return prev.slice(0, -1);
+                });
+              }}
+            >
+              HoÃ n tÃ¡c (Ctrl+Z)
             </button>
-            <button disabled={retranslating || editableSegments.length === 0} onClick={retranslateOnly}>
-              {retranslating ? "Đang dịch lại..." : "Dịch lại"}
+            <button
+              disabled={redoStack.length === 0}
+              onClick={() => {
+                const current = cloneSegments(segmentsRef.current);
+                setRedoStack((prev) => {
+                  if (!prev.length) return prev;
+                  const nextState = prev[0];
+                  setUndoStack((uprev) => {
+                    const next = [...uprev, current];
+                    if (next.length > MAX_HISTORY) next.shift();
+                    return next;
+                  });
+                  setEditableSegments(cloneSegments(nextState));
+                  setIsEditingSegments(true);
+                  return prev.slice(1);
+                });
+              }}
+            >
+              LÃ m láº¡i (Ctrl+Y)
+            </button>{" "}
+            <button
+              disabled={editableSegments.length === 0}
+              onClick={mergeAdjacentDuplicateSegments}
+            >
+              Gá»™p dÃ²ng trÃ¹ng ká» nhau
             </button>
-            <button disabled={exporting || editableSegments.length === 0} onClick={exportSubtitle}>
-              {exporting ? "Đang xuất..." : "Xuất file"}
+            <button
+              disabled={retranslating || editableSegments.length === 0}
+              onClick={retranslateOnly}
+            >
+              {retranslating ? "Äang dá»‹ch láº¡i..." : "Dá»‹ch láº¡i"}
             </button>
+            <button
+              disabled={exporting || editableSegments.length === 0}
+              onClick={exportSubtitle}
+            >
+              {exporting ? "Äang xuáº¥t..." : "Xuáº¥t file"}
+            </button>
+            <label>
+              SRT dùng để lồng tiếng
+              <input
+                value={dubForm.srt_key}
+                onChange={(e) =>
+                  setDubForm((f) => ({ ...f, srt_key: e.target.value }))
+                }
+                placeholder="manual.translated.srt"
+              />
+            </label>
+            <label>
+              Giọng đọc
+              <input
+                value={dubForm.voice}
+                onChange={(e) =>
+                  setDubForm((f) => ({ ...f, voice: e.target.value }))
+                }
+                placeholder="vi-VN-HoaiMyNeural"
+              />
+            </label>
+            <div className="inline-two">
+              <label>
+                Tốc độ
+                <input
+                  value={dubForm.rate}
+                  onChange={(e) =>
+                    setDubForm((f) => ({ ...f, rate: e.target.value }))
+                  }
+                  placeholder="+0%"
+                />
+              </label>
+              <label>
+                Format audio
+                <select
+                  value={dubForm.output_format}
+                  onChange={(e) =>
+                    setDubForm((f) => ({ ...f, output_format: e.target.value }))
+                  }
+                >
+                  <option value="wav">WAV</option>
+                  <option value="mp3">MP3</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              <input
+                type="checkbox"
+                checked={dubForm.match_video_duration}
+                onChange={(e) =>
+                  setDubForm((f) => ({
+                    ...f,
+                    match_video_duration: e.target.checked,
+                  }))
+                }
+              />
+              Khớp đúng tổng thời lượng video gốc
+            </label>
+            <button
+              disabled={dubbing || editableSegments.length === 0}
+              onClick={startDubAudio}
+            >
+              {dubbing ? "Đang dựng audio..." : "Tạo audio lồng tiếng"}
+            </button>{" "}
             {lastExport ? (
-              <a className="download-link" href={lastExport.url} target="_blank" rel="noreferrer">
-                Tải file: {lastExport.output_key}
+              <a
+                className="download-link"
+                href={lastExport.url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Táº£i file: {lastExport.output_key}
+              </a>
+            ) : null}{" "}
+            {latestDubJob?.artifacts?.dub_output_key ? (
+              <a
+                className="download-link"
+                href={`${API_BASE}/jobs/${latestDubJob.id}/artifact/dubbed_audio`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Tải audio: {latestDubJob.artifacts.dub_output_key}
               </a>
             ) : null}
           </section>
@@ -603,20 +1020,32 @@ export function App() {
         <section className="content">
           <section className="card preview-card">
             <div className="row-head">
-              <h2>Xem trước ROI</h2>
+              <h2>Xem trÆ°á»›c ROI</h2>
               <div className="row-actions">
-                <button type="button" onClick={() => setRoiEditMode((v) => !v)}>{roiEditMode ? "Tắt chỉnh ROI" : "Bật chỉnh ROI"}</button>
-                <button type="button" disabled={savingRoi} onClick={saveSelectedRoi}>{savingRoi ? "Đang lưu..." : "Lưu ROI"}</button>
+                <button type="button" onClick={() => setRoiEditMode((v) => !v)}>
+                  {roiEditMode ? "Táº¯t chá»‰nh ROI" : "Báº­t chá»‰nh ROI"}
+                </button>
+                <button
+                  type="button"
+                  disabled={savingRoi}
+                  onClick={saveSelectedRoi}
+                >
+                  {savingRoi ? "Äang lÆ°u..." : "LÆ°u ROI"}
+                </button>
               </div>
             </div>
             {selectedProject?.video_path ? (
               <>
                 <p className="hint">
                   {roiEditMode
-                    ? "Shift + kéo để tạo khung mới. Kéo khung/góc để chỉnh."
-                    : "Tua video để kiểm tra subtitle có nằm đúng ROI không."}
+                    ? "Shift + kÃ©o Ä‘á»ƒ táº¡o khung má»›i. KÃ©o khung/gÃ³c Ä‘á»ƒ chá»‰nh."
+                    : "Tua video Ä‘á»ƒ kiá»ƒm tra subtitle cÃ³ náº±m Ä‘Ãºng ROI khÃ´ng."}
                 </p>
-                <div className="preview-stage" ref={stageRef} onMouseDown={beginDraw}>
+                <div
+                  className="preview-stage"
+                  ref={stageRef}
+                  onMouseDown={beginDraw}
+                >
                   <video
                     src={videoSrc}
                     controls
@@ -637,36 +1066,60 @@ export function App() {
                     <div className="roi-label">ROI</div>
                     {roiEditMode ? (
                       <>
-                        <div className="roi-handle nw" onMouseDown={(e) => beginResize("nw", e)} />
-                        <div className="roi-handle ne" onMouseDown={(e) => beginResize("ne", e)} />
-                        <div className="roi-handle sw" onMouseDown={(e) => beginResize("sw", e)} />
-                        <div className="roi-handle se" onMouseDown={(e) => beginResize("se", e)} />
+                        <div
+                          className="roi-handle nw"
+                          onMouseDown={(e) => beginResize("nw", e)}
+                        />
+                        <div
+                          className="roi-handle ne"
+                          onMouseDown={(e) => beginResize("ne", e)}
+                        />
+                        <div
+                          className="roi-handle sw"
+                          onMouseDown={(e) => beginResize("sw", e)}
+                        />
+                        <div
+                          className="roi-handle se"
+                          onMouseDown={(e) => beginResize("se", e)}
+                        />
                       </>
                     ) : null}
                   </div>
                 </div>
                 <div className="timeline-card">
-                  <p><strong>Thời gian:</strong> {currentVideoTime.toFixed(2)}s</p>
+                  <p>
+                    <strong>Thá»i gian:</strong> {currentVideoTime.toFixed(2)}s
+                  </p>
                   {activeSegment ? (
                     <>
-                      <p><strong>Đang hiển thị:</strong> #{activeSegment.id} ({Number(activeSegment.start_sec).toFixed(2)} - {Number(activeSegment.end_sec).toFixed(2)})</p>
-                      <p><strong>Raw:</strong> {activeSegment.raw_text}</p>
-                      <p><strong>Dịch:</strong> {activeSegment.translated_text}</p>
+                      <p>
+                        <strong>Äang hiá»ƒn thá»‹:</strong> #{activeSegment.id}{" "}
+                        ({Number(activeSegment.start_sec).toFixed(2)} -{" "}
+                        {Number(activeSegment.end_sec).toFixed(2)})
+                      </p>
+                      <p>
+                        <strong>Raw:</strong> {activeSegment.raw_text}
+                      </p>
+                      <p>
+                        <strong>Dá»‹ch:</strong> {activeSegment.translated_text}
+                      </p>
                     </>
                   ) : (
-                    <p>Không có subtitle tại mốc này.</p>
+                    <p>KhÃ´ng cÃ³ subtitle táº¡i má»‘c nÃ y.</p>
                   )}
                 </div>
               </>
             ) : (
-              <p className="hint">Tải video lên để bắt đầu xem trước.</p>
+              <p className="hint">
+                Táº£i video lÃªn Ä‘á»ƒ báº¯t Ä‘áº§u xem trÆ°á»›c.
+              </p>
             )}
           </section>
 
           <section className="card editor-card">
             <div className="row-head">
-              <h2>Chỉnh sửa subtitle</h2>
-              <span>{editableSegments.length} dòng</span>
+              <h2>Chá»‰nh sá»­a subtitle</h2>
+              <span>{editableSegments.length} dÃ²ng</span>
             </div>
             <div className="table-wrap">
               <table>
@@ -682,29 +1135,106 @@ export function App() {
                 <thead>
                   <tr>
                     <th>#</th>
-                    <th>Bắt đầu</th>
-                    <th>Kết thúc</th>
-                    <th>Gốc</th>
-                    <th>Bản dịch</th>
-                    <th>Nhân vật</th>
-                    <th>Giọng</th>
+                    <th>Báº¯t Ä‘áº§u</th>
+                    <th>Káº¿t thÃºc</th>
+                    <th>Gá»‘c</th>
+                    <th>Báº£n dá»‹ch</th>
+                    <th>NhÃ¢n váº­t</th>
+                    <th>Giá»ng</th>
                   </tr>
                 </thead>
                 <tbody>
                   {editableSegments.length === 0 ? (
                     <tr>
-                      <td colSpan={7}>Chưa có dữ liệu</td>
+                      <td colSpan={7}>ChÆ°a cÃ³ dá»¯ liá»‡u</td>
                     </tr>
                   ) : (
                     editableSegments.map((s) => (
-                      <tr key={s.id} className={activeSegment?.id === s.id ? "active-row" : ""}>
+                      <tr
+                        key={s.id}
+                        className={
+                          activeSegment?.id === s.id ? "active-row" : ""
+                        }
+                      >
                         <td>{s.id}</td>
-                        <td><input type="number" step="0.01" value={s.start_sec} onChange={(e) => updateEditableSegment(s.id, "start_sec", e.target.value)} /></td>
-                        <td><input type="number" step="0.01" value={s.end_sec} onChange={(e) => updateEditableSegment(s.id, "end_sec", e.target.value)} /></td>
-                        <td><textarea rows={2} value={s.raw_text} onChange={(e) => updateEditableSegment(s.id, "raw_text", e.target.value)} /></td>
-                        <td><textarea rows={2} value={s.translated_text} onChange={(e) => updateEditableSegment(s.id, "translated_text", e.target.value)} /></td>
-                        <td><input value={s.speaker} onChange={(e) => updateEditableSegment(s.id, "speaker", e.target.value)} /></td>
-                        <td><input value={s.voice} onChange={(e) => updateEditableSegment(s.id, "voice", e.target.value)} /></td>
+                        <td>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={s.start_sec}
+                            onChange={(e) =>
+                              updateEditableSegment(
+                                s.id,
+                                "start_sec",
+                                e.target.value,
+                              )
+                            }
+                          />
+                        </td>
+                        <td>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={s.end_sec}
+                            onChange={(e) =>
+                              updateEditableSegment(
+                                s.id,
+                                "end_sec",
+                                e.target.value,
+                              )
+                            }
+                          />
+                        </td>
+                        <td>
+                          <textarea
+                            rows={2}
+                            value={s.raw_text}
+                            onChange={(e) =>
+                              updateEditableSegment(
+                                s.id,
+                                "raw_text",
+                                e.target.value,
+                              )
+                            }
+                          />
+                        </td>
+                        <td>
+                          <textarea
+                            rows={2}
+                            value={s.translated_text}
+                            onChange={(e) =>
+                              updateEditableSegment(
+                                s.id,
+                                "translated_text",
+                                e.target.value,
+                              )
+                            }
+                          />
+                        </td>
+                        <td>
+                          <input
+                            value={s.speaker}
+                            onChange={(e) =>
+                              updateEditableSegment(
+                                s.id,
+                                "speaker",
+                                e.target.value,
+                              )
+                            }
+                          />
+                        </td>
+                        <td>
+                          <input
+                            value={s.voice}
+                            onChange={(e) =>
+                              updateEditableSegment(
+                                s.id,
+                                "voice",
+                                e.target.value,
+                              )
+                            }
+                          />
+                        </td>
                       </tr>
                     ))
                   )}

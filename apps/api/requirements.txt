@@ -11,3 +11,4 @@ python-dotenv==1.0.1
 opencv-python==4.10.0.84
 rapidocr-onnxruntime==1.2.3
 deep-translator==1.11.4
+edge-tts==6.1.19

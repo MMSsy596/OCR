@@ -92,6 +92,16 @@ class PipelineStartRequest(BaseModel):
     scan_interval_sec: float = Field(default=1.0, ge=0.1, le=10.0)
 
 
+class DubStartRequest(BaseModel):
+    srt_key: str = "manual.translated.srt"
+    output_format: str = "wav"  # wav|mp3
+    voice: str = "vi-VN-HoaiMyNeural"
+    rate: str = "+0%"
+    volume: str = "+0%"
+    pitch: str = "+0Hz"
+    match_video_duration: bool = True
+
+
 class JobRead(BaseModel):
     id: str
     project_id: str

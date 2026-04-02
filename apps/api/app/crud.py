@@ -93,20 +93,36 @@ def list_segments(db: Session, project_id: str) -> list[SubtitleSegment]:
 
 
 def update_segments(db: Session, project_id: str, updates: list[dict]) -> list[SubtitleSegment]:
-    existing = {
-        seg.id: seg
-        for seg in db.scalars(select(SubtitleSegment).where(SubtitleSegment.project_id == project_id)).all()
-    }
+    existing_rows = list(db.scalars(select(SubtitleSegment).where(SubtitleSegment.project_id == project_id)).all())
+    existing = {seg.id: seg for seg in existing_rows}
+    keep_ids = {int(item["id"]) for item in updates if item.get("id") is not None}
+
+    # Remove segments that are no longer present in editor payload (important for merge actions).
+    for seg in existing_rows:
+        if seg.id not in keep_ids:
+            db.delete(seg)
+
     for item in updates:
-        seg = existing.get(item["id"])
-        if not seg:
-            continue
-        seg.start_sec = float(item["start_sec"])
-        seg.end_sec = float(item["end_sec"])
-        seg.raw_text = item.get("raw_text", "")
-        seg.translated_text = item.get("translated_text", "")
-        seg.speaker = item.get("speaker", seg.speaker or "narrator")
-        seg.voice = item.get("voice", seg.voice or "narrator-neutral")
+        seg_id = int(item["id"])
+        seg = existing.get(seg_id)
+        if seg is None:
+            seg = SubtitleSegment(
+                project_id=project_id,
+                start_sec=float(item["start_sec"]),
+                end_sec=float(item["end_sec"]),
+                raw_text=item.get("raw_text", ""),
+                translated_text=item.get("translated_text", ""),
+                speaker=item.get("speaker", "narrator"),
+                voice=item.get("voice", "narrator-neutral"),
+                confidence=0.9,
+            )
+        else:
+            seg.start_sec = float(item["start_sec"])
+            seg.end_sec = float(item["end_sec"])
+            seg.raw_text = item.get("raw_text", "")
+            seg.translated_text = item.get("translated_text", "")
+            seg.speaker = item.get("speaker", seg.speaker or "narrator")
+            seg.voice = item.get("voice", seg.voice or "narrator-neutral")
         db.add(seg)
     db.commit()
     return list_segments(db, project_id)

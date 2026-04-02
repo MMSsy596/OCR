@@ -25,6 +25,14 @@ function normalizeRoi(roi) {
   return { x, y, w: clamp(w, 0.01, 1), h: clamp(h, 0.01, 1) };
 }
 
+function normalizeTextForMerge(text) {
+  return String(text || "")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(/[.,;:!?'"`~\-_=+*/\\|()[\]{}<>，。！？；：、]/g, "");
+}
+
 export function App() {
   const [projects, setProjects] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -325,6 +333,44 @@ export function App() {
     );
   }
 
+  function mergeAdjacentDuplicateSegments() {
+    if (!editableSegments.length) {
+      setMessage("Chưa có dữ liệu để gộp.");
+      return;
+    }
+    const ordered = [...editableSegments].sort((a, b) => Number(a.start_sec) - Number(b.start_sec));
+    const merged = [];
+    for (const seg of ordered) {
+      const current = { ...seg };
+      const prev = merged[merged.length - 1];
+      if (!prev) {
+        merged.push(current);
+        continue;
+      }
+      const prevRaw = normalizeTextForMerge(prev.raw_text);
+      const curRaw = normalizeTextForMerge(current.raw_text);
+      const prevTrans = normalizeTextForMerge(prev.translated_text);
+      const curTrans = normalizeTextForMerge(current.translated_text);
+      const isDuplicate = (prevRaw && curRaw && prevRaw === curRaw) || (prevTrans && curTrans && prevTrans === curTrans);
+
+      if (isDuplicate) {
+        prev.end_sec = Math.max(Number(prev.end_sec), Number(current.end_sec));
+        if (String(current.raw_text || "").length > String(prev.raw_text || "").length) {
+          prev.raw_text = current.raw_text;
+        }
+        if (String(current.translated_text || "").length > String(prev.translated_text || "").length) {
+          prev.translated_text = current.translated_text;
+        }
+      } else {
+        merged.push(current);
+      }
+    }
+
+    setEditableSegments(merged);
+    setIsEditingSegments(true);
+    setMessage(`Đã gộp dòng trùng kề nhau: ${editableSegments.length} -> ${merged.length} dòng.`);
+  }
+
   async function saveSegments() {
     if (!selectedProjectId) {
       setMessage("Chọn project trước.");
@@ -536,6 +582,9 @@ export function App() {
             </label>
             <button disabled={savingSegments || editableSegments.length === 0} onClick={saveSegments}>
               {savingSegments ? "Đang lưu..." : "Lưu subtitle"}
+            </button>
+            <button disabled={editableSegments.length === 0} onClick={mergeAdjacentDuplicateSegments}>
+              Gộp dòng trùng kề nhau
             </button>
             <button disabled={retranslating || editableSegments.length === 0} onClick={retranslateOnly}>
               {retranslating ? "Đang dịch lại..." : "Dịch lại"}

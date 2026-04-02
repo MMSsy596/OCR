@@ -1,0 +1,93 @@
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class ROI(BaseModel):
+    x: float = Field(default=0.1, ge=0, le=1)
+    y: float = Field(default=0.75, ge=0, le=1)
+    w: float = Field(default=0.8, ge=0.01, le=1)
+    h: float = Field(default=0.2, ge=0.01, le=1)
+
+
+class ProjectCreate(BaseModel):
+    name: str
+    source_lang: str = "zh"
+    target_lang: str = "vi"
+    roi: ROI = ROI()
+    prompt: str = ""
+    glossary: str = ""
+
+
+class ProjectRead(BaseModel):
+    id: str
+    name: str
+    source_lang: str
+    target_lang: str
+    status: str
+    video_path: str | None
+    roi: ROI
+    prompt: str
+    glossary: str
+
+    model_config = {"from_attributes": True}
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = None
+    source_lang: str | None = None
+    target_lang: str | None = None
+    roi: ROI | None = None
+    prompt: str | None = None
+    glossary: str | None = None
+
+
+class SegmentRead(BaseModel):
+    id: int
+    start_sec: float
+    end_sec: float
+    raw_text: str
+    translated_text: str
+    speaker: str
+    voice: str
+    confidence: float
+
+    model_config = {"from_attributes": True}
+
+
+class SegmentUpdate(BaseModel):
+    id: int
+    start_sec: float
+    end_sec: float
+    raw_text: str
+    translated_text: str
+    speaker: str = "narrator"
+    voice: str = "narrator-neutral"
+
+
+class ExportRequest(BaseModel):
+    export_format: str = "srt"  # srt|vtt|csv|txt|json
+    content_mode: str = "translated"  # raw|translated|bilingual
+
+
+class ExportResponse(BaseModel):
+    output_key: str
+    download_url: str
+    output_path: str
+
+
+class PipelineStartRequest(BaseModel):
+    gemini_api_key: str | None = None
+    voice_map: dict[str, str] = Field(default_factory=dict)
+
+
+class JobRead(BaseModel):
+    id: str
+    project_id: str
+    status: str
+    progress: int
+    step: str
+    error_message: str
+    artifacts: Any
+
+    model_config = {"from_attributes": True}

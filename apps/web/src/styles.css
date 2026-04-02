@@ -1,0 +1,284 @@
+:root {
+  --bg: #f3ede0;
+  --panel: #fffaf0;
+  --ink: #1b1b1b;
+  --accent: #bb3e03;
+  --accent-soft: #e9c46a;
+  --line: #d9cbb4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 10% 10%, #fff4dd 0, transparent 35%),
+    radial-gradient(circle at 90% 0%, #ffe9ca 0, transparent 30%),
+    var(--bg);
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  padding: 20px;
+  background: linear-gradient(120deg, #6f1d1b, #bb3e03);
+  color: #fff;
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 28px;
+}
+
+.topbar p {
+  margin: 6px 0 0;
+  opacity: 0.9;
+}
+
+.grid {
+  padding: 16px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.panel.full {
+  grid-column: 1 / -1;
+}
+
+label {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+input,
+textarea,
+select,
+button {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+button {
+  margin-top: 8px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  cursor: pointer;
+  transition: transform 0.12s ease, filter 0.2s ease;
+}
+
+button:hover {
+  filter: brightness(1.05);
+  transform: translateY(-1px);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.status-box {
+  margin-top: 10px;
+  border: 1px dashed #d6b98a;
+  border-radius: 10px;
+  padding: 10px;
+  background: #fff7e3;
+}
+
+.status-box p {
+  margin: 4px 0;
+  font-size: 14px;
+}
+
+.status-box a {
+  color: #7f2d00;
+  font-weight: 600;
+}
+
+.error {
+  color: #a31515;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  border: 1px solid var(--line);
+  padding: 8px;
+  vertical-align: top;
+  font-size: 13px;
+}
+
+th {
+  background: #f8e4c3;
+}
+
+.message {
+  margin: 0 16px 16px;
+  background: var(--accent-soft);
+  border: 1px solid #cc9c2f;
+  border-radius: 10px;
+  padding: 10px;
+  font-weight: 600;
+}
+
+.edit-actions {
+  display: grid;
+  grid-template-columns: 220px 220px 220px 220px;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 10px;
+}
+
+.edit-actions label {
+  margin: 0;
+}
+
+.edit-actions button {
+  margin: 0;
+}
+
+.preview-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.roi-readout {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.save-roi-btn {
+  width: auto;
+  padding: 8px 12px;
+}
+
+.preview-hint {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.preview-stage {
+  position: relative;
+  width: 100%;
+  max-width: 980px;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #111;
+  user-select: none;
+  cursor: crosshair;
+}
+
+.preview-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.roi-box {
+  position: absolute;
+  border: 2px solid #00d1b2;
+  background: rgba(0, 209, 178, 0.15);
+  cursor: move;
+}
+
+.roi-label {
+  position: absolute;
+  left: 0;
+  top: -24px;
+  background: #00d1b2;
+  color: #09342e;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 6px;
+  border-radius: 6px;
+}
+
+.roi-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: #00d1b2;
+  border: 1px solid #094f45;
+}
+
+.roi-handle.nw {
+  left: -6px;
+  top: -6px;
+  cursor: nwse-resize;
+}
+
+.roi-handle.ne {
+  right: -6px;
+  top: -6px;
+  cursor: nesw-resize;
+}
+
+.roi-handle.sw {
+  left: -6px;
+  bottom: -6px;
+  cursor: nesw-resize;
+}
+
+.roi-handle.se {
+  right: -6px;
+  bottom: -6px;
+  cursor: nwse-resize;
+}
+
+@media (max-width: 980px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .preview-toolbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .save-roi-btn {
+    width: 100%;
+  }
+
+  .edit-actions {
+    grid-template-columns: 1fr;
+  }
+}

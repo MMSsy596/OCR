@@ -28,7 +28,6 @@ function normalizeRoi(roi) {
 export function App() {
   const [projects, setProjects] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
-  const [segments, setSegments] = useState([]);
   const [editableSegments, setEditableSegments] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -63,7 +62,6 @@ export function App() {
   const [roiEditMode, setRoiEditMode] = useState(false);
 
   const stageRef = useRef(null);
-  const videoRef = useRef(null);
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId) || null,
@@ -75,6 +73,7 @@ export function App() {
       (seg) => currentVideoTime >= Number(seg.start_sec) && currentVideoTime <= Number(seg.end_sec),
     );
   }, [editableSegments, currentVideoTime]);
+  const latestJob = jobs[0];
 
   useEffect(() => {
     loadProjectsSafe();
@@ -108,20 +107,12 @@ export function App() {
         setRoiDraft(normalizeRoi({ x: x1, y: y1, w: x2 - x1, h: y2 - y1 }));
         return;
       }
-
       if (mode === "move") {
         const dx = pt.x - start.x;
         const dy = pt.y - start.y;
-        const moved = normalizeRoi({
-          x: base.x + dx,
-          y: base.y + dy,
-          w: base.w,
-          h: base.h,
-        });
-        setRoiDraft(moved);
+        setRoiDraft(normalizeRoi({ x: base.x + dx, y: base.y + dy, w: base.w, h: base.h }));
         return;
       }
-
       if (mode === "resize") {
         const dx = pt.x - start.x;
         const dy = pt.y - start.y;
@@ -147,9 +138,10 @@ export function App() {
     if (!stage) return null;
     const rect = stage.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
-    const x = clamp((event.clientX - rect.left) / rect.width, 0, 1);
-    const y = clamp((event.clientY - rect.top) / rect.height, 0, 1);
-    return { x, y };
+    return {
+      x: clamp((event.clientX - rect.left) / rect.width, 0, 1),
+      y: clamp((event.clientY - rect.top) / rect.height, 0, 1),
+    };
   }
 
   async function loadProjectsSafe() {
@@ -157,9 +149,7 @@ export function App() {
       const data = await jsonFetch(`${API_BASE}/projects`);
       setProjects(data);
       setApiStatus("online");
-      if (!selectedProjectId && data.length) {
-        setSelectedProjectId(data[0].id);
-      }
+      if (!selectedProjectId && data.length) setSelectedProjectId(data[0].id);
     } catch (err) {
       setApiStatus("offline");
       setMessage(`Khong ket noi duoc API ${API_BASE}. Hay chay backend.`);
@@ -174,14 +164,11 @@ export function App() {
         jsonFetch(`${API_BASE}/projects/${projectId}/jobs`),
         jsonFetch(`${API_BASE}/projects/${projectId}`),
       ]);
-      setSegments(s);
-      if (!isEditingSegments) {
-        setEditableSegments(s.map((row) => ({ ...row })));
-      }
+      if (!isEditingSegments) setEditableSegments(s.map((row) => ({ ...row })));
       setJobs(j);
       setProjects((prev) => prev.map((item) => (item.id === p.id ? p : item)));
     } catch {
-      // Ignore poll errors
+      // ignore poll errors
     }
   }
 
@@ -189,14 +176,10 @@ export function App() {
     setCreating(true);
     setMessage("");
     try {
-      const payload = {
-        ...projectForm,
-        roi: normalizeRoi(projectForm.roi),
-      };
       const created = await jsonFetch(`${API_BASE}/projects`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...projectForm, roi: normalizeRoi(projectForm.roi) }),
       });
       await loadProjectsSafe();
       setSelectedProjectId(created.id);
@@ -218,14 +201,11 @@ export function App() {
     try {
       const form = new FormData();
       form.append("file", videoFile);
-      await fetch(`${API_BASE}/projects/${selectedProjectId}/upload`, {
-        method: "POST",
-        body: form,
-      }).then(async (res) => {
-        if (!res.ok) {
-          throw new Error(await res.text());
-        }
-      });
+      await fetch(`${API_BASE}/projects/${selectedProjectId}/upload`, { method: "POST", body: form }).then(
+        async (res) => {
+          if (!res.ok) throw new Error(await res.text());
+        },
+      );
       await loadProjectsSafe();
       await loadProjectData(selectedProjectId);
       setMessage("Upload video thanh cong.");
@@ -266,9 +246,7 @@ export function App() {
       .filter(Boolean)
       .reduce((acc, line) => {
         const [k, v] = line.split("=", 2);
-        if (k && v) {
-          acc[k.trim()] = v.trim();
-        }
+        if (k && v) acc[k.trim()] = v.trim();
         return acc;
       }, {});
   }
@@ -281,14 +259,13 @@ export function App() {
     setLoading(true);
     setMessage("");
     try {
-      const payload = {
-        gemini_api_key: pipelineForm.gemini_api_key || null,
-        voice_map: parseVoiceMap(pipelineForm.voiceMapText),
-      };
       await jsonFetch(`${API_BASE}/projects/${selectedProjectId}/pipeline/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          gemini_api_key: pipelineForm.gemini_api_key || null,
+          voice_map: parseVoiceMap(pipelineForm.voiceMapText),
+        }),
       });
       setIsEditingSegments(false);
       await loadProjectData(selectedProjectId);
@@ -301,9 +278,7 @@ export function App() {
   }
 
   function beginDraw(event) {
-    if (!roiEditMode) return;
-    if (!selectedProject?.video_path) return;
-    if (!event.shiftKey) return;
+    if (!roiEditMode || !selectedProject?.video_path || !event.shiftKey) return;
     const start = eventToPoint(event);
     if (!start) return;
     setDragState({ mode: "draw", start, base: roiDraft, handle: null });
@@ -362,7 +337,6 @@ export function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      setSegments(updated);
       setEditableSegments(updated.map((row) => ({ ...row })));
       setIsEditingSegments(false);
       setMessage("Da luu subtitle chinh sua.");
@@ -386,10 +360,7 @@ export function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(exportForm),
       });
-      setLastExport({
-        ...out,
-        url: `${API_BASE}${out.download_url}`,
-      });
+      setLastExport({ ...out, url: `${API_BASE}${out.download_url}` });
       setMessage(`Da export ${exportForm.export_format.toUpperCase()} (${exportForm.content_mode}).`);
     } catch (err) {
       setMessage(`Loi export: ${err.message}`);
@@ -398,246 +369,98 @@ export function App() {
     }
   }
 
-  const latestJob = jobs[0];
-
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <h1>NanBao OCR Video Studio</h1>
-        <p>OCR to Translate to TTS to Export</p>
-        <p>
-          API: {apiStatus === "online" ? "online" : apiStatus === "offline" ? "offline" : "checking"} ({API_BASE})
-        </p>
+      <header className="app-header">
+        <div>
+          <h1>NanBao OCR Studio</h1>
+          <p>OCR, translate, edit, export subtitle in one focused workspace.</p>
+        </div>
+        <div className={`status-pill ${apiStatus}`}>
+          API {apiStatus}
+        </div>
       </header>
 
-      <main className="grid">
-        <section className="panel">
-          <h2>Tao Project</h2>
-          <label>
-            Ten project
-            <input
-              value={projectForm.name}
-              onChange={(e) => setProjectForm((f) => ({ ...f, name: e.target.value }))}
-            />
-          </label>
-          <div className="two-col">
+      <main className="workspace">
+        <aside className="sidebar card">
+          <section className="block">
+            <h2>Project</h2>
             <label>
-              Source
-              <input
-                value={projectForm.source_lang}
-                onChange={(e) => setProjectForm((f) => ({ ...f, source_lang: e.target.value }))}
-              />
+              Chon project
+              <select value={selectedProjectId} onChange={(e) => setSelectedProjectId(e.target.value)}>
+                <option value="">-- Chon --</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.status})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <details>
+              <summary>Tao project moi</summary>
+              <label>
+                Ten project
+                <input value={projectForm.name} onChange={(e) => setProjectForm((f) => ({ ...f, name: e.target.value }))} />
+              </label>
+              <div className="inline-two">
+                <label>
+                  Source
+                  <input
+                    value={projectForm.source_lang}
+                    onChange={(e) => setProjectForm((f) => ({ ...f, source_lang: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Target
+                  <input
+                    value={projectForm.target_lang}
+                    onChange={(e) => setProjectForm((f) => ({ ...f, target_lang: e.target.value }))}
+                  />
+                </label>
+              </div>
+              <label>
+                Prompt
+                <textarea rows={2} value={projectForm.prompt} onChange={(e) => setProjectForm((f) => ({ ...f, prompt: e.target.value }))} />
+              </label>
+              <label>
+                Glossary
+                <textarea rows={3} value={projectForm.glossary} onChange={(e) => setProjectForm((f) => ({ ...f, glossary: e.target.value }))} />
+              </label>
+              <button disabled={creating} onClick={createProject}>{creating ? "Dang tao..." : "Tao project"}</button>
+            </details>
+          </section>
+
+          <section className="block">
+            <h2>Pipeline</h2>
+            <label>
+              Video file
+              <input type="file" accept="video/*" onChange={(e) => setVideoFile(e.target.files?.[0] || null)} />
+            </label>
+            <button disabled={loading} onClick={uploadVideo}>Upload video</button>
+            <label>
+              Gemini API key (optional)
+              <input type="password" value={pipelineForm.gemini_api_key} onChange={(e) => setPipelineForm((f) => ({ ...f, gemini_api_key: e.target.value }))} />
             </label>
             <label>
-              Target
-              <input
-                value={projectForm.target_lang}
-                onChange={(e) => setProjectForm((f) => ({ ...f, target_lang: e.target.value }))}
-              />
+              Voice map
+              <textarea rows={3} value={pipelineForm.voiceMapText} onChange={(e) => setPipelineForm((f) => ({ ...f, voiceMapText: e.target.value }))} />
             </label>
-          </div>
-          <label>
-            Prompt
-            <textarea
-              rows={3}
-              value={projectForm.prompt}
-              onChange={(e) => setProjectForm((f) => ({ ...f, prompt: e.target.value }))}
-            />
-          </label>
-          <label>
-            Glossary (src=dst, moi dong mot cap)
-            <textarea
-              rows={4}
-              value={projectForm.glossary}
-              onChange={(e) => setProjectForm((f) => ({ ...f, glossary: e.target.value }))}
-            />
-          </label>
-          <button disabled={creating} onClick={createProject}>
-            {creating ? "Dang tao..." : "Tao project"}
-          </button>
-        </section>
-
-        <section className="panel">
-          <h2>Pipeline</h2>
-          <label>
-            Chon project
-            <select value={selectedProjectId} onChange={(e) => setSelectedProjectId(e.target.value)}>
-              <option value="">-- Chon --</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} ({p.status})
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label>
-            Video file
-            <input type="file" accept="video/*" onChange={(e) => setVideoFile(e.target.files?.[0] || null)} />
-          </label>
-          <button disabled={loading} onClick={uploadVideo}>
-            Upload video
-          </button>
-
-          <label>
-            Gemini API key (optional)
-            <input
-              type="password"
-              value={pipelineForm.gemini_api_key}
-              onChange={(e) => setPipelineForm((f) => ({ ...f, gemini_api_key: e.target.value }))}
-            />
-          </label>
-
-          <label>
-            Voice map (speaker=voice)
-            <textarea
-              rows={4}
-              value={pipelineForm.voiceMapText}
-              onChange={(e) => setPipelineForm((f) => ({ ...f, voiceMapText: e.target.value }))}
-            />
-          </label>
-          <button disabled={loading} onClick={startPipeline}>
-            Start pipeline
-          </button>
-
-          {selectedProject && (
-            <div className="status-box">
-              <p>
-                <strong>Status:</strong> {selectedProject.status}
-              </p>
-              <p>
-                <strong>Video:</strong> {selectedProject.video_path || "chua upload"}
-              </p>
-            </div>
-          )}
-
-          {latestJob && (
-            <div className="status-box">
-              <p>
-                <strong>Job:</strong> {latestJob.id}
-              </p>
-              <p>
-                <strong>Step:</strong> {latestJob.step}
-              </p>
-              <p>
-                <strong>Progress:</strong> {latestJob.progress}%
-              </p>
-              <p>
-                <strong>Status:</strong> {latestJob.status}
-              </p>
-              {latestJob.error_message ? (
-                <p className="error">
-                  <strong>Error:</strong> {latestJob.error_message}
-                </p>
-              ) : null}
-              {latestJob.artifacts?.translation_stats ? (
-                <p>
-                  <strong>Translate stats:</strong> {JSON.stringify(latestJob.artifacts.translation_stats)}
-                </p>
-              ) : null}
-              {latestJob.artifacts?.translation_error_hint ? (
-                <p className="error">
-                  <strong>Translate hint:</strong> {latestJob.artifacts.translation_error_hint}
-                </p>
-              ) : null}
-            </div>
-          )}
-        </section>
-
-        <section className="panel full">
-          <h2>Video Preview + ROI</h2>
-          {selectedProject?.video_path ? (
-            <>
-              <div className="preview-toolbar">
-                <div className="roi-readout">
-                  ROI: x={roiDraft.x.toFixed(3)} y={roiDraft.y.toFixed(3)} w={roiDraft.w.toFixed(3)} h=
-                  {roiDraft.h.toFixed(3)}
-                </div>
-                <button
-                  type="button"
-                  className="save-roi-btn"
-                  onClick={() => setRoiEditMode((v) => !v)}
-                >
-                  {roiEditMode ? "Tat che do chinh ROI" : "Bat che do chinh ROI"}
-                </button>
-                <button disabled={savingRoi} onClick={saveSelectedRoi} className="save-roi-btn">
-                  {savingRoi ? "Dang luu ROI..." : "Luu ROI cho project"}
-                </button>
+            <button disabled={loading} onClick={startPipeline}>Start pipeline</button>
+            {latestJob ? (
+              <div className="info">
+                <p><strong>Step:</strong> {latestJob.step}</p>
+                <p><strong>Progress:</strong> {latestJob.progress}%</p>
+                {latestJob.artifacts?.translation_stats ? <p><strong>Translate:</strong> {JSON.stringify(latestJob.artifacts.translation_stats)}</p> : null}
+                {latestJob.artifacts?.translation_error_hint ? <p className="error">{latestJob.artifacts.translation_error_hint}</p> : null}
               </div>
-              <p className="preview-hint">
-                {roiEditMode
-                  ? "Dang chinh ROI: giu Shift + keo de ve khung, keo khung de di chuyen, keo 4 goc de resize."
-                  : "Dang xem video: ban co the play/pause/tua de kiem tra do lech subtitle."}
-              </p>
-              <div className="preview-stage" ref={stageRef} onMouseDown={beginDraw}>
-                <video
-                  ref={videoRef}
-                  src={videoSrc}
-                  controls
-                  className="preview-video"
-                  onTimeUpdate={onVideoTimeUpdate}
-                  onSeeked={onVideoTimeUpdate}
-                />
-                <div
-                  className={`roi-box ${roiEditMode ? "editable" : "readonly"}`}
-                  style={{
-                    left: `${roiDraft.x * 100}%`,
-                    top: `${roiDraft.y * 100}%`,
-                    width: `${roiDraft.w * 100}%`,
-                    height: `${roiDraft.h * 100}%`,
-                  }}
-                  onMouseDown={beginMove}
-                >
-                  <div className="roi-label">OCR ROI</div>
-                  {roiEditMode ? (
-                    <>
-                      <div className="roi-handle nw" onMouseDown={(e) => beginResize("nw", e)} />
-                      <div className="roi-handle ne" onMouseDown={(e) => beginResize("ne", e)} />
-                      <div className="roi-handle sw" onMouseDown={(e) => beginResize("sw", e)} />
-                      <div className="roi-handle se" onMouseDown={(e) => beginResize("se", e)} />
-                    </>
-                  ) : null}
-                </div>
-              </div>
-              <div className="status-box">
-                <p>
-                  <strong>Current time:</strong> {currentVideoTime.toFixed(2)}s
-                </p>
-                {activeSegment ? (
-                  <>
-                    <p>
-                      <strong>Active segment:</strong> #{activeSegment.id} ({Number(activeSegment.start_sec).toFixed(2)}
-                      s - {Number(activeSegment.end_sec).toFixed(2)}s)
-                    </p>
-                    <p>
-                      <strong>Raw:</strong> {activeSegment.raw_text}
-                    </p>
-                    <p>
-                      <strong>Translated:</strong> {activeSegment.translated_text}
-                    </p>
-                  </>
-                ) : (
-                  <p>Khong co subtitle tai moc thoi gian hien tai.</p>
-                )}
-              </div>
-            </>
-          ) : (
-            <p>Chua co video. Hay upload video truoc de preview ROI.</p>
-          )}
-        </section>
+            ) : null}
+          </section>
 
-        <section className="panel full">
-          <h2>Edit Subtitle + Export</h2>
-          <div className="edit-actions">
-            <button disabled={savingSegments || editableSegments.length === 0} onClick={saveSegments}>
-              {savingSegments ? "Dang luu..." : "Luu subtitle da edit"}
-            </button>
+          <section className="block">
+            <h2>Export</h2>
             <label>
               Content mode
-              <select
-                value={exportForm.content_mode}
-                onChange={(e) => setExportForm((f) => ({ ...f, content_mode: e.target.value }))}
-              >
+              <select value={exportForm.content_mode} onChange={(e) => setExportForm((f) => ({ ...f, content_mode: e.target.value }))}>
                 <option value="raw">Chi ban goc</option>
                 <option value="translated">Chi ban dich</option>
                 <option value="bilingual">Song ngu</option>
@@ -645,95 +468,136 @@ export function App() {
             </label>
             <label>
               Format
-              <select
-                value={exportForm.export_format}
-                onChange={(e) => setExportForm((f) => ({ ...f, export_format: e.target.value }))}
-              >
+              <select value={exportForm.export_format} onChange={(e) => setExportForm((f) => ({ ...f, export_format: e.target.value }))}>
                 <option value="srt">SRT (CapCut)</option>
                 <option value="vtt">VTT</option>
                 <option value="csv">CSV</option>
-                <option value="txt">TXT (timestamp)</option>
+                <option value="txt">TXT</option>
                 <option value="json">JSON</option>
               </select>
             </label>
-            <button disabled={exporting || editableSegments.length === 0} onClick={exportSubtitle}>
-              {exporting ? "Dang export..." : "Export subtitle"}
+            <button disabled={savingSegments || editableSegments.length === 0} onClick={saveSegments}>
+              {savingSegments ? "Dang luu..." : "Luu subtitle"}
             </button>
-          </div>
-          {lastExport ? (
-            <p>
-              File export:{" "}
-              <a href={lastExport.url} target="_blank" rel="noreferrer">
-                {lastExport.output_key}
+            <button disabled={exporting || editableSegments.length === 0} onClick={exportSubtitle}>
+              {exporting ? "Dang export..." : "Export"}
+            </button>
+            {lastExport ? (
+              <a className="download-link" href={lastExport.url} target="_blank" rel="noreferrer">
+                Tai file: {lastExport.output_key}
               </a>
-            </p>
-          ) : null}
-          <table>
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Start</th>
-                <th>End</th>
-                <th>Raw</th>
-                <th>Translated</th>
-                <th>Speaker</th>
-                <th>Voice</th>
-              </tr>
-            </thead>
-            <tbody>
-              {editableSegments.length === 0 ? (
-                <tr>
-                  <td colSpan={7}>Chua co du lieu</td>
-                </tr>
-              ) : (
-                editableSegments.map((s) => (
-                  <tr key={s.id} className={activeSegment?.id === s.id ? "active-row" : ""}>
-                    <td>{s.id}</td>
-                    <td>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={s.start_sec}
-                        onChange={(e) => updateEditableSegment(s.id, "start_sec", e.target.value)}
-                      />
-                    </td>
-                    <td>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={s.end_sec}
-                        onChange={(e) => updateEditableSegment(s.id, "end_sec", e.target.value)}
-                      />
-                    </td>
-                    <td>
-                      <textarea
-                        rows={2}
-                        value={s.raw_text}
-                        onChange={(e) => updateEditableSegment(s.id, "raw_text", e.target.value)}
-                      />
-                    </td>
-                    <td>
-                      <textarea
-                        rows={2}
-                        value={s.translated_text}
-                        onChange={(e) => updateEditableSegment(s.id, "translated_text", e.target.value)}
-                      />
-                    </td>
-                    <td>
-                      <input value={s.speaker} onChange={(e) => updateEditableSegment(s.id, "speaker", e.target.value)} />
-                    </td>
-                    <td>
-                      <input value={s.voice} onChange={(e) => updateEditableSegment(s.id, "voice", e.target.value)} />
-                    </td>
+            ) : null}
+          </section>
+        </aside>
+
+        <section className="content">
+          <section className="card preview-card">
+            <div className="row-head">
+              <h2>Preview ROI</h2>
+              <div className="row-actions">
+                <button type="button" onClick={() => setRoiEditMode((v) => !v)}>{roiEditMode ? "Tat ROI Edit" : "Bat ROI Edit"}</button>
+                <button type="button" disabled={savingRoi} onClick={saveSelectedRoi}>{savingRoi ? "Dang luu..." : "Luu ROI"}</button>
+              </div>
+            </div>
+            {selectedProject?.video_path ? (
+              <>
+                <p className="hint">
+                  {roiEditMode
+                    ? "Shift + keo de tao khung moi. Keo khung/goc de chinh."
+                    : "Tua video de kiem tra subtitle co nam dung ROI khong."}
+                </p>
+                <div className="preview-stage" ref={stageRef} onMouseDown={beginDraw}>
+                  <video
+                    src={videoSrc}
+                    controls
+                    className="preview-video"
+                    onTimeUpdate={onVideoTimeUpdate}
+                    onSeeked={onVideoTimeUpdate}
+                  />
+                  <div
+                    className={`roi-box ${roiEditMode ? "editable" : "readonly"}`}
+                    style={{
+                      left: `${roiDraft.x * 100}%`,
+                      top: `${roiDraft.y * 100}%`,
+                      width: `${roiDraft.w * 100}%`,
+                      height: `${roiDraft.h * 100}%`,
+                    }}
+                    onMouseDown={beginMove}
+                  >
+                    <div className="roi-label">ROI</div>
+                    {roiEditMode ? (
+                      <>
+                        <div className="roi-handle nw" onMouseDown={(e) => beginResize("nw", e)} />
+                        <div className="roi-handle ne" onMouseDown={(e) => beginResize("ne", e)} />
+                        <div className="roi-handle sw" onMouseDown={(e) => beginResize("sw", e)} />
+                        <div className="roi-handle se" onMouseDown={(e) => beginResize("se", e)} />
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="timeline-card">
+                  <p><strong>Time:</strong> {currentVideoTime.toFixed(2)}s</p>
+                  {activeSegment ? (
+                    <>
+                      <p><strong>Active:</strong> #{activeSegment.id} ({Number(activeSegment.start_sec).toFixed(2)} - {Number(activeSegment.end_sec).toFixed(2)})</p>
+                      <p><strong>Raw:</strong> {activeSegment.raw_text}</p>
+                      <p><strong>Translated:</strong> {activeSegment.translated_text}</p>
+                    </>
+                  ) : (
+                    <p>Khong co subtitle tai moc nay.</p>
+                  )}
+                </div>
+              </>
+            ) : (
+              <p className="hint">Upload video de bat dau preview.</p>
+            )}
+          </section>
+
+          <section className="card editor-card">
+            <div className="row-head">
+              <h2>Subtitle Editor</h2>
+              <span>{editableSegments.length} segments</span>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Start</th>
+                    <th>End</th>
+                    <th>Raw</th>
+                    <th>Translated</th>
+                    <th>Speaker</th>
+                    <th>Voice</th>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                </thead>
+                <tbody>
+                  {editableSegments.length === 0 ? (
+                    <tr>
+                      <td colSpan={7}>Chua co du lieu</td>
+                    </tr>
+                  ) : (
+                    editableSegments.map((s) => (
+                      <tr key={s.id} className={activeSegment?.id === s.id ? "active-row" : ""}>
+                        <td>{s.id}</td>
+                        <td><input type="number" step="0.01" value={s.start_sec} onChange={(e) => updateEditableSegment(s.id, "start_sec", e.target.value)} /></td>
+                        <td><input type="number" step="0.01" value={s.end_sec} onChange={(e) => updateEditableSegment(s.id, "end_sec", e.target.value)} /></td>
+                        <td><textarea rows={2} value={s.raw_text} onChange={(e) => updateEditableSegment(s.id, "raw_text", e.target.value)} /></td>
+                        <td><textarea rows={2} value={s.translated_text} onChange={(e) => updateEditableSegment(s.id, "translated_text", e.target.value)} /></td>
+                        <td><input value={s.speaker} onChange={(e) => updateEditableSegment(s.id, "speaker", e.target.value)} /></td>
+                        <td><input value={s.voice} onChange={(e) => updateEditableSegment(s.id, "voice", e.target.value)} /></td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
         </section>
       </main>
 
-      {message ? <footer className="message">{message}</footer> : null}
+      {message ? <footer className="toast">{message}</footer> : null}
     </div>
   );
 }
+

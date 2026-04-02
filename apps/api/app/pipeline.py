@@ -280,7 +280,7 @@ def _merge_adjacent_similar_segments(
 
 
 def _call_gemini_translate(text: str, prompt: str, api_key: str, source_lang: str, target_lang: str) -> tuple[str, str]:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
     system_prompt = (
         "You are subtitle translator. Keep tone natural, concise, and cinematic. "
         f"Translate from {source_lang} to {target_lang}. "

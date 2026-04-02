@@ -102,6 +102,19 @@ class DubStartRequest(BaseModel):
     match_video_duration: bool = True
 
 
+class ClearSessionsRequest(BaseModel):
+    include_processing: bool = False
+    delete_storage: bool = True
+
+
+class ClearSessionsResponse(BaseModel):
+    deleted_projects: int
+    deleted_project_ids: list[str]
+    skipped_processing_projects: int
+    removed_storage_dirs: int
+    failed_storage_dirs: list[str]
+
+
 class JobRead(BaseModel):
     id: str
     project_id: str

@@ -143,3 +143,17 @@ def get_job(db: Session, job_id: str) -> PipelineJob | None:
 def list_jobs(db: Session, project_id: str) -> list[PipelineJob]:
     stmt = select(PipelineJob).where(PipelineJob.project_id == project_id).order_by(desc(PipelineJob.created_at))
     return list(db.scalars(stmt).all())
+
+
+def clear_sessions(db: Session, include_processing: bool = False) -> tuple[list[str], int]:
+    projects = list(db.scalars(select(Project)).all())
+    deleted_ids: list[str] = []
+    skipped_processing = 0
+    for project in projects:
+        if project.status == ProjectStatus.processing and not include_processing:
+            skipped_processing += 1
+            continue
+        deleted_ids.append(project.id)
+        db.delete(project)
+    db.commit()
+    return deleted_ids, skipped_processing

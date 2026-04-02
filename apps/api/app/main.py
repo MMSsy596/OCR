@@ -50,6 +50,38 @@ def list_projects(db: Session = Depends(get_db)):
     return [_to_project_read(p) for p in projects]
 
 
+@app.post("/projects/clear-sessions", response_model=schemas.ClearSessionsResponse)
+def clear_sessions(payload: schemas.ClearSessionsRequest, db: Session = Depends(get_db)):
+    deleted_ids, skipped_processing = crud.clear_sessions(
+        db,
+        include_processing=payload.include_processing,
+    )
+    removed_storage_dirs = 0
+    failed_storage_dirs: list[str] = []
+    if payload.delete_storage:
+        storage_root = settings.storage_path.resolve()
+        for project_id in deleted_ids:
+            candidate = (settings.storage_path / project_id).resolve()
+            try:
+                candidate.relative_to(storage_root)
+            except ValueError:
+                failed_storage_dirs.append(str(candidate))
+                continue
+            if candidate.exists():
+                try:
+                    shutil.rmtree(candidate)
+                    removed_storage_dirs += 1
+                except Exception:
+                    failed_storage_dirs.append(str(candidate))
+    return schemas.ClearSessionsResponse(
+        deleted_projects=len(deleted_ids),
+        deleted_project_ids=deleted_ids,
+        skipped_processing_projects=skipped_processing,
+        removed_storage_dirs=removed_storage_dirs,
+        failed_storage_dirs=failed_storage_dirs,
+    )
+
+
 @app.get("/projects/{project_id}", response_model=schemas.ProjectRead)
 def get_project(project_id: str, db: Session = Depends(get_db)):
     project = crud.get_project(db, project_id)

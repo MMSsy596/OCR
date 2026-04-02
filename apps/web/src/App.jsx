@@ -60,6 +60,7 @@ export function App() {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [clearingSessions, setClearingSessions] = useState(false);
   const [savingRoi, setSavingRoi] = useState(false);
   const [savingSegments, setSavingSegments] = useState(false);
   const [retranslating, setRetranslating] = useState(false);
@@ -346,6 +347,37 @@ export function App() {
       setMessage(`Lỗi tạo project: ${err.message}`);
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function clearOldSessions() {
+    if (!window.confirm("Ban co chac muon xoa toan bo session cu (khong o trang thai processing)?")) {
+      return;
+    }
+    setClearingSessions(true);
+    setMessage("");
+    try {
+      const out = await jsonFetch(`${API_BASE}/projects/clear-sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          include_processing: false,
+          delete_storage: true,
+        }),
+      });
+      await loadProjectsSafe();
+      if (selectedProjectId && out.deleted_project_ids?.includes(selectedProjectId)) {
+        setSelectedProjectId("");
+        setEditableSegments([]);
+        setJobs([]);
+      }
+      setMessage(
+        `Da xoa ${out.deleted_projects} session cu, skip ${out.skipped_processing_projects} session dang chay.`,
+      );
+    } catch (err) {
+      setMessage(`Loi clear sessions: ${err.message}`);
+    } finally {
+      setClearingSessions(false);
     }
   }
 
@@ -713,6 +745,9 @@ export function App() {
                 ))}
               </select>
             </label>
+            <button disabled={clearingSessions} onClick={clearOldSessions}>
+              {clearingSessions ? "Dang clear sessions..." : "Clear session cu"}
+            </button>
             <details>
               <summary>Tạo project mới</summary>
               <label>

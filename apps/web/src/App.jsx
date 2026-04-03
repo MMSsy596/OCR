@@ -178,6 +178,7 @@ export function App() {
   const [dragState, setDragState] = useState(null);
   const [currentVideoTime, setCurrentVideoTime] = useState(0);
   const [roiEditMode, setRoiEditMode] = useState(false);
+  const [isShiftPressed, setIsShiftPressed] = useState(false);
 
   const stageRef = useRef(null);
   const segmentsRef = useRef([]);
@@ -375,6 +376,25 @@ export function App() {
       window.removeEventListener("mouseup", onUp);
     };
   }, [dragState]);
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key === "Shift") setIsShiftPressed(true);
+    };
+    const onKeyUp = (event) => {
+      if (event.key === "Shift") setIsShiftPressed(false);
+    };
+    const onWindowBlur = () => setIsShiftPressed(false);
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onWindowBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onWindowBlur);
+    };
+  }, []);
 
   function eventToPoint(event) {
     const stage = stageRef.current;
@@ -1593,7 +1613,7 @@ export function App() {
                     onSeeked={onVideoTimeUpdate}
                   />
                   <div
-                    className={`roi-box ${roiEditMode ? "editable" : "readonly"}`}
+                    className={`roi-box ${roiEditMode ? "editable" : "readonly"} ${roiEditMode && isShiftPressed ? "shift-active" : ""}`}
                     style={{
                       left: `${roiDraft.x * 100}%`,
                       top: `${roiDraft.y * 100}%`,

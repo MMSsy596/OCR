@@ -149,6 +149,9 @@ export function App() {
   const [translationExtraRule, setTranslationExtraRule] = useState("");
   const [autoApplyPromptPreset, setAutoApplyPromptPreset] = useState(true);
   const [videoFile, setVideoFile] = useState(null);
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [ingestingUrl, setIngestingUrl] = useState(false);
+  const [autoStartAfterIngest, setAutoStartAfterIngest] = useState(true);
   const [srtUploadFile, setSrtUploadFile] = useState(null);
   const [pipelineForm, setPipelineForm] = useState({
     gemini_api_key: "",
@@ -533,6 +536,38 @@ export function App() {
       setMessage(`Lỗi tải lên: ${err.message}`);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function ingestVideoFromUrl() {
+    if (!selectedProjectId || !sourceUrl.trim()) {
+      setMessage("Chọn dự án và dán link trước.");
+      return;
+    }
+    setIngestingUrl(true);
+    setMessage("");
+    try {
+      await jsonFetch(`${API_BASE}/projects/${selectedProjectId}/ingest-url/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source_url: sourceUrl.trim(),
+          auto_start_pipeline: autoStartAfterIngest,
+          gemini_api_key: pipelineForm.gemini_api_key || null,
+          voice_map: parseVoiceMap(pipelineForm.voiceMapText),
+          scan_interval_sec: Number(pipelineForm.scan_interval_sec) || 1,
+        }),
+      });
+      await loadProjectData(selectedProjectId);
+      setMessage(
+        autoStartAfterIngest
+          ? "Đã nhận link, đang tải và sẽ tự chạy pipeline."
+          : "Đã nhận link, đang tự tải video vào dự án.",
+      );
+    } catch (err) {
+      setMessage(`Lỗi nhận link: ${err.message}`);
+    } finally {
+      setIngestingUrl(false);
     }
   }
 
@@ -1132,6 +1167,28 @@ export function App() {
               Tải video lên
             </button>
             <label>
+              Dán link video để app tự tải
+              <input
+                value={sourceUrl}
+                onChange={(e) => setSourceUrl(e.target.value)}
+                placeholder="https://..."
+              />
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={autoStartAfterIngest}
+                onChange={(e) => setAutoStartAfterIngest(e.target.checked)}
+              />
+              Tự chạy pipeline sau khi tải xong
+            </label>
+            <button
+              disabled={ingestingUrl || loading || !selectedProjectId || !sourceUrl.trim()}
+              onClick={ingestVideoFromUrl}
+            >
+              {ingestingUrl ? "Đang bắt link và tải..." : "Dán link và tự xử lý"}
+            </button>
+            <label>
               Khóa API Gemini (tùy chọn)
               <input
                 type="password"
@@ -1235,6 +1292,9 @@ export function App() {
               <div className="info">
                 <p>
                   <strong>Bước:</strong> {latestJob.step}
+                </p>
+                <p>
+                  <strong>Loại tác vụ:</strong> {latestJob.artifacts?.job_kind || "pipeline"}
                 </p>
                 <p>
                   <strong>Tiến độ:</strong> {latestJob.progress}%

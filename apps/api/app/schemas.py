@@ -92,6 +92,14 @@ class PipelineStartRequest(BaseModel):
     scan_interval_sec: float = Field(default=1.0, ge=0.1, le=10.0)
 
 
+class UrlIngestStartRequest(BaseModel):
+    source_url: str
+    auto_start_pipeline: bool = True
+    gemini_api_key: str | None = None
+    voice_map: dict[str, str] = Field(default_factory=dict)
+    scan_interval_sec: float = Field(default=1.0, ge=0.1, le=10.0)
+
+
 class DubStartRequest(BaseModel):
     srt_key: str = "manual.translated.srt"
     output_format: str = "wav"  # wav|mp3

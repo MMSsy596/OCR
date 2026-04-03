@@ -11,3 +11,4 @@ deep-translator==1.11.4
 edge-tts==6.1.19
 pyttsx3==2.99
 gTTS==2.5.4
+yt-dlp>=2024.8.6,<2027

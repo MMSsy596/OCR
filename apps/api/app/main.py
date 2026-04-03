@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from . import crud, models, schemas
 from .db import Base, engine, get_db
+from .downloader import run_url_ingest_job
 from .exporter import export_subtitle_file
 from .models import JobStatus
 from .pipeline import retranslate_project_segments, run_pipeline
@@ -63,6 +64,21 @@ def _enqueue_dub_job(job_id: str, payload: schemas.DubStartRequest) -> None:
         volume=payload.volume,
         pitch=payload.pitch,
         match_video_duration=payload.match_video_duration,
+        job_id=job_id,
+        job_timeout=14400,
+    )
+
+
+def _enqueue_url_ingest_job(job_id: str, payload: schemas.UrlIngestStartRequest) -> None:
+    q = get_queue()
+    q.enqueue(
+        "app.downloader.run_url_ingest_job",
+        job_id,
+        source_url=payload.source_url,
+        auto_start_pipeline=payload.auto_start_pipeline,
+        gemini_api_key=payload.gemini_api_key,
+        voice_map=payload.voice_map,
+        scan_interval_sec=payload.scan_interval_sec,
         job_id=job_id,
         job_timeout=14400,
     )
@@ -142,6 +158,37 @@ def upload_video(project_id: str, file: UploadFile = File(...), db: Session = De
         shutil.copyfileobj(file.file, f)
     project = crud.attach_video(db, project, target)
     return _to_project_read(project)
+
+
+@app.post("/projects/{project_id}/ingest-url/start", response_model=schemas.JobRead)
+def start_url_ingest(project_id: str, payload: schemas.UrlIngestStartRequest, db: Session = Depends(get_db)):
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="project_not_found")
+    if not payload.source_url or not payload.source_url.strip():
+        raise HTTPException(status_code=400, detail="source_url_required")
+
+    job = crud.create_job(db, project_id)
+    job.artifacts = {
+        "job_kind": "url_ingest",
+        "request_payload": payload.model_dump(),
+    }
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    try:
+        _enqueue_url_ingest_job(job.id, payload)
+    except Exception:
+        run_url_ingest_job(
+            job.id,
+            source_url=payload.source_url,
+            auto_start_pipeline=payload.auto_start_pipeline,
+            gemini_api_key=payload.gemini_api_key,
+            voice_map=payload.voice_map,
+            scan_interval_sec=payload.scan_interval_sec,
+        )
+    return job
 
 
 @app.post("/projects/{project_id}/srt/upload", response_model=schemas.SrtUploadResponse)

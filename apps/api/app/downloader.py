@@ -303,7 +303,7 @@ def run_url_ingest_job(
     auto_start_pipeline: bool = True,
     gemini_api_key: str | None = None,
     voice_map: dict[str, str] | None = None,
-    scan_interval_sec: float = 1.0,
+    scan_interval_sec: float = 1.5,
 ) -> dict[str, Any]:
     db = SessionLocal()
     try:

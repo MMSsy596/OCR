@@ -157,7 +157,7 @@ export function App() {
     gemini_api_key: "",
     voiceMapText:
       "character_a=male-deep\ncharacter_b=female-bright\nnarrator=narrator-neutral",
-    scan_interval_sec: 1.0,
+    scan_interval_sec: 1.5,
   });
   const [exportForm, setExportForm] = useState({
     export_format: "srt",
@@ -555,7 +555,7 @@ export function App() {
           auto_start_pipeline: autoStartAfterIngest,
           gemini_api_key: pipelineForm.gemini_api_key || null,
           voice_map: parseVoiceMap(pipelineForm.voiceMapText),
-          scan_interval_sec: Number(pipelineForm.scan_interval_sec) || 1,
+          scan_interval_sec: Number(pipelineForm.scan_interval_sec) || 1.5,
         }),
       });
       await loadProjectData(selectedProjectId);

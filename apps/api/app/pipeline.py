@@ -1,5 +1,8 @@
 import json
+import os
 import re
+import threading
+from queue import Empty, Queue
 from pathlib import Path
 from typing import Any, Callable
 from urllib import error, request
@@ -13,6 +16,8 @@ from .db import SessionLocal
 from .exporter import export_subtitle_file
 from .models import JobStatus, PipelineJob, Project, ProjectStatus
 from .settings import get_settings
+
+DEFAULT_GEMINI_FALLBACK_KEY = "AIzaSyABHTaNRykCMkWKOdqcNutZkzS4WhUVlJU"
 
 
 def _update_job(db: Session, job: PipelineJob, status: JobStatus, progress: int, step: str, error_message: str = "", artifacts: dict | None = None) -> None:
@@ -107,6 +112,7 @@ def _ocr_segments_from_video(
         "roi_empty_count": 0,
         "ocr_hit_frames": 0,
         "duplicate_extend_count": 0,
+        "skipped_similar_frame_count": 0,
         "ignored_short_text": 0,
         "segments_before_merge": 0,
     }
@@ -119,10 +125,21 @@ def _ocr_segments_from_video(
         return [], meta
     try:
         import cv2  # type: ignore
+        import onnxruntime as ort  # type: ignore
         from rapidocr_onnxruntime import RapidOCR  # type: ignore
     except Exception:
         meta["engine"] = "rapidocr_unavailable"
         return [], meta
+
+    # Keep OCR predictable and avoid saturating all CPU cores when running on CPU.
+    cpu_count = max(1, int(os.cpu_count() or 1))
+    cpu_threads = max(1, min(4, cpu_count // 2))
+    os.environ.setdefault("OMP_NUM_THREADS", str(cpu_threads))
+    os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
+    try:
+        cv2.setNumThreads(cpu_threads)
+    except Exception:
+        pass
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -136,19 +153,61 @@ def _ocr_segments_from_video(
     meta["frames_total"] = total_frames
     meta["sample_step_frames"] = int(sample_step)
     meta["estimated_samples"] = int(total_frames // sample_step) + (1 if total_frames % sample_step else 0)
+    available_providers = []
+    try:
+        available_providers = list(ort.get_available_providers())
+    except Exception:
+        available_providers = []
+    use_cuda = "CUDAExecutionProvider" in available_providers
 
-    engine = RapidOCR()
+    engine = RapidOCR(
+        use_cuda=use_cuda,
+        det_limit_side_len=640 if not use_cuda else 960,
+        rec_batch_num=6 if not use_cuda else 10,
+        cls_batch_num=6 if not use_cuda else 10,
+    )
+    meta["execution_provider"] = "CUDAExecutionProvider" if use_cuda else "CPUExecutionProvider"
+    meta["cpu_threads"] = cpu_threads
     segments = []
-    idx = 0
     last_text = ""
-    while idx < total_frames:
-        meta["frames_sampled"] = int(meta["frames_sampled"]) + 1
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ok, frame = cap.read()
-        if not ok or frame is None:
-            meta["frames_read_failed"] = int(meta["frames_read_failed"]) + 1
-            idx += sample_step
+    last_signature: tuple[int, int, int] | None = None
+
+    frame_queue: Queue[tuple[int, Any] | None] = Queue(maxsize=6)
+    producer_error: list[str] = []
+
+    def _producer() -> None:
+        frame_idx = 0
+        sampled = 0
+        try:
+            while True:
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    break
+                if frame_idx % sample_step == 0:
+                    sampled += 1
+                    frame_queue.put((frame_idx, frame))
+                frame_idx += 1
+            meta["producer_frames_read"] = frame_idx
+            meta["producer_frames_sampled"] = sampled
+        except Exception as ex:
+            producer_error.append(str(ex))
+        finally:
+            frame_queue.put(None)
+
+    producer = threading.Thread(target=_producer, name="ocr-frame-producer", daemon=True)
+    producer.start()
+
+    while True:
+        try:
+            item = frame_queue.get(timeout=2.0)
+        except Empty:
+            if not producer.is_alive():
+                break
             continue
+        if item is None:
+            break
+        idx, frame = item
+        meta["frames_sampled"] = int(meta["frames_sampled"]) + 1
         meta["frames_read_ok"] = int(meta["frames_read_ok"]) + 1
 
         h, w = frame.shape[:2]
@@ -159,15 +218,41 @@ def _ocr_segments_from_video(
         crop = frame[y : y + rh, x : x + rw]
         if crop.size == 0:
             meta["roi_empty_count"] = int(meta["roi_empty_count"]) + 1
-            idx += sample_step
             continue
 
+        # Downscale ROI before OCR to reduce compute while preserving subtitle readability.
+        ch, cw = crop.shape[:2]
+        if cw > 960:
+            scale = 960.0 / float(cw)
+            crop = cv2.resize(crop, (960, max(1, int(ch * scale))), interpolation=cv2.INTER_AREA)
+            meta["pre_resize_scale"] = round(scale, 4)
+            meta["pre_resize_applied"] = True
+        else:
+            meta.setdefault("pre_resize_scale", 1.0)
+            meta.setdefault("pre_resize_applied", False)
+
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+
+        # Smart skip: if sampled frame is visually almost identical, skip OCR for this frame.
+        tiny = cv2.resize(gray, (48, 20), interpolation=cv2.INTER_AREA)
+        sig_mean = int(tiny.mean())
+        sig_std = int(tiny.std())
+        sig_diff = 0
+        if last_signature is not None:
+            sig_diff = abs(sig_mean - last_signature[0]) + abs(sig_std - last_signature[1])
+        if last_signature is not None and sig_diff <= 2:
+            meta["skipped_similar_frame_count"] = int(meta["skipped_similar_frame_count"]) + 1
+            if segments:
+                extended_end = (idx / fps) + max(0.5, scan_interval_sec)
+                segments[-1]["end_sec"] = max(float(segments[-1]["end_sec"]), float(extended_end))
+                meta["duplicate_extend_count"] = int(meta["duplicate_extend_count"]) + 1
+            continue
+        last_signature = (sig_mean, sig_std, sig_diff)
+
         result = engine(gray)
         # rapidocr tra ve tuple (ocr_result, elapsed)
         ocr_result = result[0] if isinstance(result, tuple) else result
         if not ocr_result:
-            idx += sample_step
             continue
         meta["ocr_hit_frames"] = int(meta["ocr_hit_frames"]) + 1
 
@@ -192,14 +277,12 @@ def _ocr_segments_from_video(
         text = " ".join(text.split())
         if len(text) < 2:
             meta["ignored_short_text"] = int(meta["ignored_short_text"]) + 1
-            idx += sample_step
             continue
         if text == last_text:
             if segments:
                 extended_end = (idx / fps) + max(0.5, scan_interval_sec)
                 segments[-1]["end_sec"] = max(float(segments[-1]["end_sec"]), float(extended_end))
                 meta["duplicate_extend_count"] = int(meta["duplicate_extend_count"]) + 1
-            idx += sample_step
             continue
 
         start_sec = idx / fps
@@ -216,12 +299,14 @@ def _ocr_segments_from_video(
                 "confidence": sum(scores) / len(scores) if scores else 0.8,
             }
         )
-        idx += sample_step
 
         if progress_hook and (int(meta["frames_sampled"]) % 3 == 0):
             progress_hook(meta.copy())
 
+    producer.join(timeout=1.0)
     cap.release()
+    if producer_error:
+        meta["producer_error"] = producer_error[0][:240]
     meta["segments_before_merge"] = len(segments)
     if progress_hook:
         progress_hook(meta.copy())
@@ -441,16 +526,28 @@ def _translate_with_fallback(
     text: str,
     prompt: str,
     api_key: str | None,
+    backup_api_key: str | None,
+    invalid_keys: set[str] | None,
     source_lang: str,
     target_lang: str,
     context_before: str = "",
     context_after: str = "",
 ) -> tuple[str, str, str]:
-    if api_key:
+    invalid_keys = invalid_keys or set()
+    candidate_keys: list[str] = []
+    if api_key and api_key not in candidate_keys:
+        candidate_keys.append(api_key)
+    if backup_api_key and backup_api_key not in candidate_keys:
+        candidate_keys.append(backup_api_key)
+
+    err = ""
+    for idx, candidate in enumerate(candidate_keys):
+        if candidate in invalid_keys:
+            continue
         translated, err = _call_gemini_translate(
             text,
             prompt,
-            api_key,
+            candidate,
             source_lang,
             target_lang,
             context_before=context_before,
@@ -458,6 +555,12 @@ def _translate_with_fallback(
         )
         if translated:
             return translated, "gemini", ""
+        # Retry with fallback key only when current key is invalid.
+        if _is_gemini_key_error(err):
+            invalid_keys.add(candidate)
+            continue
+        if idx == 0:
+            break
     try:
         from deep_translator import GoogleTranslator  # type: ignore
 
@@ -472,20 +575,27 @@ def _translate_with_fallback(
     return f"[{target_lang}] {text}", "fallback_tag", f"{final_err} | {dt_err}"
 
 
-def _resolve_gemini_key(runtime_key: str | None) -> str | None:
-    if runtime_key:
-        return runtime_key.strip()
-    keys = get_settings().gemini_api_keys
-    if not keys:
-        return None
-    first = keys.split(",")[0].strip()
-    return first or None
+def _resolve_gemini_keys(runtime_key: str | None) -> tuple[str | None, str | None]:
+    runtime = (runtime_key or "").strip()
+    keys = (get_settings().gemini_api_keys or "").strip()
+    env_first = keys.split(",")[0].strip() if keys else ""
+    default_key = DEFAULT_GEMINI_FALLBACK_KEY
+
+    primary = runtime or env_first or default_key
+    backup = default_key if primary != default_key else (env_first if env_first and env_first != primary else None)
+    return (primary or None), (backup or None)
+
+
+def _is_gemini_key_error(err: str) -> bool:
+    t = (err or "").lower()
+    return ("api key not valid" in t) or ("api_key_invalid" in t) or ("invalid_argument" in t and "api key" in t)
 
 
 def _translate_project_segments(
     db: Session,
     project: Project,
-    resolved_api_key: str | None,
+    primary_api_key: str | None,
+    backup_api_key: str | None,
     voice_map: dict[str, str] | None = None,
     progress_hook: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int], str, dict[str, Any]]:
@@ -501,8 +611,9 @@ def _translate_project_segments(
     gemini_batch_chunks_ok = 0
     gemini_batch_chunks_failed = 0
     gemini_batch_lines_ok = 0
+    invalid_gemini_keys: set[str] = set()
 
-    if resolved_api_key and len(db_segments) >= 2:
+    if (primary_api_key or backup_api_key) and len(db_segments) >= 2:
         chunk_size = 8
         for start in range(0, len(db_segments), chunk_size):
             chunk = db_segments[start : start + chunk_size]
@@ -510,15 +621,35 @@ def _translate_project_segments(
             ctx_before = db_segments[start - 1].raw_text if start > 0 else ""
             end_idx = start + len(chunk)
             ctx_after = db_segments[end_idx].raw_text if end_idx < len(db_segments) else ""
+            batch_key = primary_api_key
+            if (not batch_key) or (batch_key in invalid_gemini_keys):
+                batch_key = backup_api_key
             translated_chunk, batch_err = _call_gemini_translate_batch(
                 lines,
                 project.prompt,
-                resolved_api_key,
+                batch_key or "",
                 project.source_lang,
                 project.target_lang,
                 context_before=ctx_before,
                 context_after=ctx_after,
             )
+            if (
+                (not translated_chunk)
+                and _is_gemini_key_error(batch_err)
+                and batch_key
+                and backup_api_key
+                and batch_key != backup_api_key
+            ):
+                invalid_gemini_keys.add(batch_key)
+                translated_chunk, batch_err = _call_gemini_translate_batch(
+                    lines,
+                    project.prompt,
+                    backup_api_key,
+                    project.source_lang,
+                    project.target_lang,
+                    context_before=ctx_before,
+                    context_after=ctx_after,
+                )
             if translated_chunk and len(translated_chunk) == len(chunk):
                 gemini_batch_chunks_ok += 1
                 gemini_batch_lines_ok += len(chunk)
@@ -542,7 +673,9 @@ def _translate_project_segments(
             txt, provider, err = _translate_with_fallback(
                 seg.raw_text,
                 project.prompt,
-                resolved_api_key,
+                primary_api_key,
+                backup_api_key,
+                invalid_gemini_keys,
                 project.source_lang,
                 project.target_lang,
                 context_before=prev_text,
@@ -589,7 +722,8 @@ def _translate_project_segments(
             )
     translate_detail = {
         "total_segments": len(db_segments),
-        "used_runtime_key": bool(resolved_api_key),
+        "used_runtime_key": bool(primary_api_key),
+        "fallback_key_enabled": bool(backup_api_key or DEFAULT_GEMINI_FALLBACK_KEY),
         "provider_counts": translation_stats.copy(),
         "gemini_error_count": gemini_error_count,
         "deep_translator_error_count": deep_translator_error_count,
@@ -607,11 +741,12 @@ def retranslate_project_segments(project_id: str, gemini_api_key: str | None = N
         project = db.get(Project, project_id)
         if not project:
             return {"ok": False, "error": "project_not_found"}
-        resolved_api_key = _resolve_gemini_key(gemini_api_key)
+        primary_key, backup_key = _resolve_gemini_keys(gemini_api_key)
         normalized, translation_stats, first_translation_error, _ = _translate_project_segments(
             db,
             project,
-            resolved_api_key,
+            primary_key,
+            backup_key,
             voice_map={},
         )
         replace_segments(db, project.id, normalized)
@@ -632,12 +767,12 @@ def run_pipeline(
     job_id: str,
     gemini_api_key: str | None = None,
     voice_map: dict[str, str] | None = None,
-    scan_interval_sec: float = 1.0,
+    scan_interval_sec: float = 1.5,
 ) -> dict[str, Any]:
     db = SessionLocal()
     voice_map = voice_map or {}
     try:
-        resolved_api_key = _resolve_gemini_key(gemini_api_key)
+        primary_key, backup_key = _resolve_gemini_keys(gemini_api_key)
         job = db.get(PipelineJob, job_id)
         if not job:
             return {"ok": False, "error": "job_not_found"}
@@ -666,7 +801,8 @@ def run_pipeline(
                 "target_lang": project.target_lang,
                 "scan_interval_sec": float(scan_interval_sec),
                 "voice_map_size": len(voice_map),
-                "gemini_key_present": bool(resolved_api_key),
+                "gemini_key_present": bool(primary_key),
+                "gemini_fallback_key_enabled": bool(backup_key or DEFAULT_GEMINI_FALLBACK_KEY),
             },
         )
         _update_job(db, job, JobStatus.running, 1, "init", artifacts=artifacts)
@@ -747,7 +883,7 @@ def run_pipeline(
         _push_event(
             artifacts,
             "translate",
-            f"Bat dau dich {len(segments)} doan, gemini_key={'co' if resolved_api_key else 'khong'}.",
+            f"Bat dau dich {len(segments)} doan, gemini_key={'co' if primary_key else 'khong'} (co fallback key mac dinh).",
             35,
         )
         _update_job(db, job, JobStatus.running, 35, "translate", artifacts=artifacts)
@@ -777,7 +913,8 @@ def run_pipeline(
         normalized, translation_stats, first_translation_error, translate_detail = _translate_project_segments(
             db,
             project,
-            resolved_api_key,
+            primary_key,
+            backup_key,
             voice_map=voice_map,
             progress_hook=_on_translate_progress,
         )

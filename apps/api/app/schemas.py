@@ -89,7 +89,7 @@ class RetranslateResponse(BaseModel):
 class PipelineStartRequest(BaseModel):
     gemini_api_key: str | None = None
     voice_map: dict[str, str] = Field(default_factory=dict)
-    scan_interval_sec: float = Field(default=1.0, ge=0.1, le=10.0)
+    scan_interval_sec: float = Field(default=1.5, ge=0.1, le=10.0)
 
 
 class UrlIngestStartRequest(BaseModel):
@@ -97,7 +97,7 @@ class UrlIngestStartRequest(BaseModel):
     auto_start_pipeline: bool = True
     gemini_api_key: str | None = None
     voice_map: dict[str, str] = Field(default_factory=dict)
-    scan_interval_sec: float = Field(default=1.0, ge=0.1, le=10.0)
+    scan_interval_sec: float = Field(default=1.5, ge=0.1, le=10.0)
 
 
 class DubStartRequest(BaseModel):

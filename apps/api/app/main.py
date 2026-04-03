@@ -69,6 +69,36 @@ def _enqueue_dub_job(job_id: str, payload: schemas.DubStartRequest) -> None:
     )
 
 
+def _cleanup_project_generated_files(project_dir: Path, keep_source: Path | None = None) -> None:
+    storage_root = settings.storage_path.resolve()
+
+    def _is_safe(path_obj: Path) -> bool:
+        try:
+            path_obj.resolve().relative_to(storage_root)
+            return True
+        except ValueError:
+            return False
+
+    keep_resolved = keep_source.resolve() if keep_source else None
+
+    for src in project_dir.glob("source.*"):
+        if keep_resolved and src.resolve() == keep_resolved:
+            continue
+        if src.is_file() and _is_safe(src):
+            src.unlink(missing_ok=True)
+
+    for pattern in ("output.*", "manual.*", "tts_lines.txt"):
+        for item in project_dir.glob(pattern):
+            if keep_resolved and item.resolve() == keep_resolved:
+                continue
+            if item.is_file() and _is_safe(item):
+                item.unlink(missing_ok=True)
+
+    dub_tmp = project_dir / "_dub_tmp"
+    if dub_tmp.exists() and dub_tmp.is_dir() and _is_safe(dub_tmp):
+        shutil.rmtree(dub_tmp, ignore_errors=True)
+
+
 def _enqueue_url_ingest_job(job_id: str, payload: schemas.UrlIngestStartRequest) -> None:
     q = get_queue()
     q.enqueue(
@@ -156,6 +186,7 @@ def upload_video(project_id: str, file: UploadFile = File(...), db: Session = De
     target = project_dir / f"source{ext}"
     with target.open("wb") as f:
         shutil.copyfileobj(file.file, f)
+    _cleanup_project_generated_files(project_dir, keep_source=target)
     project = crud.attach_video(db, project, target)
     return _to_project_read(project)
 

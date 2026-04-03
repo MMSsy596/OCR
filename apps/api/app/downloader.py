@@ -7,6 +7,7 @@ from urllib import parse, request
 
 from sqlalchemy.orm import Session
 
+from . import crud
 from .db import SessionLocal
 from .models import JobStatus, PipelineJob, Project, ProjectStatus
 from .pipeline import run_pipeline
@@ -266,6 +267,36 @@ def _create_pipeline_job(
     return pj
 
 
+def _cleanup_project_generated_files(project_dir: Path, keep_source: Path | None = None) -> None:
+    storage_root = get_settings().storage_path.resolve()
+
+    def _is_safe(path_obj: Path) -> bool:
+        try:
+            path_obj.resolve().relative_to(storage_root)
+            return True
+        except ValueError:
+            return False
+
+    keep_resolved = keep_source.resolve() if keep_source else None
+
+    for src in project_dir.glob("source.*"):
+        if keep_resolved and src.resolve() == keep_resolved:
+            continue
+        if src.is_file() and _is_safe(src):
+            src.unlink(missing_ok=True)
+
+    for pattern in ("output.*", "manual.*", "tts_lines.txt"):
+        for item in project_dir.glob(pattern):
+            if keep_resolved and item.resolve() == keep_resolved:
+                continue
+            if item.is_file() and _is_safe(item):
+                item.unlink(missing_ok=True)
+
+    dub_tmp = project_dir / "_dub_tmp"
+    if dub_tmp.exists() and dub_tmp.is_dir() and _is_safe(dub_tmp):
+        shutil.rmtree(dub_tmp, ignore_errors=True)
+
+
 def run_url_ingest_job(
     job_id: str,
     source_url: str,
@@ -348,9 +379,8 @@ def run_url_ingest_job(
         final_video = project_dir / f"source{ext}"
         if downloaded_path.resolve() != final_video.resolve():
             shutil.copy2(downloaded_path, final_video)
-        project.video_path = str(final_video)
-        db.add(project)
-        db.commit()
+        _cleanup_project_generated_files(project_dir, keep_source=final_video)
+        project = crud.attach_video(db, project, final_video)
 
         _set_stat(
             artifacts,

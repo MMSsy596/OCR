@@ -209,8 +209,9 @@ def _download_with_ytdlp(
     options: dict[str, Any] = {
         "outtmpl": output_template,
         "noplaylist": True,
-        "format": "mp4/bestvideo+bestaudio/best",
-        "merge_output_format": "mp4",
+        # Prefer absolute best quality stream pair (video+audio) first.
+        "format": "bestvideo*+bestaudio/best",
+        "format_sort": ["res", "fps", "hdr", "vcodec", "acodec", "br", "size"],
         "progress_hooks": [_hook],
         "quiet": True,
         "no_warnings": True,
@@ -237,6 +238,13 @@ def _download_with_ytdlp(
             "title": state["title"],
             "extractor": state["extractor"],
             "bytes_downloaded": int(final_path.stat().st_size),
+            "format_id": str(info.get("format_id") or ""),
+            "ext": str(info.get("ext") or final_path.suffix.lstrip(".")),
+            "height": int(info.get("height") or 0),
+            "width": int(info.get("width") or 0),
+            "fps": int(info.get("fps") or 0),
+            "vcodec": str(info.get("vcodec") or ""),
+            "acodec": str(info.get("acodec") or ""),
         }
 
 

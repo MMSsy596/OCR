@@ -382,7 +382,7 @@ def _call_gemini_translate(
     context_before: str = "",
     context_after: str = "",
 ) -> tuple[str, str]:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={api_key}"
     system_prompt = (
         "You are expert subtitle translator. Keep tone natural, concise, and cinematic. "
         f"Translate from {source_lang} to {target_lang}. "
@@ -457,7 +457,7 @@ def _call_gemini_translate_batch(
 ) -> tuple[list[str], str]:
     if not lines:
         return [], ""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={api_key}"
     system_prompt = (
         "You are expert subtitle translator. "
         f"Translate from {source_lang} to {target_lang}. "

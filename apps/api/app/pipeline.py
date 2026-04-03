@@ -351,6 +351,92 @@ def _call_gemini_translate(
         return "", f"gemini_exception:{str(ex)[:300]}"
 
 
+def _extract_json_block(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        return raw
+    fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", raw, flags=re.DOTALL | re.IGNORECASE)
+    if fenced:
+        return fenced.group(1).strip()
+    return raw
+
+
+def _call_gemini_translate_batch(
+    lines: list[str],
+    prompt: str,
+    api_key: str,
+    source_lang: str,
+    target_lang: str,
+    context_before: str = "",
+    context_after: str = "",
+) -> tuple[list[str], str]:
+    if not lines:
+        return [], ""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    system_prompt = (
+        "You are expert subtitle translator. "
+        f"Translate from {source_lang} to {target_lang}. "
+        "Translate with full context continuity and keep natural spoken Vietnamese. "
+        "Return ONLY strict JSON with schema: {\"translations\": [\"...\"]}. "
+        "The output list length must equal input lines length and preserve order."
+    )
+    if prompt:
+        system_prompt = f"{system_prompt}\nStyle and domain instructions:\n{prompt}"
+
+    numbered = "\n".join([f"{i+1}. {line}" for i, line in enumerate(lines)])
+    user_payload = (
+        "CONTEXT_BEFORE:\n"
+        f"{context_before or '(none)'}\n\n"
+        "LINES_TO_TRANSLATE:\n"
+        f"{numbered}\n\n"
+        "CONTEXT_AFTER:\n"
+        f"{context_after or '(none)'}\n\n"
+        "Output strict JSON only."
+    )
+    body = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": system_prompt},
+                    {"text": user_payload},
+                ]
+            }
+        ]
+    }
+    payload = json.dumps(body).encode("utf-8")
+    req = request.Request(url, data=payload, method="POST", headers={"Content-Type": "application/json"})
+    try:
+        with request.urlopen(req, timeout=45) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            out = (
+                data.get("candidates", [{}])[0]
+                .get("content", {})
+                .get("parts", [{}])[0]
+                .get("text", "")
+                .strip()
+            )
+            parsed_text = _extract_json_block(out)
+            parsed = json.loads(parsed_text)
+            arr = parsed.get("translations", [])
+            if not isinstance(arr, list):
+                return [], "gemini_batch_invalid_json_schema"
+            cleaned = [str(x).strip() for x in arr]
+            if len(cleaned) != len(lines) or any(not x for x in cleaned):
+                return [], f"gemini_batch_length_mismatch:{len(cleaned)}!={len(lines)}"
+            return cleaned, ""
+    except error.HTTPError as ex:
+        body = ""
+        try:
+            body = ex.read().decode("utf-8", errors="ignore")
+        except Exception:
+            body = ""
+        return [], f"gemini_batch_http_{ex.code}:{body[:300]}"
+    except error.URLError as ex:
+        return [], f"gemini_batch_url_error:{ex.reason}"
+    except Exception as ex:
+        return [], f"gemini_batch_exception:{str(ex)[:300]}"
+
+
 def _translate_with_fallback(
     text: str,
     prompt: str,
@@ -411,18 +497,57 @@ def _translate_project_segments(
     fallback_samples: list[dict[str, Any]] = []
     gemini_error_count = 0
     deep_translator_error_count = 0
+    batch_prefill: dict[int, str] = {}
+    gemini_batch_chunks_ok = 0
+    gemini_batch_chunks_failed = 0
+    gemini_batch_lines_ok = 0
+
+    if resolved_api_key and len(db_segments) >= 2:
+        chunk_size = 8
+        for start in range(0, len(db_segments), chunk_size):
+            chunk = db_segments[start : start + chunk_size]
+            lines = [seg.raw_text for seg in chunk]
+            ctx_before = db_segments[start - 1].raw_text if start > 0 else ""
+            end_idx = start + len(chunk)
+            ctx_after = db_segments[end_idx].raw_text if end_idx < len(db_segments) else ""
+            translated_chunk, batch_err = _call_gemini_translate_batch(
+                lines,
+                project.prompt,
+                resolved_api_key,
+                project.source_lang,
+                project.target_lang,
+                context_before=ctx_before,
+                context_after=ctx_after,
+            )
+            if translated_chunk and len(translated_chunk) == len(chunk):
+                gemini_batch_chunks_ok += 1
+                gemini_batch_lines_ok += len(chunk)
+                for seg_item, out_text in zip(chunk, translated_chunk):
+                    batch_prefill[seg_item.id] = out_text
+            else:
+                gemini_batch_chunks_failed += 1
+                if batch_err and not first_translation_error:
+                    first_translation_error = batch_err
+                if "gemini_batch_" in batch_err:
+                    gemini_error_count += 1
+
     for idx, seg in enumerate(db_segments):
         prev_text = db_segments[idx - 1].raw_text if idx > 0 else ""
         next_text = db_segments[idx + 1].raw_text if idx + 1 < len(db_segments) else ""
-        txt, provider, err = _translate_with_fallback(
-            seg.raw_text,
-            project.prompt,
-            resolved_api_key,
-            project.source_lang,
-            project.target_lang,
-            context_before=prev_text,
-            context_after=next_text,
-        )
+        if seg.id in batch_prefill:
+            txt = batch_prefill[seg.id]
+            provider = "gemini"
+            err = ""
+        else:
+            txt, provider, err = _translate_with_fallback(
+                seg.raw_text,
+                project.prompt,
+                resolved_api_key,
+                project.source_lang,
+                project.target_lang,
+                context_before=prev_text,
+                context_after=next_text,
+            )
         if provider in translation_stats:
             translation_stats[provider] += 1
         if err and not first_translation_error:
@@ -468,6 +593,9 @@ def _translate_project_segments(
         "provider_counts": translation_stats.copy(),
         "gemini_error_count": gemini_error_count,
         "deep_translator_error_count": deep_translator_error_count,
+        "gemini_batch_chunks_ok": gemini_batch_chunks_ok,
+        "gemini_batch_chunks_failed": gemini_batch_chunks_failed,
+        "gemini_batch_lines_ok": gemini_batch_lines_ok,
         "fallback_samples": fallback_samples,
     }
     return normalized, translation_stats, first_translation_error, translate_detail

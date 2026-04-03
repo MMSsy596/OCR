@@ -34,7 +34,10 @@ def get_project(db: Session, project_id: str) -> Project | None:
 
 
 def attach_video(db: Session, project: Project, saved_path: Path) -> Project:
+    # New source video means old subtitle timeline is no longer valid.
+    db.query(SubtitleSegment).filter(SubtitleSegment.project_id == project.id).delete()
     project.video_path = str(saved_path)
+    project.status = ProjectStatus.draft
     db.add(project)
     db.commit()
     db.refresh(project)

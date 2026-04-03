@@ -9,5 +9,15 @@ build/
 *.log
 storage/projects/*
 !storage/projects/.gitkeep
+apps/storage/projects/*
+!apps/storage/projects/.gitkeep
+tmp/
+logs/
+apps/api/ocr.db
+apps/worker/ocr.db
+apps/web/dist/
+apps/web/node_modules/
+apps/api/.venv/
+apps/worker/.venv/
 .env
 

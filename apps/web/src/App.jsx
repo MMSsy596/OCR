@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
@@ -30,7 +30,7 @@ function normalizeTextForMerge(text) {
     .toLowerCase()
     .trim()
     .replace(/\s+/g, "")
-    .replace(/[.,;:!?'"`~\-_=+*/\\|()[\]{}<>,ã€‚!?;:ã€]/g, "");
+    .replace(/[.,;:!?'"`~\-_=+*/\\|()[\]{}<>,。!?;:、]/g, "");
 }
 
 function cloneSegments(segments) {
@@ -52,49 +52,49 @@ function formatValue(value) {
 
 const PROMPT_PRESETS = {
   historical: {
-    label: "Phim co trang",
+    label: "Phim cổ trang",
     text:
-      "Dich theo van phong co trang, tu nhien, de nghe, giu than thai hoi thoai. " +
-      "Uu tien xung ho theo quan he nhan vat va cap bac. Khong dich tho va khong viet dai dong.",
+      "Dịch theo văn phong cổ trang, tự nhiên, dễ nghe, giữ thần thái hội thoại. " +
+      "Ưu tiên xưng hô theo quan hệ nhân vật và cấp bậc. Không dịch thô và không viết dài dòng.",
   },
   modern_short: {
-    label: "Phim ngan hien dai",
+    label: "Phim ngắn hiện đại",
     text:
-      "Dich theo van phong hien dai, doi thoai gon, doi thuong, tu nhien nhu nguoi Viet noi. " +
-      "Uu tien toc do doc subtitle, tranh cau qua dai.",
+      "Dịch theo văn phong hiện đại, đối thoại gọn, đời thường, tự nhiên như người Việt nói. " +
+      "Ưu tiên tốc độ đọc subtitle, tránh câu quá dài.",
   },
   fantasy: {
-    label: "Phim huyen huyen",
+    label: "Phim huyền huyễn",
     text:
-      "Dich theo phong cach huyen huyen, tao cam giac ky ao nhung van ro nghia. " +
-      "Thuat ngu suc manh va boi canh can nhat quan.",
+      "Dịch theo phong cách huyền huyễn, tạo cảm giác kỳ ảo nhưng vẫn rõ nghĩa. " +
+      "Thuật ngữ sức mạnh và bối cảnh cần nhất quán.",
   },
   cultivation: {
-    label: "Tu tien",
+    label: "Tu tiên",
     text:
-      "Dich dung van mach tu tien, giu tinh than cap bac tu vi, cong phap, linh can, canh gioi. " +
-      "Uu tien nhat quan thuat ngu theo glossary.",
+      "Dịch đúng văn mạch tu tiên, giữ tinh thần cấp bậc tu vi, công pháp, linh căn, cảnh giới. " +
+      "Ưu tiên nhất quán thuật ngữ theo glossary.",
   },
   reincarnation: {
-    label: "Chuyen sinh",
+    label: "Chuyển sinh",
     text:
-      "Dich ro cau truc ke chuyen chuyen sinh, giu logic thoi gian truoc/sau chuyen sinh. " +
-      "Han che lap lai va tao nhip ke chuyen mach lac.",
+      "Dịch rõ cấu trúc kể chuyện chuyển sinh, giữ logic thời gian trước/sau chuyển sinh. " +
+      "Hạn chế lặp lại và tạo nhịp kể chuyện mạch lạc.",
   },
   review: {
     label: "Review phim",
     text:
-      "Dich theo van review phim, ro y, de hieu, lien ket nguyen nhan-ket qua. " +
-      "Khi can, dien dat thanh cau nhan xet tu nhien cho nguoi xem Viet.",
+      "Dịch theo văn review phim, rõ ý, dễ hiểu, liên kết nguyên nhân-kết quả. " +
+      "Khi cần, diễn đạt thành câu nhận xét tự nhiên cho người xem Việt.",
   },
 };
 
 const TONE_PRESETS = {
-  accurate: "Giong dieu chinh xac, trung lap, uu tien sat nghia va ro y.",
-  natural: "Giong dieu tu nhien, mem mai, doi thoai nhu nguoi Viet ban dia.",
-  witty: "Giong dieu di dom, co chut hai huoc nhe nhung khong lech nghia.",
-  teasing: "Giong dieu treu gheo nhe, lanh loi, van lich su va dung ngu canh.",
-  dramatic: "Giong dieu kich tinh, day cam xuc, phu hop canh cao trao.",
+  accurate: "Giọng điệu chính xác, trung lập, ưu tiên sát nghĩa và rõ ý.",
+  natural: "Giọng điệu tự nhiên, mềm mại, đối thoại như người Việt bản địa.",
+  witty: "Giọng điệu dí dỏm, có chút hài hước nhẹ nhưng không lệch nghĩa.",
+  teasing: "Giọng điệu trêu ghẹo nhẹ, lanh lợi, vẫn lịch sự và đúng ngữ cảnh.",
+  dramatic: "Giọng điệu kịch tính, đầy cảm xúc, phù hợp cảnh cao trào.",
 };
 
 function composePromptFromPreset(presetKey, toneKey, extraRule) {
@@ -102,15 +102,15 @@ function composePromptFromPreset(presetKey, toneKey, extraRule) {
   const toneText = TONE_PRESETS[toneKey] || TONE_PRESETS.accurate;
   const extra = String(extraRule || "").trim();
   const lines = [
-    "Muc tieu: dich subtitle dung ngu canh, giu y nghia day du, ngon ngu tu nhien.",
-    `The loai: ${presetText}`,
-    `Giong dieu: ${toneText}`,
-    "Rang buoc: Khong tu y them y moi. Neu cau goc mo ho, uu tien cach noi tu nhien nhat theo ngu canh truoc/sau.",
-    "Rang buoc: Giu nhat quan cach xung ho, ten rieng, thuat ngu va glossary.",
-    "Rang buoc: Tra ve cau dich gon, de doc tren subtitle, khong kem giai thich.",
+    "Mục tiêu: dịch subtitle đúng ngữ cảnh, giữ ý nghĩa đầy đủ, ngôn ngữ tự nhiên.",
+    `Thể loại: ${presetText}`,
+    `Giọng điệu: ${toneText}`,
+    "Ràng buộc: Không tự ý thêm ý mới. Nếu câu gốc mơ hồ, ưu tiên cách nói tự nhiên nhất theo ngữ cảnh trước/sau.",
+    "Ràng buộc: Giữ nhất quán cách xưng hô, tên riêng, thuật ngữ và glossary.",
+    "Ràng buộc: Trả về câu dịch gọn, dễ đọc trên subtitle, không kèm giải thích.",
   ];
   if (extra) {
-    lines.push(`Yeu cau bo sung: ${extra}`);
+    lines.push(`Yêu cầu bổ sung: ${extra}`);
   }
   return lines.join("\n");
 }
@@ -137,11 +137,11 @@ export function App() {
   const [dubbing, setDubbing] = useState(false);
   const [lastExport, setLastExport] = useState(null);
   const [projectForm, setProjectForm] = useState({
-    name: "Dá»± Ã¡n NanBao",
+    name: "Dự án NanBao",
     source_lang: "zh",
     target_lang: "vi",
-    prompt: "Dá»‹ch theo vÄƒn phong phim cá»• trang, tá»± nhiÃªn, ngáº¯n gá»n.",
-    glossary: "Äáº¡o huynh=SÆ° huynh\nTiÃªn tÃ´n=TiÃªn TÃ´n",
+    prompt: "Dịch theo văn phong phim cổ trang, tự nhiên, ngắn gọn.",
+    glossary: "Đạo huynh=Sư huynh\nTiên tôn=Tiên Tôn",
     roi: { x: 0.1, y: 0.75, w: 0.8, h: 0.2 },
   });
   const [translationPreset, setTranslationPreset] = useState("historical");
@@ -241,10 +241,10 @@ export function App() {
     [latestJob],
   );
   const statusLabel = (status) => {
-    if (status === "draft") return "nhÃ¡p";
-    if (status === "processing") return "Ä‘ang xá»­ lÃ½";
-    if (status === "ready") return "sáºµn sÃ ng";
-    if (status === "failed") return "lá»—i";
+    if (status === "draft") return "nháp";
+    if (status === "processing") return "đang xử lý";
+    if (status === "ready") return "sẵn sàng";
+    if (status === "failed") return "lỗi";
     return status || "";
   };
   const wizardSteps = [
@@ -356,7 +356,7 @@ export function App() {
           });
           setEditableSegments(cloneSegments(previous));
           setIsEditingSegments(true);
-          setMessage("ÄÃ£ hoÃ n tÃ¡c (Ctrl+Z).");
+          setMessage("Đã hoàn tác (Ctrl+Z).");
           return prev.slice(0, -1);
         });
       } else {
@@ -371,7 +371,7 @@ export function App() {
           });
           setEditableSegments(cloneSegments(nextState));
           setIsEditingSegments(true);
-          setMessage("ÄÃ£ lÃ m láº¡i (Ctrl+Y).");
+          setMessage("Đã làm lại (Ctrl+Y).");
           return prev.slice(1);
         });
       }
@@ -476,7 +476,7 @@ export function App() {
     } catch (err) {
       setApiStatus("offline");
       setMessage(
-        `KhÃ´ng káº¿t ná»‘i Ä‘Æ°á»£c API ${API_BASE}. HÃ£y cháº¡y backend.`,
+        `Không kết nối được API ${API_BASE}. Hãy chạy backend.`,
       );
       console.error(err);
     }
@@ -516,16 +516,16 @@ export function App() {
       });
       await loadProjectsSafe();
       setSelectedProjectId(created.id);
-      setMessage(`ÄÃ£ táº¡o dá»± Ã¡n: ${created.name}`);
+      setMessage(`Đã tạo dự án: ${created.name}`);
     } catch (err) {
-      setMessage(`Lá»—i táº¡o dá»± Ã¡n: ${err.message}`);
+      setMessage(`Lỗi tạo dự án: ${err.message}`);
     } finally {
       setCreating(false);
     }
   }
 
   async function clearOldSessions() {
-    if (!window.confirm("Báº¡n cÃ³ cháº¯c muá»‘n xÃ³a toÃ n bá»™ phiÃªn cÅ© (khÃ´ng á»Ÿ tráº¡ng thÃ¡i Ä‘ang xá»­ lÃ½)?")) {
+    if (!window.confirm("Bạn có chắc muốn xóa toàn bộ phiên cũ (không ở trạng thái đang xử lý)?")) {
       return;
     }
     setClearingSessions(true);
@@ -546,10 +546,10 @@ export function App() {
         setJobs([]);
       }
       setMessage(
-        `ÄÃ£ xÃ³a ${out.deleted_projects} phiÃªn cÅ©, bá» qua ${out.skipped_processing_projects} phiÃªn Ä‘ang cháº¡y.`,
+        `Đã xóa ${out.deleted_projects} phiên cũ, bỏ qua ${out.skipped_processing_projects} phiên đang chạy.`,
       );
     } catch (err) {
-      setMessage(`Lá»—i dá»n phiÃªn: ${err.message}`);
+      setMessage(`Lỗi dọn phiên: ${err.message}`);
     } finally {
       setClearingSessions(false);
     }
@@ -557,15 +557,15 @@ export function App() {
 
   async function forceClearAllSessions() {
     const step1 = window.confirm(
-      "Cáº¢NH BÃO: thao tÃ¡c nÃ y sáº½ xÃ³a Táº¤T Cáº¢ phiÃªn, ká»ƒ cáº£ phiÃªn Ä‘ang xá»­ lÃ½. Báº¡n tiáº¿p tá»¥c?",
+      "CẢNH BÁO: thao tác này sẽ xóa TẤT CẢ phiên, kể cả phiên đang xử lý. Bạn tiếp tục?",
     );
     if (!step1) return;
     const token = window.prompt(
-      "BÆ°á»›c 2/2: Nháº­p CHÃNH XÃC 'FORCE CLEAR ALL' Ä‘á»ƒ xÃ¡c nháº­n:",
+      "Bước 2/2: Nhập CHÍNH XÁC 'FORCE CLEAR ALL' để xác nhận:",
       "",
     );
     if (token !== "FORCE CLEAR ALL") {
-      setMessage("ÄÃ£ há»§y thao tÃ¡c xÃ³a cÆ°á»¡ng bá»©c do xÃ¡c nháº­n khÃ´ng há»£p lá»‡.");
+      setMessage("Đã hủy thao tác xóa cưỡng bức do xác nhận không hợp lệ.");
       return;
     }
     setForceClearingSessions(true);
@@ -584,10 +584,10 @@ export function App() {
       setEditableSegments([]);
       setJobs([]);
       setMessage(
-        `ÄÃ£ xÃ³a cÆ°á»¡ng bá»©c: ${out.deleted_projects} phiÃªn; dá»n ${out.removed_storage_dirs} thÆ° má»¥c.`,
+        `Đã xóa cưỡng bức: ${out.deleted_projects} phiên; dọn ${out.removed_storage_dirs} thư mục.`,
       );
     } catch (err) {
-      setMessage(`Lá»—i xÃ³a cÆ°á»¡ng bá»©c phiÃªn: ${err.message}`);
+      setMessage(`Lỗi xóa cưỡng bức phiên: ${err.message}`);
     } finally {
       setForceClearingSessions(false);
     }
@@ -655,7 +655,7 @@ export function App() {
 
   async function uploadExternalSrt() {
     if (!selectedProjectId || !srtUploadFile) {
-      setMessage("Chá»n dá»± Ã¡n vÃ  tá»‡p SRT trÆ°á»›c.");
+      setMessage("Chọn dự án và tệp SRT trước.");
       return;
     }
     setUploadingSrt(true);
@@ -672,9 +672,9 @@ export function App() {
       }
       const out = await res.json();
       setDubForm((prev) => ({ ...prev, srt_key: out.output_key }));
-      setMessage(`ÄÃ£ táº£i lÃªn SRT: ${out.output_key}`);
+      setMessage(`Đã tải lên SRT: ${out.output_key}`);
     } catch (err) {
-      setMessage(`Lá»—i táº£i lÃªn SRT: ${err.message}`);
+      setMessage(`Lỗi tải lên SRT: ${err.message}`);
     } finally {
       setUploadingSrt(false);
     }
@@ -682,7 +682,7 @@ export function App() {
 
   async function saveSelectedRoi() {
     if (!selectedProjectId) {
-      setMessage("Chá»n dá»± Ã¡n trÆ°á»›c khi lÆ°u ROI.");
+      setMessage("Chọn dự án trước khi lưu ROI.");
       return;
     }
     setSavingRoi(true);
@@ -700,9 +700,9 @@ export function App() {
         prev.map((item) => (item.id === updated.id ? updated : item)),
       );
       setRoiDraft(normalizeRoi(updated.roi));
-      setMessage("ÄÃ£ lÆ°u ROI cho dá»± Ã¡n.");
+      setMessage("Đã lưu ROI cho dự án.");
     } catch (err) {
-      setMessage(`Lá»—i lÆ°u ROI: ${err.message}`);
+      setMessage(`Lỗi lưu ROI: ${err.message}`);
     } finally {
       setSavingRoi(false);
     }
@@ -801,7 +801,7 @@ export function App() {
 
   function mergeAdjacentDuplicateSegments() {
     if (!editableSegments.length) {
-      setMessage("ChÆ°a cÃ³ dá»¯ liá»‡u Ä‘á»ƒ gá»™p.");
+      setMessage("Chưa có dữ liệu để gộp.");
       return;
     }
     pushUndoSnapshot(editableSegments);
@@ -846,13 +846,13 @@ export function App() {
     setEditableSegments(merged);
     setIsEditingSegments(true);
     setMessage(
-      `ÄÃ£ gá»™p dÃ²ng trÃ¹ng ká» nhau: ${editableSegments.length} -> ${merged.length} dÃ²ng.`,
+      `Đã gộp dòng trùng kề nhau: ${editableSegments.length} -> ${merged.length} dòng.`,
     );
   }
 
   async function saveSegments() {
     if (!selectedProjectId) {
-      setMessage("Chá»n dá»± Ã¡n trÆ°á»›c.");
+      setMessage("Chọn dự án trước.");
       return;
     }
     setSavingSegments(true);
@@ -879,9 +879,9 @@ export function App() {
       setUndoStack([]);
       setRedoStack([]);
       setIsEditingSegments(false);
-      setMessage("ÄÃ£ lÆ°u phá»¥ Ä‘á» Ä‘Ã£ chá»‰nh sá»­a.");
+      setMessage("Đã lưu phụ đề đã chỉnh sửa.");
     } catch (err) {
-      setMessage(`Lá»—i lÆ°u phá»¥ Ä‘á»: ${err.message}`);
+      setMessage(`Lỗi lưu phụ đề: ${err.message}`);
     } finally {
       setSavingSegments(false);
     }
@@ -889,7 +889,7 @@ export function App() {
 
   async function retranslateOnly() {
     if (!selectedProjectId) {
-      setMessage("Chá»n dá»± Ã¡n trÆ°á»›c.");
+      setMessage("Chọn dự án trước.");
       return;
     }
     setRetranslating(true);
@@ -924,9 +924,9 @@ export function App() {
       setUndoStack([]);
       setRedoStack([]);
       setIsEditingSegments(false);
-      setMessage(`ÄÃ£ dá»‹ch láº¡i. Thá»‘ng kÃª: ${JSON.stringify(out.translation_stats || {})}`);
+      setMessage(`Đã dịch lại. Thống kê: ${JSON.stringify(out.translation_stats || {})}`);
     } catch (err) {
-      setMessage(`Lá»—i dá»‹ch láº¡i: ${err.message}`);
+      setMessage(`Lỗi dịch lại: ${err.message}`);
     } finally {
       setRetranslating(false);
     }
@@ -934,7 +934,7 @@ export function App() {
 
   async function exportSubtitle() {
     if (!selectedProjectId) {
-      setMessage("Chá»n dá»± Ã¡n trÆ°á»›c.");
+      setMessage("Chọn dự án trước.");
       return;
     }
     setExporting(true);
@@ -950,10 +950,10 @@ export function App() {
       );
       setLastExport({ ...out, url: `${API_BASE}${out.download_url}` });
       setMessage(
-        `ÄÃ£ xuáº¥t ${exportForm.export_format.toUpperCase()} (${exportForm.content_mode}).`,
+        `Đã xuất ${exportForm.export_format.toUpperCase()} (${exportForm.content_mode}).`,
       );
     } catch (err) {
-      setMessage(`Lá»—i xuáº¥t tá»‡p: ${err.message}`);
+      setMessage(`Lỗi xuất tệp: ${err.message}`);
     } finally {
       setExporting(false);
     }
@@ -961,7 +961,7 @@ export function App() {
 
   async function startDubAudio() {
     if (!selectedProjectId) {
-      setMessage("Chá»n dá»± Ã¡n trÆ°á»›c.");
+      setMessage("Chọn dự án trước.");
       return;
     }
     setDubbing(true);
@@ -973,11 +973,11 @@ export function App() {
         body: JSON.stringify(dubForm),
       });
       setMessage(
-        `ÄÃ£ báº¯t Ä‘áº§u dá»±ng Ã¢m thanh (${dubForm.output_format.toUpperCase()}).`,
+        `Đã bắt đầu dựng âm thanh (${dubForm.output_format.toUpperCase()}).`,
       );
       setWizardStep(4);
     } catch (err) {
-      setMessage(`Lá»—i dá»±ng Ã¢m thanh: ${err.message}`);
+      setMessage(`Lỗi dựng âm thanh: ${err.message}`);
     } finally {
       setDubbing(false);
     }
@@ -990,12 +990,12 @@ export function App() {
       translationExtraRule,
     );
     setProjectForm((prev) => ({ ...prev, prompt }));
-    setMessage("Da nap prompt preset vao o 'Loi nhac'.");
+    setMessage("Đã nạp prompt preset vào ô 'Lời nhắc'.");
   }
 
   async function applyPresetToCurrentProject() {
     if (!selectedProjectId) {
-      setMessage("Chon du an truoc.");
+      setMessage("Chọn dự án trước.");
       return;
     }
     const prompt = composePromptFromPreset(
@@ -1013,9 +1013,9 @@ export function App() {
         prev.map((item) => (item.id === updated.id ? updated : item)),
       );
       setProjectForm((prev) => ({ ...prev, prompt }));
-      setMessage("Da ap dung prompt preset vao du an hien tai.");
+      setMessage("Đã áp dụng prompt preset vào dự án hiện tại.");
     } catch (err) {
-      setMessage(`Loi cap nhat prompt du an: ${err.message}`);
+      setMessage(`Lỗi cập nhật prompt dự án: ${err.message}`);
     }
   }
 
@@ -1039,7 +1039,7 @@ export function App() {
 
   async function downloadDubAudio() {
     if (!latestDubAudioUrl) {
-      setMessage("ChÆ°a cÃ³ file Ã¢m thanh Ä‘á»ƒ táº£i.");
+      setMessage("Chưa có file âm thanh để tải.");
       return;
     }
     try {
@@ -1056,15 +1056,15 @@ export function App() {
       link.click();
       link.remove();
       window.URL.revokeObjectURL(blobUrl);
-      setMessage(`ÄÃ£ táº£i file Ã¢m thanh: ${latestDubAudioName}`);
+      setMessage(`Đã tải file âm thanh: ${latestDubAudioName}`);
     } catch (err) {
-      setMessage(`Lá»—i táº£i file Ã¢m thanh: ${err.message}`);
+      setMessage(`Lỗi tải file âm thanh: ${err.message}`);
     }
   }
 
   async function retryStuckJobs() {
     if (!selectedProjectId) {
-      setMessage("Chá»n dá»± Ã¡n trÆ°á»›c.");
+      setMessage("Chọn dự án trước.");
       return;
     }
     setRetryingStuckJobs(true);
@@ -1078,10 +1078,10 @@ export function App() {
       );
       await loadProjectData(selectedProjectId, { includeSegments: false });
       setMessage(
-        `ÄÃ£ thá»­ láº¡i ${out.retried_count} tÃ¡c vá»¥ bá»‹ káº¹t. Bá» qua ${out.skipped_count}.`,
+        `Đã thử lại ${out.retried_count} tác vụ bị kẹt. Bỏ qua ${out.skipped_count}.`,
       );
     } catch (err) {
-      setMessage(`Lá»—i thá»­ láº¡i tÃ¡c vá»¥ trong hÃ ng Ä‘á»£i: ${err.message}`);
+      setMessage(`Lỗi thử lại tác vụ trong hàng đợi: ${err.message}`);
     } finally {
       setRetryingStuckJobs(false);
     }
@@ -1093,17 +1093,17 @@ export function App() {
         <div>
           <h1>NanBao OCR Studio</h1>
           <p>
-            Táº­p trung vÃ o 5 viá»‡c chÃ­nh: táº£i video, chá»‰nh ROI, theo dÃµi OCR,
-            nháº­p/xuáº¥t SRT vÃ  chuyá»ƒn giá»ng nÃ³i.
+            Tập trung vào 5 việc chính: tải video, chỉnh ROI, theo dõi OCR,
+            nhập/xuất SRT và chuyển giọng nói.
           </p>
         </div>
         <div className={`status-pill ${apiStatus}`}>
           API{" "}
           {apiStatus === "online"
-            ? "Ä‘ang hoáº¡t Ä‘á»™ng"
+            ? "đang hoạt động"
             : apiStatus === "offline"
-              ? "máº¥t káº¿t ná»‘i"
-              : "Ä‘ang kiá»ƒm tra"}
+              ? "mất kết nối"
+              : "đang kiểm tra"}
         </div>
       </header>
 
@@ -1156,14 +1156,14 @@ export function App() {
       <main className="workspace">
         <aside className="sidebar card">
           <section className="block">
-            <h2>1) Dá»± Ã¡n</h2>
+            <h2>1) Dự án</h2>
             <label>
-              Chá»n dá»± Ã¡n
+              Chọn dự án
               <select
                 value={selectedProjectId}
                 onChange={(e) => setSelectedProjectId(e.target.value)}
               >
-                <option value="">-- Chá»n --</option>
+                <option value="">-- Chọn --</option>
                 {projects.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name} ({statusLabel(p.status)})
@@ -1172,23 +1172,23 @@ export function App() {
               </select>
             </label>
             <details>
-              <summary>Quáº£n lÃ½ dá»± Ã¡n nÃ¢ng cao</summary>
+              <summary>Quản lý dự án nâng cao</summary>
               <button disabled={clearingSessions} onClick={clearOldSessions}>
-                {clearingSessions ? "Äang dá»n phiÃªn..." : "Dá»n phiÃªn cÅ©"}
+                {clearingSessions ? "Đang dọn phiên..." : "Dọn phiên cũ"}
               </button>
               <button
                 disabled={forceClearingSessions}
                 onClick={forceClearAllSessions}
               >
                 {forceClearingSessions
-                  ? "Äang xÃ³a cÆ°á»¡ng bá»©c..."
-                  : "XÃ³a cÆ°á»¡ng bá»©c táº¥t cáº£ (ká»ƒ cáº£ Ä‘ang xá»­ lÃ½)"}
+                  ? "Đang xóa cưỡng bức..."
+                  : "Xóa cưỡng bức tất cả (kể cả đang xử lý)"}
               </button>
             </details>
             <details>
-              <summary>Táº¡o dá»± Ã¡n má»›i</summary>
+              <summary>Tạo dự án mới</summary>
               <label>
-                TÃªn dá»± Ã¡n
+                Tên dự án
                 <input
                   value={projectForm.name}
                   onChange={(e) =>
@@ -1198,7 +1198,7 @@ export function App() {
               </label>
               <div className="inline-two">
                 <label>
-                  NgÃ´n ngá»¯ nguá»“n
+                  Ngôn ngữ nguồn
                   <input
                     value={projectForm.source_lang}
                     onChange={(e) =>
@@ -1210,7 +1210,7 @@ export function App() {
                   />
                 </label>
                 <label>
-                  NgÃ´n ngá»¯ Ä‘Ã­ch
+                  Ngôn ngữ đích
                   <input
                     value={projectForm.target_lang}
                     onChange={(e) =>
@@ -1223,7 +1223,7 @@ export function App() {
                 </label>
               </div>
               <label>
-                Lá»i nháº¯c
+                Lời nhắc
                 <textarea
                   rows={2}
                   value={projectForm.prompt}
@@ -1234,7 +1234,7 @@ export function App() {
               </label>
               <div className="inline-two">
                 <label>
-                  Preset ngá»¯ cáº£nh
+                  Preset ngữ cảnh
                   <select
                     value={translationPreset}
                     onChange={(e) => setTranslationPreset(e.target.value)}
@@ -1247,32 +1247,32 @@ export function App() {
                   </select>
                 </label>
                 <label>
-                  Giá»ng Ä‘iá»‡u
+                  Giọng điệu
                   <select
                     value={translationTone}
                     onChange={(e) => setTranslationTone(e.target.value)}
                   >
-                    <option value="accurate">ChÃ­nh xÃ¡c</option>
-                    <option value="natural">Tá»± nhiÃªn</option>
-                    <option value="witty">DÃ­ dá»m</option>
-                    <option value="teasing">TrÃªu gháº¹o</option>
-                    <option value="dramatic">Ká»‹ch tÃ­nh</option>
+                    <option value="accurate">Chính xác</option>
+                    <option value="natural">Tự nhiên</option>
+                    <option value="witty">Dí dỏm</option>
+                    <option value="teasing">Trêu ghẹo</option>
+                    <option value="dramatic">Kịch tính</option>
                   </select>
                 </label>
               </div>
               <label>
-                YÃªu cáº§u bá»• sung (tÃ¹y chá»n)
+                Yêu cầu bổ sung (tùy chọn)
                 <input
                   value={translationExtraRule}
                   onChange={(e) => setTranslationExtraRule(e.target.value)}
-                  placeholder="VÃ­ dá»¥: dÃ¹ng xÆ°ng hÃ´ huynh - muá»™i cho cáº·p chÃ­nh"
+                  placeholder="Ví dụ: dùng xưng hô huynh - muội cho cặp chính"
                 />
               </label>
               <button type="button" onClick={applyPresetToCreateForm}>
-                Náº¡p preset vÃ o lá»i nháº¯c
+                Nạp preset vào lời nhắc
               </button>
               <label>
-                Báº£ng thuáº­t ngá»¯
+                Bảng thuật ngữ
                 <textarea
                   rows={3}
                   value={projectForm.glossary}
@@ -1282,15 +1282,15 @@ export function App() {
                 />
               </label>
               <button disabled={creating} onClick={createProject}>
-                {creating ? "Äang táº¡o..." : "Táº¡o dá»± Ã¡n"}
+                {creating ? "Đang tạo..." : "Tạo dự án"}
               </button>
             </details>
           </section>
 
           <section className={`block ${wizardStep === 1 ? "" : "hidden-step"}`}>
-            <h2>2) OCR vÃ  log</h2>
+            <h2>2) OCR và log</h2>
             <label>
-              Tá»‡p video
+              Tệp video
               <input
                 type="file"
                 accept="video/*"
@@ -1298,10 +1298,10 @@ export function App() {
               />
             </label>
             <button disabled={loading} onClick={uploadVideo}>
-              Táº£i video lÃªn
+              Tải video lên
             </button>
             <label>
-              DÃ¡n link video Ä‘á»ƒ app tá»± táº£i
+              Dán link video để app tự tải
               <input
                 value={sourceUrl}
                 onChange={(e) => setSourceUrl(e.target.value)}
@@ -1314,18 +1314,18 @@ export function App() {
                 checked={autoStartAfterIngest}
                 onChange={(e) => setAutoStartAfterIngest(e.target.checked)}
               />
-              Tá»± cháº¡y pipeline sau khi táº£i xong
+              Tự chạy pipeline sau khi tải xong
             </label>
             <button
               disabled={ingestingUrl || loading || !selectedProjectId || !sourceUrl.trim()}
               onClick={ingestVideoFromUrl}
             >
-              {ingestingUrl ? "Äang báº¯t link vÃ  táº£i..." : "DÃ¡n link vÃ  tá»± xá»­ lÃ½"}
+              {ingestingUrl ? "Đang bắt link và tải..." : "Dán link và tự xử lý"}
             </button>
             <details>
-              <summary>TÃ¹y chá»n OCR nÃ¢ng cao</summary>
+              <summary>Tùy chọn OCR nâng cao</summary>
               <label>
-                KhÃ³a API Gemini (tÃ¹y chá»n)
+                Khóa API Gemini (tùy chọn)
                 <input
                   type="password"
                   value={pipelineForm.gemini_api_key}
@@ -1339,7 +1339,7 @@ export function App() {
               </label>
               <div className="inline-two">
                 <label>
-                  Preset ngá»¯ cáº£nh dá»‹ch
+                  Preset ngữ cảnh dịch
                   <select
                     value={translationPreset}
                     onChange={(e) => setTranslationPreset(e.target.value)}
@@ -1352,25 +1352,25 @@ export function App() {
                   </select>
                 </label>
                 <label>
-                  Tone dá»‹ch
+                  Tone dịch
                   <select
                     value={translationTone}
                     onChange={(e) => setTranslationTone(e.target.value)}
                   >
-                    <option value="accurate">ChÃ­nh xÃ¡c</option>
-                    <option value="natural">Tá»± nhiÃªn</option>
-                    <option value="witty">DÃ­ dá»m</option>
-                    <option value="teasing">TrÃªu gháº¹o</option>
-                    <option value="dramatic">Ká»‹ch tÃ­nh</option>
+                    <option value="accurate">Chính xác</option>
+                    <option value="natural">Tự nhiên</option>
+                    <option value="witty">Dí dỏm</option>
+                    <option value="teasing">Trêu ghẹo</option>
+                    <option value="dramatic">Kịch tính</option>
                   </select>
                 </label>
               </div>
               <label>
-                Rule bá»• sung cho ngá»¯ cáº£nh dá»‹ch
+                Rule bổ sung cho ngữ cảnh dịch
                 <input
                   value={translationExtraRule}
                   onChange={(e) => setTranslationExtraRule(e.target.value)}
-                  placeholder="VÃ­ dá»¥: há»™i thoáº¡i nam chÃ­nh nÃ³i ngáº¯n, láº¡nh"
+                  placeholder="Ví dụ: hội thoại nam chính nói ngắn, lạnh"
                 />
               </label>
               <label>
@@ -1379,13 +1379,13 @@ export function App() {
                   checked={autoApplyPromptPreset}
                   onChange={(e) => setAutoApplyPromptPreset(e.target.checked)}
                 />
-                Tá»± Ã¡p preset/tone vÃ o prompt dá»± Ã¡n trÆ°á»›c khi cháº¡y dá»‹ch
+                Tự áp preset/tone vào prompt dự án trước khi chạy dịch
               </label>
               <button type="button" onClick={applyPresetToCurrentProject}>
-                Ãp preset vÃ o dá»± Ã¡n hiá»‡n táº¡i
+                Áp preset vào dự án hiện tại
               </button>
               <label>
-                Ãnh xáº¡ giá»ng Ä‘á»c
+                Ánh xạ giọng đọc
                 <textarea
                   rows={3}
                   value={pipelineForm.voiceMapText}
@@ -1402,12 +1402,12 @@ export function App() {
                 onClick={retryStuckJobs}
               >
                 {retryingStuckJobs
-                  ? "Äang thá»­ láº¡i tÃ¡c vá»¥ trong hÃ ng Ä‘á»£i..."
-                  : "Thá»­ láº¡i tÃ¡c vá»¥ trong hÃ ng Ä‘á»£i cÅ©"}
+                  ? "Đang thử lại tác vụ trong hàng đợi..."
+                  : "Thử lại tác vụ trong hàng đợi cũ"}
               </button>
             </details>
             <label>
-              Khoáº£ng quÃ©t OCR (giÃ¢y/láº§n)
+              Khoảng quét OCR (giây/lần)
               <input
                 type="number"
                 step="0.1"
@@ -1423,18 +1423,18 @@ export function App() {
               />
             </label>
             <button disabled={loading} onClick={startPipeline}>
-              Cháº¡y quy trÃ¬nh
+              Chạy quy trình
             </button>
             {latestJob ? (
               <div className="info">
                 <p>
-                  <strong>BÆ°á»›c:</strong> {latestJob.step}
+                  <strong>Bước:</strong> {latestJob.step}
                 </p>
                 <p>
-                  <strong>Loáº¡i tÃ¡c vá»¥:</strong> {latestJob.artifacts?.job_kind || "pipeline"}
+                  <strong>Loại tác vụ:</strong> {latestJob.artifacts?.job_kind || "pipeline"}
                 </p>
                 <p>
-                  <strong>Tiáº¿n Ä‘á»™:</strong> {latestJob.progress}%
+                  <strong>Tiến độ:</strong> {latestJob.progress}%
                 </p>
                 {latestJobStats?.ocr_live ? (
                   <p>
@@ -1446,7 +1446,7 @@ export function App() {
                 ) : null}
                 {latestJob.artifacts?.translation_stats ? (
                   <p>
-                    <strong>Dá»‹ch:</strong>{" "}
+                    <strong>Dịch:</strong>{" "}
                     {JSON.stringify(latestJob.artifacts.translation_stats)}
                   </p>
                 ) : null}
@@ -1457,7 +1457,7 @@ export function App() {
                 ) : null}
                 {Object.keys(latestJobStats).length > 0 ? (
                   <details>
-                    <summary>Chi tiáº¿t thÃ´ng sá»‘ xá»­ lÃ½</summary>
+                    <summary>Chi tiết thông số xử lý</summary>
                     {Object.entries(latestJobStats).map(([phase, payload]) => (
                       <div key={phase} style={{ marginTop: 8 }}>
                         <p>
@@ -1474,7 +1474,7 @@ export function App() {
                 ) : null}
                 {latestJobEvents.length > 0 ? (
                   <details>
-                    <summary>Tiáº¿n trÃ¬nh xá»­ lÃ½ (nháº­t kÃ½ chi tiáº¿t)</summary>
+                    <summary>Tiến trình xử lý (nhật ký chi tiết)</summary>
                     <div style={{ maxHeight: 220, overflow: "auto", marginTop: 8 }}>
                       {latestJobEvents.map((event, idx) => (
                         <p key={`${event.time || idx}-${idx}`}>
@@ -1489,14 +1489,14 @@ export function App() {
           </section>
 
           <section className={`block ${wizardStep === 4 ? "" : "hidden-step"}`}>
-            <h2>NÃ¢ng cao: cÃ´ng cá»¥ phá»¥ Ä‘á»</h2>
+            <h2>Nâng cao: công cụ phụ đề</h2>
             <details>
-              <summary>Má»Ÿ cÃ´ng cá»¥ chá»‰nh sá»­a thá»§ cÃ´ng</summary>
+              <summary>Mở công cụ chỉnh sửa thủ công</summary>
               <button
                 disabled={savingSegments || editableSegments.length === 0}
                 onClick={saveSegments}
               >
-                {savingSegments ? "Äang lÆ°u phá»¥ Ä‘á»..." : "LÆ°u phá»¥ Ä‘á»"}
+                {savingSegments ? "Đang lưu phụ đề..." : "Lưu phụ đề"}
               </button>
               <button
                 disabled={undoStack.length === 0}
@@ -1514,7 +1514,7 @@ export function App() {
                   });
                 }}
               >
-                HoÃ n tÃ¡c (Ctrl+Z)
+                Hoàn tác (Ctrl+Z)
               </button>
               <button
                 disabled={redoStack.length === 0}
@@ -1534,40 +1534,40 @@ export function App() {
                   });
                 }}
               >
-                LÃ m láº¡i (Ctrl+Y)
+                Làm lại (Ctrl+Y)
               </button>
               <button
                 disabled={editableSegments.length === 0}
                 onClick={mergeAdjacentDuplicateSegments}
               >
-                Gá»™p dÃ²ng trÃ¹ng ká» nhau
+                Gộp dòng trùng kề nhau
               </button>
               <button
                 disabled={retranslating || editableSegments.length === 0}
                 onClick={retranslateOnly}
               >
-                {retranslating ? "Äang dá»‹ch láº¡i..." : "Dá»‹ch láº¡i"}
+                {retranslating ? "Đang dịch lại..." : "Dịch lại"}
               </button>
             </details>
           </section>
 
           <section className={`block ${wizardStep === 4 ? "" : "hidden-step"}`}>
-            <h2>3) SRT vÃ  giá»ng nÃ³i</h2>
+            <h2>3) SRT và giọng nói</h2>
             <label>
-              Cháº¿ Ä‘á»™ ná»™i dung
+              Chế độ nội dung
               <select
                 value={exportForm.content_mode}
                 onChange={(e) =>
                   setExportForm((f) => ({ ...f, content_mode: e.target.value }))
                 }
               >
-                <option value="raw">Báº£n gá»‘c</option>
-                <option value="translated">Báº£n dá»‹ch</option>
-                <option value="bilingual">Song ngá»¯</option>
+                <option value="raw">Bản gốc</option>
+                <option value="translated">Bản dịch</option>
+                <option value="bilingual">Song ngữ</option>
               </select>
             </label>
             <label>
-              Äá»‹nh dáº¡ng phá»¥ Ä‘á»
+              Định dạng phụ đề
               <select
                 value={exportForm.export_format}
                 onChange={(e) =>
@@ -1588,11 +1588,11 @@ export function App() {
               disabled={exporting || editableSegments.length === 0}
               onClick={exportSubtitle}
             >
-              {exporting ? "Äang xuáº¥t phá»¥ Ä‘á»..." : "Xuáº¥t phá»¥ Ä‘á»"}
+              {exporting ? "Đang xuất phụ đề..." : "Xuất phụ đề"}
             </button>
 
             <label>
-              ChÃ¨n tá»‡p SRT khÃ¡c
+              Chèn tệp SRT khác
               <input
                 type="file"
                 accept=".srt"
@@ -1603,11 +1603,11 @@ export function App() {
               disabled={uploadingSrt || !srtUploadFile || !selectedProjectId}
               onClick={uploadExternalSrt}
             >
-              {uploadingSrt ? "Äang táº£i lÃªn SRT..." : "Táº£i lÃªn SRT vÃ o dá»± Ã¡n"}
+              {uploadingSrt ? "Đang tải lên SRT..." : "Tải lên SRT vào dự án"}
             </button>
 
             <label>
-              SRT dÃ¹ng Ä‘á»ƒ lá»“ng tiáº¿ng
+              SRT dùng để lồng tiếng
               <input
                 value={dubForm.srt_key}
                 onChange={(e) =>
@@ -1617,7 +1617,7 @@ export function App() {
               />
             </label>
             <label>
-              Giá»ng Ä‘á»c
+              Giọng đọc
               <input
                 value={dubForm.voice}
                 onChange={(e) =>
@@ -1628,7 +1628,7 @@ export function App() {
             </label>
             <div className="inline-two">
               <label>
-                Tá»‘c Ä‘á»™
+                Tốc độ
                 <input
                   value={dubForm.rate}
                   onChange={(e) =>
@@ -1638,7 +1638,7 @@ export function App() {
                 />
               </label>
               <label>
-                Äá»‹nh dáº¡ng Ã¢m thanh
+                Định dạng âm thanh
                 <select
                   value={dubForm.output_format}
                   onChange={(e) =>
@@ -1661,13 +1661,13 @@ export function App() {
                   }))
                 }
               />
-              Khá»›p tá»•ng thá»i lÆ°á»£ng video gá»‘c
+              Khớp tổng thời lượng video gốc
             </label>
             <button
               disabled={dubbing || editableSegments.length === 0}
               onClick={startDubAudio}
             >
-              {dubbing ? "Äang dá»±ng Ã¢m thanh..." : "Táº¡o Ã¢m thanh lá»“ng tiáº¿ng"}
+              {dubbing ? "Đang dựng âm thanh..." : "Tạo âm thanh lồng tiếng"}
             </button>
             {lastExport ? (
               <a
@@ -1676,7 +1676,7 @@ export function App() {
                 target="_blank"
                 rel="noreferrer"
               >
-                Táº£i phá»¥ Ä‘á»: {lastExport.output_key}
+                Tải phụ đề: {lastExport.output_key}
               </a>
             ) : null}
             {latestDubJob?.artifacts?.dub_output_key ? (
@@ -1686,7 +1686,7 @@ export function App() {
                 target="_blank"
                 rel="noreferrer"
               >
-                Táº£i Ã¢m thanh: {latestDubJob.artifacts.dub_output_key}
+                Tải âm thanh: {latestDubJob.artifacts.dub_output_key}
               </a>
             ) : null}
             <button
@@ -1694,11 +1694,11 @@ export function App() {
               disabled={!latestDubAudioUrl}
               onClick={downloadDubAudio}
             >
-              Táº£i file Ã¢m thanh vá» mÃ¡y
+              Tải file âm thanh về máy
             </button>
             {latestDubJob?.artifacts?.dubbed_audio ? (
               <p className="hint">
-                ÄÆ°á»ng dáº«n file Ã¢m thanh: {latestDubJob.artifacts.dubbed_audio}
+                Đường dẫn file âm thanh: {latestDubJob.artifacts.dubbed_audio}
               </p>
             ) : null}
           </section>
@@ -1728,17 +1728,17 @@ export function App() {
 
           <section className={`card preview-card ${wizardStep === 2 ? "" : "hidden-step"}`}>
             <div className="row-head">
-              <h2>Xem trÆ°á»›c ROI</h2>
+              <h2>Xem trước ROI</h2>
               <div className="row-actions">
                 <button type="button" onClick={() => setRoiEditMode((v) => !v)}>
-                  {roiEditMode ? "Táº¯t chá»‰nh ROI" : "Báº­t chá»‰nh ROI"}
+                  {roiEditMode ? "Tắt chỉnh ROI" : "Bật chỉnh ROI"}
                 </button>
                 <button
                   type="button"
                   disabled={savingRoi}
                   onClick={saveSelectedRoi}
                 >
-                  {savingRoi ? "Äang lÆ°u..." : "LÆ°u ROI"}
+                  {savingRoi ? "Đang lưu..." : "Lưu ROI"}
                 </button>
               </div>
             </div>
@@ -1746,8 +1746,8 @@ export function App() {
               <>
                 <p className="hint">
                   {roiEditMode
-                    ? "Giá»¯ Shift + kÃ©o Ä‘á»ƒ táº¡o khung má»›i. KÃ©o khung/gÃ³c Ä‘á»ƒ chá»‰nh ngay."
-                    : "Tua video Ä‘á»ƒ kiá»ƒm tra phá»¥ Ä‘á» cÃ³ náº±m Ä‘Ãºng ROI khÃ´ng."}
+                    ? "Giữ Shift + kéo để tạo khung mới. Kéo khung/góc để chỉnh ngay."
+                    : "Tua video để kiểm tra phụ đề có nằm đúng ROI không."}
                 </p>
                 <div
                   className="preview-stage"
@@ -1796,39 +1796,39 @@ export function App() {
                 </div>
                 <div className="timeline-card">
                   <p>
-                    <strong>Thá»i gian:</strong> {currentVideoTime.toFixed(2)}s
+                    <strong>Thời gian:</strong> {currentVideoTime.toFixed(2)}s
                   </p>
                   {activeSegment ? (
                     <>
                       <p>
-                        <strong>Äang hiá»ƒn thá»‹:</strong> #{activeSegment.id}{" "}
+                        <strong>Đang hiển thị:</strong> #{activeSegment.id}{" "}
                         ({Number(activeSegment.start_sec).toFixed(2)} -{" "}
                         {Number(activeSegment.end_sec).toFixed(2)})
                       </p>
                       <p>
-                        <strong>Gá»‘c:</strong> {activeSegment.raw_text}
+                        <strong>Gốc:</strong> {activeSegment.raw_text}
                       </p>
                       <p>
-                        <strong>Dá»‹ch:</strong> {activeSegment.translated_text}
+                        <strong>Dịch:</strong> {activeSegment.translated_text}
                       </p>
                     </>
                   ) : (
-                    <p>KhÃ´ng cÃ³ phá»¥ Ä‘á» táº¡i má»‘c nÃ y.</p>
+                    <p>Không có phụ đề tại mốc này.</p>
                   )}
                 </div>
               </>
             ) : (
               <p className="hint">
-                Táº£i video lÃªn Ä‘á»ƒ báº¯t Ä‘áº§u xem trÆ°á»›c.
+                Tải video lên để bắt đầu xem trước.
               </p>
             )}
           </section>
 
           <section className={`card preview-card ${wizardStep === 3 ? "" : "hidden-step"}`}>
             <div className="row-head">
-              <h2>Log OCR thá»i gian thá»±c</h2>
+              <h2>Log OCR thời gian thực</h2>
               <span>
-                {latestJob ? `${latestJob.progress}%` : "chÆ°a cÃ³ tÃ¡c vá»¥"}
+                {latestJob ? `${latestJob.progress}%` : "chưa có tác vụ"}
               </span>
             </div>
             {latestJobEvents.length > 0 ? (
@@ -1841,17 +1841,17 @@ export function App() {
                 ))}
               </div>
             ) : (
-              <p className="hint">ChÆ°a cÃ³ log OCR. HÃ£y cháº¡y pipeline Ä‘á»ƒ theo dÃµi tiáº¿n trÃ¬nh tÃ¡ch khung hÃ¬nh.</p>
+              <p className="hint">Chưa có log OCR. Hãy chạy pipeline để theo dõi tiến trình tách khung hình.</p>
             )}
           </section>
 
           <section className={`card editor-card ${wizardStep === 4 ? "" : "hidden-step"}`}>
             <div className="row-head">
-              <h2>Chá»‰nh sá»­a phá»¥ Ä‘á»</h2>
-              <span>{editableSegments.length} dÃ²ng</span>
+              <h2>Chỉnh sửa phụ đề</h2>
+              <span>{editableSegments.length} dòng</span>
             </div>
             <details>
-              <summary>Má»Ÿ báº£ng chá»‰nh sá»­a subtitle chi tiáº¿t</summary>
+              <summary>Mở bảng chỉnh sửa subtitle chi tiết</summary>
               <div className="table-wrap">
                 <table>
                 <colgroup>
@@ -1866,18 +1866,18 @@ export function App() {
                 <thead>
                   <tr>
                     <th>#</th>
-                    <th>Báº¯t Ä‘áº§u</th>
-                    <th>Káº¿t thÃºc</th>
-                    <th>Gá»‘c</th>
-                    <th>Báº£n dá»‹ch</th>
-                    <th>NhÃ¢n váº­t</th>
-                    <th>Giá»ng</th>
+                    <th>Bắt đầu</th>
+                    <th>Kết thúc</th>
+                    <th>Gốc</th>
+                    <th>Bản dịch</th>
+                    <th>Nhân vật</th>
+                    <th>Giọng</th>
                   </tr>
                 </thead>
                 <tbody>
                   {editableSegments.length === 0 ? (
                     <tr>
-                      <td colSpan={7}>ChÆ°a cÃ³ dá»¯ liá»‡u</td>
+                      <td colSpan={7}>Chưa có dữ liệu</td>
                     </tr>
                   ) : (
                     editableSegments.map((s) => (

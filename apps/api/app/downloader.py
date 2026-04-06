@@ -322,7 +322,7 @@ def run_url_ingest_job(
         artifacts = _job_artifacts(job)
         platform, host = _detect_platform(source_url)
         link_type = _infer_link_type(source_url)
-        _push_event(artifacts, "detect", f"Da nhan link: host={host or '-'}, platform={platform}, type={link_type}.", 2)
+        _push_event(artifacts, "detect", f"Đã nhận link: host={host or '-'}, platform={platform}, type={link_type}.", 2)
         _set_stat(
             artifacts,
             "detect",
@@ -338,7 +338,7 @@ def run_url_ingest_job(
 
         project_dir = Path(project.video_path).parent if project.video_path else (get_settings().storage_path / project.id)
         project_dir.mkdir(parents=True, exist_ok=True)
-        _push_event(artifacts, "download", "Bat dau tai noi dung tu URL...", 8)
+        _push_event(artifacts, "download", "Bắt đầu tải nội dung từ URL...", 8)
         _update_job(db, job, JobStatus.running, 8, "download", artifacts=artifacts)
 
         def _on_progress(progress: int, downloaded: int, total: int, speed: float | str, eta: int) -> None:
@@ -367,7 +367,7 @@ def run_url_ingest_job(
                 _push_event(
                     artifacts,
                     "download",
-                    f"yt-dlp loi ({str(ex)[:180]}), fallback HTTP truc tiep.",
+                    f"yt-dlp lỗi ({str(ex)[:180]}), fallback HTTP trực tiếp.",
                     max(12, int(job.progress or 12)),
                     level="warning",
                 )
@@ -394,7 +394,7 @@ def run_url_ingest_job(
         _push_event(
             artifacts,
             "download",
-            f"Tai xong {_human_bytes(final_video.stat().st_size)} -> {final_video.name}.",
+            f"Tải xong {_human_bytes(final_video.stat().st_size)} -> {final_video.name}.",
             92,
         )
 
@@ -417,12 +417,12 @@ def run_url_ingest_job(
                     scan_interval_sec=float(scan_interval_sec),
                     job_id=pipeline_job.id,
                 )
-                _push_event(artifacts, "pipeline", f"Da xep hang auto pipeline: {pipeline_job.id}.", 97)
+                _push_event(artifacts, "pipeline", f"Đã xếp hàng auto pipeline: {pipeline_job.id}.", 97)
             except Exception:
                 _push_event(
                     artifacts,
                     "pipeline",
-                    "Khong ket noi queue, chuyen sang chay pipeline local.",
+                    "Không kết nối queue, chuyển sang chạy pipeline local.",
                     97,
                     level="warning",
                 )
@@ -443,7 +443,7 @@ def run_url_ingest_job(
         _push_event(
             artifacts,
             "done",
-            "Hoan tat nhap link va tai video.",
+            "Hoàn tất nhập link và tải video.",
             100,
         )
         _update_job(db, job, JobStatus.done, 100, "done", artifacts=artifacts)
@@ -455,7 +455,7 @@ def run_url_ingest_job(
             _push_event(
                 artifacts,
                 "error",
-                f"Loi ingest URL: {str(ex)[:320]}",
+                f"Lỗi ingest URL: {str(ex)[:320]}",
                 int(job.progress or 0),
                 level="error",
             )

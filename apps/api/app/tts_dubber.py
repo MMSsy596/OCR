@@ -361,21 +361,21 @@ def run_dub_job(
                 "match_video_duration": bool(match_video_duration),
             },
         )
-        _push_event(artifacts, "dub", "Bat dau job long tieng tu SRT.", 1)
+        _push_event(artifacts, "dub", "Bắt đầu job lồng tiếng từ SRT.", 1)
         _update_job(db, job, JobStatus.running, 1, "init", artifacts=artifacts)
 
         project_dir = Path(project.video_path).parent
         srt_path = _resolve_srt_path(project_dir, srt_key)
         if not srt_path:
-            _push_event(artifacts, "dub", f"Khong tim thay SRT: {srt_key}", 1, level="error")
+            _push_event(artifacts, "dub", f"Không tìm thấy SRT: {srt_key}", 1, level="error")
             _update_job(db, job, JobStatus.failed, 0, "error", "srt_not_found", artifacts=artifacts)
             return {"ok": False, "error": "srt_not_found"}
 
-        _push_event(artifacts, "parse_srt", f"Dang parse SRT: {srt_path.name}", 5)
+        _push_event(artifacts, "parse_srt", f"Đang parse SRT: {srt_path.name}", 5)
         _update_job(db, job, JobStatus.running, 5, "parse_srt", artifacts=artifacts)
         cues = _parse_srt(srt_path)
         if not cues:
-            _push_event(artifacts, "parse_srt", "SRT rong hoac khong parse duoc cue.", 5, level="error")
+            _push_event(artifacts, "parse_srt", "SRT rỗng hoặc không parse được cue.", 5, level="error")
             _update_job(db, job, JobStatus.failed, 5, "error", "srt_empty", artifacts=artifacts)
             return {"ok": False, "error": "srt_empty"}
         _set_stat(
@@ -392,7 +392,7 @@ def run_dub_job(
 
         fmt = (output_format or "wav").lower().strip()
         if fmt not in {"wav", "mp3"}:
-            _push_event(artifacts, "dub", f"Output format khong hop le: {output_format}", 8, level="error")
+            _push_event(artifacts, "dub", f"Output format không hợp lệ: {output_format}", 8, level="error")
             _update_job(db, job, JobStatus.failed, 5, "error", "invalid_output_format", artifacts=artifacts)
             return {"ok": False, "error": "invalid_output_format"}
 
@@ -401,7 +401,7 @@ def run_dub_job(
             shutil.rmtree(tmp_dir, ignore_errors=True)
         tmp_dir.mkdir(parents=True, exist_ok=True)
 
-        _push_event(artifacts, "synthesize_tts", "Dang synth TTS tung cue...", 10)
+        _push_event(artifacts, "synthesize_tts", "Đang synth TTS từng cue...", 10)
         _update_job(db, job, JobStatus.running, 10, "synthesize_tts", artifacts=artifacts)
         cache: dict[tuple[str, str, str, str, str], Path] = {}
         rendered_wavs: list[tuple[SrtCue, Path]] = []
@@ -548,7 +548,7 @@ def run_dub_job(
                 )
                 _update_job(db, job, JobStatus.running, min(progress, 80), "synthesize_tts", artifacts=artifacts)
 
-        _push_event(artifacts, "stitch_timeline", "Dang ghep audio vao timeline...", 85)
+        _push_event(artifacts, "stitch_timeline", "Đang ghép audio vào timeline...", 85)
         _update_job(db, job, JobStatus.running, 85, "stitch_timeline", artifacts=artifacts)
         output_basename = f"dub.{srt_path.stem}.{fmt}"
         output_path = project_dir / output_basename
@@ -606,7 +606,7 @@ def run_dub_job(
         )
 
         if fmt == "mp3":
-            _push_event(artifacts, "encode_output", "Dang encode WAV -> MP3...", 95)
+            _push_event(artifacts, "encode_output", "Đang encode WAV -> MP3...", 95)
             _update_job(db, job, JobStatus.running, 95, "encode_output", artifacts=artifacts)
             _run_cmd(
                 [

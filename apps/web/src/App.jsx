@@ -179,6 +179,7 @@ export function App() {
   const [currentVideoTime, setCurrentVideoTime] = useState(0);
   const [roiEditMode, setRoiEditMode] = useState(false);
   const [isShiftPressed, setIsShiftPressed] = useState(false);
+  const [wizardStep, setWizardStep] = useState(1);
 
   const stageRef = useRef(null);
   const segmentsRef = useRef([]);
@@ -1064,10 +1065,10 @@ export function App() {
     <div className="app-shell">
       <header className="app-header">
         <div>
-          <h1>NanBao OCR Phụ Đề</h1>
+          <h1>NanBao OCR Studio</h1>
           <p>
-            OCR, dịch, chỉnh sửa và xuất phụ đề trong một không
-            gian làm việc tập trung.
+            Tập trung vào 5 việc chính: tải video, chỉnh ROI, theo dõi OCR,
+            nhập/xuất SRT và chuyển giọng nói.
           </p>
         </div>
         <div className={`status-pill ${apiStatus}`}>
@@ -1083,7 +1084,7 @@ export function App() {
       <main className="workspace">
         <aside className="sidebar card">
           <section className="block">
-            <h2>Dự án</h2>
+            <h2>1) Dự án</h2>
             <label>
               Chọn dự án
               <select
@@ -1098,17 +1099,20 @@ export function App() {
                 ))}
               </select>
             </label>
-            <button disabled={clearingSessions} onClick={clearOldSessions}>
-              {clearingSessions ? "Đang dọn phiên..." : "Dọn phiên cũ"}
-            </button>
-            <button
-              disabled={forceClearingSessions}
-              onClick={forceClearAllSessions}
-            >
-              {forceClearingSessions
-                ? "Đang xóa cưỡng bức..."
-                : "Xóa cưỡng bức tất cả (kể cả đang xử lý)"}
-            </button>
+            <details>
+              <summary>Quản lý dự án nâng cao</summary>
+              <button disabled={clearingSessions} onClick={clearOldSessions}>
+                {clearingSessions ? "Đang dọn phiên..." : "Dọn phiên cũ"}
+              </button>
+              <button
+                disabled={forceClearingSessions}
+                onClick={forceClearAllSessions}
+              >
+                {forceClearingSessions
+                  ? "Đang xóa cưỡng bức..."
+                  : "Xóa cưỡng bức tất cả (kể cả đang xử lý)"}
+              </button>
+            </details>
             <details>
               <summary>Tạo dự án mới</summary>
               <label>
@@ -1212,7 +1216,7 @@ export function App() {
           </section>
 
           <section className="block">
-            <h2>Tiến trình xử lý</h2>
+            <h2>2) OCR và log</h2>
             <label>
               Tệp video
               <input
@@ -1246,79 +1250,90 @@ export function App() {
             >
               {ingestingUrl ? "Đang bắt link và tải..." : "Dán link và tự xử lý"}
             </button>
-            <label>
-              Khóa API Gemini (tùy chọn)
-              <input
-                type="password"
-                value={pipelineForm.gemini_api_key}
-                onChange={(e) =>
-                  setPipelineForm((f) => ({
-                    ...f,
-                    gemini_api_key: e.target.value,
-                  }))
-                }
-              />
-            </label>
-            <div className="inline-two">
+            <details>
+              <summary>Tùy chọn OCR nâng cao</summary>
               <label>
-                Preset ngữ cảnh dịch
-                <select
-                  value={translationPreset}
-                  onChange={(e) => setTranslationPreset(e.target.value)}
-                >
-                  {Object.entries(PROMPT_PRESETS).map(([key, item]) => (
-                    <option key={key} value={key}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
+                Khóa API Gemini (tùy chọn)
+                <input
+                  type="password"
+                  value={pipelineForm.gemini_api_key}
+                  onChange={(e) =>
+                    setPipelineForm((f) => ({
+                      ...f,
+                      gemini_api_key: e.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <div className="inline-two">
+                <label>
+                  Preset ngữ cảnh dịch
+                  <select
+                    value={translationPreset}
+                    onChange={(e) => setTranslationPreset(e.target.value)}
+                  >
+                    {Object.entries(PROMPT_PRESETS).map(([key, item]) => (
+                      <option key={key} value={key}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Tone dịch
+                  <select
+                    value={translationTone}
+                    onChange={(e) => setTranslationTone(e.target.value)}
+                  >
+                    <option value="accurate">Chính xác</option>
+                    <option value="natural">Tự nhiên</option>
+                    <option value="witty">Dí dỏm</option>
+                    <option value="teasing">Trêu ghẹo</option>
+                    <option value="dramatic">Kịch tính</option>
+                  </select>
+                </label>
+              </div>
+              <label>
+                Rule bổ sung cho ngữ cảnh dịch
+                <input
+                  value={translationExtraRule}
+                  onChange={(e) => setTranslationExtraRule(e.target.value)}
+                  placeholder="Ví dụ: hội thoại nam chính nói ngắn, lạnh"
+                />
               </label>
               <label>
-                Tone dịch
-                <select
-                  value={translationTone}
-                  onChange={(e) => setTranslationTone(e.target.value)}
-                >
-                  <option value="accurate">Chính xác</option>
-                  <option value="natural">Tự nhiên</option>
-                  <option value="witty">Dí dỏm</option>
-                  <option value="teasing">Trêu ghẹo</option>
-                  <option value="dramatic">Kịch tính</option>
-                </select>
+                <input
+                  type="checkbox"
+                  checked={autoApplyPromptPreset}
+                  onChange={(e) => setAutoApplyPromptPreset(e.target.checked)}
+                />
+                Tự áp preset/tone vào prompt dự án trước khi chạy dịch
               </label>
-            </div>
-            <label>
-              Rule bổ sung cho ngữ cảnh dịch
-              <input
-                value={translationExtraRule}
-                onChange={(e) => setTranslationExtraRule(e.target.value)}
-                placeholder="Ví dụ: hội thoại nam chính nói ngắn, lạnh"
-              />
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={autoApplyPromptPreset}
-                onChange={(e) => setAutoApplyPromptPreset(e.target.checked)}
-              />
-              Tự áp preset/tone vào prompt dự án trước khi chạy dịch
-            </label>
-            <button type="button" onClick={applyPresetToCurrentProject}>
-              Áp preset vào dự án hiện tại
-            </button>
-            <label>
-              Ánh xạ giọng đọc
-              <textarea
-                rows={3}
-                value={pipelineForm.voiceMapText}
-                onChange={(e) =>
-                  setPipelineForm((f) => ({
-                    ...f,
-                    voiceMapText: e.target.value,
-                  }))
-                }
-              />
-            </label>
+              <button type="button" onClick={applyPresetToCurrentProject}>
+                Áp preset vào dự án hiện tại
+              </button>
+              <label>
+                Ánh xạ giọng đọc
+                <textarea
+                  rows={3}
+                  value={pipelineForm.voiceMapText}
+                  onChange={(e) =>
+                    setPipelineForm((f) => ({
+                      ...f,
+                      voiceMapText: e.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <button
+                disabled={retryingStuckJobs || loading}
+                onClick={retryStuckJobs}
+              >
+                {retryingStuckJobs
+                  ? "Đang thử lại tác vụ trong hàng đợi..."
+                  : "Thử lại tác vụ trong hàng đợi cũ"}
+              </button>
+            </details>
             <label>
               Khoảng quét OCR (giây/lần)
               <input
@@ -1337,14 +1352,6 @@ export function App() {
             </label>
             <button disabled={loading} onClick={startPipeline}>
               Chạy quy trình
-            </button>
-            <button
-              disabled={retryingStuckJobs || loading}
-              onClick={retryStuckJobs}
-            >
-              {retryingStuckJobs
-                ? "Đang thử lại tác vụ trong hàng đợi..."
-                : "Thử lại tác vụ trong hàng đợi cũ"}
             </button>
             {latestJob ? (
               <div className="info">
@@ -1410,67 +1417,70 @@ export function App() {
           </section>
 
           <section className="block">
-            <h2>Công cụ phụ đề</h2>
-            <button
-              disabled={savingSegments || editableSegments.length === 0}
-              onClick={saveSegments}
-            >
-              {savingSegments ? "Đang lưu phụ đề..." : "Lưu phụ đề"}
-            </button>
-            <button
-              disabled={undoStack.length === 0}
-              onClick={() => {
-                const current = cloneSegments(segmentsRef.current);
-                setUndoStack((prev) => {
-                  if (!prev.length) return prev;
-                  const previous = prev[prev.length - 1];
-                  setRedoStack((rprev) =>
-                    [current, ...rprev].slice(0, MAX_HISTORY),
-                  );
-                  setEditableSegments(cloneSegments(previous));
-                  setIsEditingSegments(true);
-                  return prev.slice(0, -1);
-                });
-              }}
-            >
-              Hoàn tác (Ctrl+Z)
-            </button>
-            <button
-              disabled={redoStack.length === 0}
-              onClick={() => {
-                const current = cloneSegments(segmentsRef.current);
-                setRedoStack((prev) => {
-                  if (!prev.length) return prev;
-                  const nextState = prev[0];
-                  setUndoStack((uprev) => {
-                    const next = [...uprev, current];
-                    if (next.length > MAX_HISTORY) next.shift();
-                    return next;
+            <h2>Nâng cao: công cụ phụ đề</h2>
+            <details>
+              <summary>Mở công cụ chỉnh sửa thủ công</summary>
+              <button
+                disabled={savingSegments || editableSegments.length === 0}
+                onClick={saveSegments}
+              >
+                {savingSegments ? "Đang lưu phụ đề..." : "Lưu phụ đề"}
+              </button>
+              <button
+                disabled={undoStack.length === 0}
+                onClick={() => {
+                  const current = cloneSegments(segmentsRef.current);
+                  setUndoStack((prev) => {
+                    if (!prev.length) return prev;
+                    const previous = prev[prev.length - 1];
+                    setRedoStack((rprev) =>
+                      [current, ...rprev].slice(0, MAX_HISTORY),
+                    );
+                    setEditableSegments(cloneSegments(previous));
+                    setIsEditingSegments(true);
+                    return prev.slice(0, -1);
                   });
-                  setEditableSegments(cloneSegments(nextState));
-                  setIsEditingSegments(true);
-                  return prev.slice(1);
-                });
-              }}
-            >
-              Làm lại (Ctrl+Y)
-            </button>
-            <button
-              disabled={editableSegments.length === 0}
-              onClick={mergeAdjacentDuplicateSegments}
-            >
-              Gộp dòng trùng kề nhau
-            </button>
-            <button
-              disabled={retranslating || editableSegments.length === 0}
-              onClick={retranslateOnly}
-            >
-              {retranslating ? "Đang dịch lại..." : "Dịch lại"}
-            </button>
+                }}
+              >
+                Hoàn tác (Ctrl+Z)
+              </button>
+              <button
+                disabled={redoStack.length === 0}
+                onClick={() => {
+                  const current = cloneSegments(segmentsRef.current);
+                  setRedoStack((prev) => {
+                    if (!prev.length) return prev;
+                    const nextState = prev[0];
+                    setUndoStack((uprev) => {
+                      const next = [...uprev, current];
+                      if (next.length > MAX_HISTORY) next.shift();
+                      return next;
+                    });
+                    setEditableSegments(cloneSegments(nextState));
+                    setIsEditingSegments(true);
+                    return prev.slice(1);
+                  });
+                }}
+              >
+                Làm lại (Ctrl+Y)
+              </button>
+              <button
+                disabled={editableSegments.length === 0}
+                onClick={mergeAdjacentDuplicateSegments}
+              >
+                Gộp dòng trùng kề nhau
+              </button>
+              <button
+                disabled={retranslating || editableSegments.length === 0}
+                onClick={retranslateOnly}
+              >
+                {retranslating ? "Đang dịch lại..." : "Dịch lại"}
+              </button>
+            </details>
           </section>
 
           <section className="block">
-            <h2>Lồng tiếng và xuất tệp</h2>
+            <h2>3) SRT và giọng nói</h2>
             <label>
               Chế độ nội dung
               <select
@@ -1721,13 +1731,36 @@ export function App() {
             )}
           </section>
 
+          <section className="card preview-card">
+            <div className="row-head">
+              <h2>Log OCR thời gian thực</h2>
+              <span>
+                {latestJob ? `${latestJob.progress}%` : "chưa có tác vụ"}
+              </span>
+            </div>
+            {latestJobEvents.length > 0 ? (
+              <div className="timeline-card" style={{ maxHeight: 260, overflow: "auto" }}>
+                {latestJobEvents.map((event, idx) => (
+                  <p key={`${event.time || idx}-${idx}`}>
+                    [{formatEventTime(event.time)}] [{event.phase}] [{event.level || "info"}]
+                    {" "}({event.progress ?? "-"}%): {event.message}
+                  </p>
+                ))}
+              </div>
+            ) : (
+              <p className="hint">Chưa có log OCR. Hãy chạy pipeline để theo dõi tiến trình tách khung hình.</p>
+            )}
+          </section>
+
           <section className="card editor-card">
             <div className="row-head">
               <h2>Chỉnh sửa phụ đề</h2>
               <span>{editableSegments.length} dòng</span>
             </div>
-            <div className="table-wrap">
-              <table>
+            <details>
+              <summary>Mở bảng chỉnh sửa subtitle chi tiết</summary>
+              <div className="table-wrap">
+                <table>
                 <colgroup>
                   <col className="col-id" />
                   <col className="col-time" />
@@ -1844,8 +1877,9 @@ export function App() {
                     ))
                   )}
                 </tbody>
-              </table>
-            </div>
+                </table>
+              </div>
+            </details>
           </section>
         </section>
       </main>

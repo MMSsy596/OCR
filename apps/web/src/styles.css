@@ -1,13 +1,13 @@
 :root {
-  --bg: #f3f5f7;
+  --bg: #f4f6f8;
   --panel: #ffffff;
   --panel-soft: #f8fafc;
-  --line: #d9e0e7;
-  --text: #101828;
+  --line: #dde3ea;
+  --text: #111827;
   --muted: #667085;
-  --accent: #155eef;
-  --accent-soft: #e5edff;
-  --danger: #b42318;
+  --accent: #0f5bd8;
+  --accent-soft: #e8f0ff;
+  --danger: #c3261d;
 }
 
 * {
@@ -16,35 +16,34 @@
 
 body {
   margin: 0;
-  font-family: "Segoe UI", "Inter", sans-serif;
+  font-family: "Be Vietnam Pro", "Segoe UI", sans-serif;
   color: var(--text);
-  background:
-    radial-gradient(circle at 0% 0%, #fdfefe 0%, transparent 45%),
-    radial-gradient(circle at 100% 0%, #eef4ff 0%, transparent 32%),
-    var(--bg);
+  background: linear-gradient(180deg, #f9fbfd 0%, #f4f6f8 60%, #eef2f6 100%);
 }
 
 .app-shell {
   min-height: 100vh;
-  padding: 20px;
+  padding: 18px;
 }
 
 .app-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
+  gap: 14px;
   margin-bottom: 14px;
 }
 
 .app-header h1 {
   margin: 0;
-  font-size: 30px;
-  letter-spacing: -0.5px;
+  font-size: 28px;
+  letter-spacing: -0.3px;
 }
 
 .app-header p {
-  margin: 4px 0 0;
+  margin: 6px 0 0;
   color: var(--muted);
+  max-width: 720px;
 }
 
 .status-pill {
@@ -72,12 +71,12 @@ body {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 14px;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+  box-shadow: 0 2px 8px rgba(16, 24, 40, 0.05);
 }
 
 .workspace {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: 360px minmax(0, 1fr);
   gap: 14px;
 }
 
@@ -85,7 +84,9 @@ body {
   padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+  max-height: calc(100vh - 110px);
+  overflow: auto;
 }
 
 .block {
@@ -97,15 +98,16 @@ body {
 
 .block h2 {
   margin: 0 0 10px;
-  font-size: 14px;
+  font-size: 13px;
   letter-spacing: 0.2px;
   text-transform: uppercase;
-  color: var(--muted);
+  color: #42526a;
 }
 
 details summary {
   cursor: pointer;
   font-weight: 600;
+  color: #334155;
   margin-bottom: 8px;
 }
 
@@ -135,20 +137,16 @@ textarea {
 }
 
 button {
-  border: none;
+  border: 1px solid transparent;
   background: var(--accent);
-  color: white;
+  color: #fff;
   font-weight: 600;
   cursor: pointer;
-  transition: filter 0.15s ease, transform 0.08s ease;
+  transition: filter 0.15s ease;
 }
 
 button:hover {
-  filter: brightness(1.04);
-}
-
-button:active {
-  transform: translateY(1px);
+  filter: brightness(1.05);
 }
 
 button:disabled {
@@ -164,7 +162,7 @@ button:disabled {
 
 .info {
   margin-top: 8px;
-  border: 1px dashed var(--line);
+  border: 1px dashed #c7d2e0;
   border-radius: 10px;
   padding: 8px;
   font-size: 13px;
@@ -172,7 +170,7 @@ button:disabled {
 }
 
 .info p {
-  margin: 3px 0;
+  margin: 4px 0;
 }
 
 .download-link {
@@ -185,7 +183,7 @@ button:disabled {
 
 .content {
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto auto 1fr;
   gap: 14px;
 }
 
@@ -214,7 +212,7 @@ button:disabled {
 
 .row-actions button {
   width: auto;
-  padding: 9px 12px;
+  padding: 8px 12px;
 }
 
 .hint {
@@ -302,7 +300,7 @@ button:disabled {
   margin-top: 9px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--panel-soft);
+  background: #ffffff;
   padding: 9px;
   font-size: 13px;
 }
@@ -315,7 +313,8 @@ button:disabled {
   overflow: auto;
   border-radius: 10px;
   border: 1px solid var(--line);
-  max-height: 72vh;
+  max-height: 64vh;
+  margin-top: 8px;
 }
 
 table {
@@ -384,12 +383,16 @@ td textarea {
 }
 
 .toast {
-  margin-top: 12px;
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  max-width: 520px;
   background: #111827;
   color: #fff;
   border-radius: 10px;
   padding: 10px 12px;
   font-size: 14px;
+  z-index: 20;
 }
 
 @media (max-width: 1180px) {
@@ -397,7 +400,15 @@ td textarea {
     grid-template-columns: 1fr;
   }
 
+  .sidebar {
+    max-height: none;
+  }
+
   .row-actions {
     flex-wrap: wrap;
+  }
+
+  .content {
+    grid-template-rows: auto auto auto;
   }
 }

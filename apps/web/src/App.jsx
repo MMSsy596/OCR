@@ -1147,10 +1147,6 @@ export function App() {
       <header className="app-header">
         <div>
           <h1>NanBao OCR Studio</h1>
-          <p>
-            Tập trung vào 5 việc chính: tải video, chỉnh ROI, theo dõi OCR,
-            nhập/xuất SRT và chuyển giọng nói.
-          </p>
         </div>
         <div className={`status-pill ${apiStatus}`}>
           API{" "}
@@ -1381,9 +1377,6 @@ export function App() {
 
           <section className={`block ${wizardStep === 2 ? "" : "hidden-step"}`}>
             <h2>Bước 2: ROI</h2>
-            <p className="hint">
-              Bật chỉnh ROI, tua video và căn vùng phụ đề trước khi chạy OCR.
-            </p>
             <button type="button" onClick={() => setRoiEditMode((v) => !v)}>
               {roiEditMode ? "Tắt chỉnh ROI" : "Bật chỉnh ROI"}
             </button>
@@ -1781,11 +1774,6 @@ export function App() {
             >
               Tải file âm thanh về máy
             </button>
-            {latestDubJob?.artifacts?.dubbed_audio ? (
-              <p className="hint">
-                Đường dẫn file âm thanh: {latestDubJob.artifacts.dubbed_audio}
-              </p>
-            ) : null}
           </section>
         </aside>
 
@@ -1795,9 +1783,6 @@ export function App() {
               <h2>Bước 1: Chuẩn bị video</h2>
               <span>{selectedProject?.name || "chưa chọn dự án"}</span>
             </div>
-            <p className="hint">
-              Tải video hoặc dán link ở panel bên trái. Sau khi có video, chuyển sang bước ROI để căn vùng đọc chữ.
-            </p>
             {selectedProject?.video_path ? (
               <video
                 src={videoSrc}

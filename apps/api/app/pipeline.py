@@ -64,6 +64,7 @@ def _push_event(
     if len(events) > 400:
         artifacts["events"] = events[-400:]
     logger.info("[pipeline][%s][%s%%][%s] %s", phase, int(progress), level, message)
+    print(f"[pipeline][{phase}][{int(progress)}%][{level}] {message}", flush=True)
 
 
 def _set_stat(artifacts: dict[str, Any], phase: str, payload: dict[str, Any]) -> None:
@@ -896,11 +897,16 @@ def run_pipeline(
             nonlocal last_ocr_progress, artifacts, last_ocr_event_sample
             sampled = int(live_meta.get("frames_sampled", 0) or 0)
             estimated = int(live_meta.get("estimated_samples", 0) or 0)
-            if estimated <= 0:
-                return
-            ratio = sampled / max(1, estimated)
-            progress = min(30, max(5, 5 + int(ratio * 25)))
-            progress_pct = min(100.0, max(0.0, ratio * 100.0))
+            if estimated > 0:
+                ratio = sampled / max(1, estimated)
+                progress = min(30, max(5, 5 + int(ratio * 25)))
+                progress_pct = min(100.0, max(0.0, ratio * 100.0))
+            else:
+                # Some codecs/container metadata report 0 total frames.
+                # Keep progress/event moving to avoid UI stuck at 5%.
+                ratio = 0.0
+                progress = min(30, max(6, 5 + min(25, sampled // 2)))
+                progress_pct = 0.0
             ocr_hit_frames = int(live_meta.get("ocr_hit_frames", 0) or 0)
             duplicate_extend_count = int(live_meta.get("duplicate_extend_count", 0) or 0)
             skipped_similar_frame_count = int(live_meta.get("skipped_similar_frame_count", 0) or 0)
@@ -911,6 +917,7 @@ def run_pipeline(
                 {
                     "frames_sampled": sampled,
                     "estimated_samples": estimated,
+                    "estimated_samples_known": bool(estimated > 0),
                     "progress_pct": round(progress_pct, 2),
                     "ocr_hit_frames": ocr_hit_frames,
                     "duplicate_extend_count": duplicate_extend_count,
@@ -921,17 +928,25 @@ def run_pipeline(
                 last_ocr_progress = progress
                 _update_job(db, job, JobStatus.running, progress, "ocr", artifacts=artifacts)
 
-            min_sample_step = max(5, estimated // 20)
-            if sampled - last_ocr_event_sample >= min_sample_step or sampled >= estimated:
+            min_sample_step = max(5, estimated // 20) if estimated > 0 else 10
+            if sampled - last_ocr_event_sample >= min_sample_step or (estimated > 0 and sampled >= estimated):
                 last_ocr_event_sample = sampled
-                _push_event(
-                    artifacts,
-                    "ocr",
-                    (
+                if estimated > 0:
+                    msg = (
                         f"OCR dang chay: da tach {sampled}/{estimated} frame "
                         f"({progress_pct:.1f}%), frame co text={ocr_hit_frames}, "
                         f"bo qua tuong tu={skipped_similar_frame_count}, noi doan={duplicate_extend_count}."
-                    ),
+                    )
+                else:
+                    msg = (
+                        f"OCR dang chay: da xu ly {sampled} frame "
+                        f"(chua uoc luong duoc tong so frame), frame co text={ocr_hit_frames}, "
+                        f"bo qua tuong tu={skipped_similar_frame_count}, noi doan={duplicate_extend_count}."
+                    )
+                _push_event(
+                    artifacts,
+                    "ocr",
+                    msg,
                     progress,
                 )
                 _update_job(db, job, JobStatus.running, progress, "ocr", artifacts=artifacts)

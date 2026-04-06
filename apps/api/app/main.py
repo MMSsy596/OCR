@@ -548,6 +548,6 @@ def serve_web_app(full_path: str):
         except ValueError:
             raise HTTPException(status_code=404, detail="not_found")
         if target.is_file():
-            return FileResponse(path=target, filename=target.name)
+            return FileResponse(path=target)
 
-    return FileResponse(path=web_index_file, filename="index.html")
+    return FileResponse(path=web_index_file, media_type="text/html")

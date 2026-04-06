@@ -186,6 +186,7 @@ export function App() {
   const pollTickRef = useRef(0);
   const jobsRef = useRef([]);
   const isEditingSegmentsRef = useRef(false);
+  const lastDubDoneRef = useRef("");
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId) || null,
@@ -204,6 +205,14 @@ export function App() {
   const latestJob = jobs[0];
   const latestDubJob = useMemo(
     () =>
+      jobs.find(
+        (job) =>
+          job?.artifacts?.job_kind === "dub" &&
+          (job?.artifacts?.dubbed_audio ||
+            job?.status === "running" ||
+            job?.step === "synthesize_tts" ||
+            job?.step === "stitch_timeline"),
+      ) ||
       jobs.find(
         (job) =>
           job?.artifacts?.dubbed_audio ||
@@ -313,6 +322,14 @@ export function App() {
   useEffect(() => {
     isEditingSegmentsRef.current = isEditingSegments;
   }, [isEditingSegments]);
+
+  useEffect(() => {
+    if (!latestDubJob?.artifacts?.dubbed_audio) return;
+    if (lastDubDoneRef.current === latestDubJob.id) return;
+    lastDubDoneRef.current = latestDubJob.id;
+    setWizardStep(4);
+    setMessage(`Đã tạo xong âm thanh: ${latestDubJob.artifacts.dub_output_key || "dub-output.wav"}`);
+  }, [latestDubJob]);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -1121,6 +1138,20 @@ export function App() {
           </button>
         </div>
       </section>
+
+      {latestDubJob?.artifacts?.dubbed_audio ? (
+        <section className="card" style={{ padding: 10, marginBottom: 12 }}>
+          <strong>Âm thanh mới nhất:</strong>{" "}
+          <a
+            className="download-link"
+            href={`${API_BASE}/jobs/${latestDubJob.id}/artifact/dubbed_audio`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {latestDubJob.artifacts.dub_output_key || "Tải file âm thanh"}
+          </a>
+        </section>
+      ) : null}
 
       <main className="workspace">
         <aside className="sidebar card">

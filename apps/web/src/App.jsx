@@ -25,6 +25,12 @@ function normalizeRoi(roi) {
   return { x, y, w: clamp(w, 0.01, 1), h: clamp(h, 0.01, 1) };
 }
 
+function hasValidRoi(roi) {
+  if (!roi) return false;
+  const normalized = normalizeRoi(roi);
+  return normalized.w > 0.01 && normalized.h > 0.01;
+}
+
 function normalizeTextForMerge(text) {
   return String(text || "")
     .toLowerCase()
@@ -202,22 +208,17 @@ export function App() {
         currentVideoTime <= Number(seg.end_sec),
     );
   }, [editableSegments, currentVideoTime]);
-  const latestJob = jobs[0];
+  const latestPipelineJob = useMemo(
+    () =>
+      jobs.find((job) => (job?.artifacts?.job_kind || "pipeline") === "pipeline") ||
+      null,
+    [jobs],
+  );
   const latestDubJob = useMemo(
     () =>
       jobs.find(
         (job) =>
-          job?.artifacts?.job_kind === "dub" &&
-          (job?.artifacts?.dubbed_audio ||
-            job?.status === "running" ||
-            job?.step === "synthesize_tts" ||
-            job?.step === "stitch_timeline"),
-      ) ||
-      jobs.find(
-        (job) =>
-          job?.artifacts?.dubbed_audio ||
-          job?.step === "synthesize_tts" ||
-          job?.step === "stitch_timeline",
+          job?.artifacts?.job_kind === "dub",
       ),
     [jobs],
   );
@@ -233,13 +234,44 @@ export function App() {
     [latestDubJob],
   );
   const latestJobEvents = useMemo(
-    () => [...(latestJob?.artifacts?.events || [])].slice(-30).reverse(),
-    [latestJob],
+    () => [...(latestPipelineJob?.artifacts?.events || [])].slice(-30).reverse(),
+    [latestPipelineJob],
   );
   const latestJobStats = useMemo(
-    () => latestJob?.artifacts?.stats || {},
-    [latestJob],
+    () => latestPipelineJob?.artifacts?.stats || {},
+    [latestPipelineJob],
   );
+  const hasVideo = Boolean(selectedProject?.video_path);
+  const hasSavedRoi = useMemo(
+    () => hasVideo && hasValidRoi(selectedProject?.roi),
+    [hasVideo, selectedProject?.roi],
+  );
+  const hasOcrProgress = useMemo(() => {
+    if ((latestPipelineJob?.progress || 0) > 0) return true;
+    if (latestJobEvents.length > 0) return true;
+    if (Object.keys(latestJobStats || {}).length > 0) return true;
+    if (editableSegments.length > 0) return true;
+    return false;
+  }, [latestPipelineJob, latestJobEvents, latestJobStats, editableSegments]);
+  const hasDubActivity = useMemo(
+    () =>
+      jobs.some(
+        (job) =>
+          job?.artifacts?.job_kind === "dub" &&
+          (job?.status === "running" ||
+            job?.status === "done" ||
+            Boolean(job?.artifacts?.dubbed_audio) ||
+            Boolean(job?.artifacts?.dub_output_key)),
+      ),
+    [jobs],
+  );
+  const maxUnlockedStep = useMemo(() => {
+    if (!hasVideo) return 1;
+    if (!hasSavedRoi) return 2;
+    if (!hasOcrProgress && !hasDubActivity) return 3;
+    return 4;
+  }, [hasVideo, hasSavedRoi, hasOcrProgress, hasDubActivity]);
+  const canGoNext = wizardStep < maxUnlockedStep;
   const statusLabel = (status) => {
     if (status === "draft") return "nháp";
     if (status === "processing") return "đang xử lý";
@@ -253,6 +285,25 @@ export function App() {
     { id: 3, title: "OCR Log" },
     { id: 4, title: "SRT/TTS" },
   ];
+
+  function goToStep(stepId) {
+    if (stepId <= maxUnlockedStep) {
+      setWizardStep(stepId);
+      return;
+    }
+    if (stepId === 2) {
+      setMessage("Cần tải video trước khi sang bước ROI.");
+      return;
+    }
+    if (stepId === 3) {
+      setMessage("Cần có video và lưu ROI trước khi sang bước OCR Log.");
+      return;
+    }
+    if (stepId === 4) {
+      setMessage("Cần chạy OCR để có tiến trình trước khi sang bước SRT/TTS.");
+      return;
+    }
+  }
 
   function pushUndoSnapshot(snapshot) {
     setUndoStack((prev) => {
@@ -310,6 +361,10 @@ export function App() {
       setRoiDraft(normalizeRoi(selectedProject.roi));
     }
   }, [selectedProjectId]);
+
+  useEffect(() => {
+    setWizardStep((current) => Math.min(current, maxUnlockedStep));
+  }, [maxUnlockedStep]);
 
   useEffect(() => {
     segmentsRef.current = editableSegments;
@@ -1114,7 +1169,7 @@ export function App() {
               key={step.id}
               type="button"
               className={`wizard-step ${wizardStep === step.id ? "active" : ""}`}
-              onClick={() => setWizardStep(step.id)}
+              onClick={() => goToStep(step.id)}
             >
               <span>{step.id}</span>
               <strong>{step.title}</strong>
@@ -1131,8 +1186,8 @@ export function App() {
           </button>
           <button
             type="button"
-            disabled={wizardStep >= 4}
-            onClick={() => setWizardStep((s) => Math.min(4, s + 1))}
+            disabled={!canGoNext}
+            onClick={() => setWizardStep((s) => Math.min(maxUnlockedStep, s + 1))}
           >
             Bước tiếp
           </button>
@@ -1156,7 +1211,7 @@ export function App() {
       <main className="workspace">
         <aside className="sidebar card">
           <section className="block">
-            <h2>1) Dự án</h2>
+            <h2>Dự án hiện tại</h2>
             <label>
               Chọn dự án
               <select
@@ -1288,7 +1343,7 @@ export function App() {
           </section>
 
           <section className={`block ${wizardStep === 1 ? "" : "hidden-step"}`}>
-            <h2>2) OCR và log</h2>
+            <h2>Bước 1: Video</h2>
             <label>
               Tệp video
               <input
@@ -1322,6 +1377,31 @@ export function App() {
             >
               {ingestingUrl ? "Đang bắt link và tải..." : "Dán link và tự xử lý"}
             </button>
+          </section>
+
+          <section className={`block ${wizardStep === 2 ? "" : "hidden-step"}`}>
+            <h2>Bước 2: ROI</h2>
+            <p className="hint">
+              Bật chỉnh ROI, tua video và căn vùng phụ đề trước khi chạy OCR.
+            </p>
+            <button type="button" onClick={() => setRoiEditMode((v) => !v)}>
+              {roiEditMode ? "Tắt chỉnh ROI" : "Bật chỉnh ROI"}
+            </button>
+            <button
+              type="button"
+              disabled={savingRoi}
+              onClick={saveSelectedRoi}
+            >
+              {savingRoi ? "Đang lưu ROI..." : "Lưu ROI cho dự án"}
+            </button>
+            <p className="hint">
+              ROI hiện tại: x={roiDraft.x.toFixed(3)}, y={roiDraft.y.toFixed(3)},
+              w={roiDraft.w.toFixed(3)}, h={roiDraft.h.toFixed(3)}
+            </p>
+          </section>
+
+          <section className={`block ${wizardStep === 3 ? "" : "hidden-step"}`}>
+            <h2>Bước 3: OCR và log</h2>
             <details>
               <summary>Tùy chọn OCR nâng cao</summary>
               <label>
@@ -1425,16 +1505,16 @@ export function App() {
             <button disabled={loading} onClick={startPipeline}>
               Chạy quy trình
             </button>
-            {latestJob ? (
+            {latestPipelineJob ? (
               <div className="info">
                 <p>
-                  <strong>Bước:</strong> {latestJob.step}
+                  <strong>Bước:</strong> {latestPipelineJob?.step || "-"}
                 </p>
                 <p>
-                  <strong>Loại tác vụ:</strong> {latestJob.artifacts?.job_kind || "pipeline"}
+                  <strong>Loại tác vụ:</strong> {(latestPipelineJob?.artifacts?.job_kind || "pipeline")}
                 </p>
                 <p>
-                  <strong>Tiến độ:</strong> {latestJob.progress}%
+                  <strong>Tiến độ:</strong> {latestPipelineJob?.progress ?? 0}%
                 </p>
                 {latestJobStats?.ocr_live ? (
                   <p>
@@ -1444,15 +1524,15 @@ export function App() {
                     {" "}({Number(latestJobStats.ocr_live.progress_pct || 0).toFixed(1)}%)
                   </p>
                 ) : null}
-                {latestJob.artifacts?.translation_stats ? (
+                {latestPipelineJob?.artifacts?.translation_stats ? (
                   <p>
                     <strong>Dịch:</strong>{" "}
-                    {JSON.stringify(latestJob.artifacts.translation_stats)}
+                    {JSON.stringify(latestPipelineJob.artifacts.translation_stats)}
                   </p>
                 ) : null}
-                {latestJob.artifacts?.translation_error_hint ? (
+                {latestPipelineJob?.artifacts?.translation_error_hint ? (
                   <p className="error">
-                    {latestJob.artifacts.translation_error_hint}
+                    {latestPipelineJob.artifacts.translation_error_hint}
                   </p>
                 ) : null}
                 {Object.keys(latestJobStats).length > 0 ? (
@@ -1489,9 +1569,9 @@ export function App() {
           </section>
 
           <section className={`block ${wizardStep === 4 ? "" : "hidden-step"}`}>
-            <h2>Nâng cao: công cụ phụ đề</h2>
+            <h2>Bước 4: Chỉnh subtitle</h2>
             <details>
-              <summary>Mở công cụ chỉnh sửa thủ công</summary>
+              <summary>Công cụ chỉnh sửa thủ công</summary>
               <button
                 disabled={savingSegments || editableSegments.length === 0}
                 onClick={saveSegments}
@@ -1552,7 +1632,7 @@ export function App() {
           </section>
 
           <section className={`block ${wizardStep === 4 ? "" : "hidden-step"}`}>
-            <h2>3) SRT và giọng nói</h2>
+            <h2>Bước 4: Xuất SRT và TTS</h2>
             <label>
               Chế độ nội dung
               <select
@@ -1689,6 +1769,11 @@ export function App() {
                 Tải âm thanh: {latestDubJob.artifacts.dub_output_key}
               </a>
             ) : null}
+            {latestDubJob?.status === "done" && !latestDubJob?.artifacts?.dubbed_audio ? (
+              <p className="error">
+                Job lồng tiếng đã hoàn tất nhưng thiếu đường dẫn file âm thanh trong artifacts (`dubbed_audio`).
+              </p>
+            ) : null}
             <button
               type="button"
               disabled={!latestDubAudioUrl}
@@ -1729,18 +1814,7 @@ export function App() {
           <section className={`card preview-card ${wizardStep === 2 ? "" : "hidden-step"}`}>
             <div className="row-head">
               <h2>Xem trước ROI</h2>
-              <div className="row-actions">
-                <button type="button" onClick={() => setRoiEditMode((v) => !v)}>
-                  {roiEditMode ? "Tắt chỉnh ROI" : "Bật chỉnh ROI"}
-                </button>
-                <button
-                  type="button"
-                  disabled={savingRoi}
-                  onClick={saveSelectedRoi}
-                >
-                  {savingRoi ? "Đang lưu..." : "Lưu ROI"}
-                </button>
-              </div>
+              <span>{selectedProject?.name || "chưa chọn dự án"}</span>
             </div>
             {selectedProject?.video_path ? (
               <>
@@ -1828,7 +1902,7 @@ export function App() {
             <div className="row-head">
               <h2>Log OCR thời gian thực</h2>
               <span>
-                {latestJob ? `${latestJob.progress}%` : "chưa có tác vụ"}
+                {latestPipelineJob ? `${latestPipelineJob.progress}%` : "chưa có tác vụ"}
               </span>
             </div>
             {latestJobEvents.length > 0 ? (

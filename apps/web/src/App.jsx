@@ -698,6 +698,7 @@ export function App() {
 
   function beginMove(event) {
     if (!roiEditMode) return;
+    event.preventDefault();
     event.stopPropagation();
     const start = eventToPoint(event);
     if (!start) return;
@@ -706,6 +707,7 @@ export function App() {
 
   function beginResize(handle, event) {
     if (!roiEditMode) return;
+    event.preventDefault();
     event.stopPropagation();
     const start = eventToPoint(event);
     if (!start) return;
@@ -1597,7 +1599,7 @@ export function App() {
               <>
                 <p className="hint">
                   {roiEditMode
-                    ? "Giữ Shift + kéo để tạo khung mới. Kéo khung/góc để chỉnh."
+                    ? "Giữ Shift + kéo để tạo khung mới. Kéo khung/góc để chỉnh ngay."
                     : "Tua video để kiểm tra phụ đề có nằm đúng ROI không."}
                 </p>
                 <div
@@ -1613,7 +1615,7 @@ export function App() {
                     onSeeked={onVideoTimeUpdate}
                   />
                   <div
-                    className={`roi-box ${roiEditMode ? "editable" : "readonly"} ${roiEditMode && isShiftPressed ? "shift-active" : ""}`}
+                    className={`roi-box ${roiEditMode ? "editable" : "readonly"}`}
                     style={{
                       left: `${roiDraft.x * 100}%`,
                       top: `${roiDraft.y * 100}%`,

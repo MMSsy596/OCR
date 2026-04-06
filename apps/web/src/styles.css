@@ -246,10 +246,6 @@ button:disabled {
 }
 
 .roi-box.editable {
-  pointer-events: none;
-}
-
-.roi-box.editable.shift-active {
   pointer-events: auto;
   cursor: move;
 }

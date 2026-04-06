@@ -260,7 +260,7 @@ def stream_video(project_id: str, db: Session = Depends(get_db)):
     video_path = Path(project.video_path)
     if not video_path.exists():
         raise HTTPException(status_code=404, detail="video_missing")
-    return FileResponse(path=video_path, filename=video_path.name)
+    return FileResponse(path=video_path)
 
 
 @app.post("/projects/{project_id}/pipeline/start", response_model=schemas.JobRead)

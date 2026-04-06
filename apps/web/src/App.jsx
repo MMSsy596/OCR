@@ -1357,6 +1357,14 @@ export function App() {
                 <p>
                   <strong>Tiến độ:</strong> {latestJob.progress}%
                 </p>
+                {latestJobStats?.ocr_live ? (
+                  <p>
+                    <strong>OCR realtime:</strong>{" "}
+                    {latestJobStats.ocr_live.frames_sampled ?? 0}/
+                    {latestJobStats.ocr_live.estimated_samples ?? 0} frame
+                    {" "}({Number(latestJobStats.ocr_live.progress_pct || 0).toFixed(1)}%)
+                  </p>
+                ) : null}
                 {latestJob.artifacts?.translation_stats ? (
                   <p>
                     <strong>Dịch:</strong>{" "}

@@ -1,119 +1,147 @@
-# NanBao OCR Video Studio
+﻿# NanBao OCR Video Studio
 
-Web app xử lý video phụ đề: OCR -> dịch -> TTS -> export subtitle/audio.
+Ứng dụng web xử lý video phụ đề theo pipeline: **OCR -> dịch -> chỉnh sửa subtitle -> xuất file -> tạo audio lồng tiếng**.
 
-## 1) Thành phần
+## 1. Kiến trúc dự án
 
-- `apps/api`: FastAPI + SQLAlchemy + Redis queue producer
-- `apps/worker`: RQ worker xử lý pipeline nền
-- `apps/web`: React (Vite) giao diện quản lý project
-- `docker-compose.yml`: Postgres + Redis + MinIO
+- `apps/api`: FastAPI + SQLAlchemy, cung cấp API và phục vụ web build khi chạy production.
+- `apps/worker`: RQ worker xử lý job nền (pipeline OCR/dịch và dub audio).
+- `apps/web`: React + Vite, giao diện quản lý project.
+- `storage/projects`: nơi lưu video, subtitle và artifact theo từng project.
+- `start-all.ps1` / `stop-all.ps1`: script chạy/tắt toàn bộ stack local trên Windows.
 
-## 2) Chạy nhanh local
+## 2. Yêu cầu hệ thống
 
-1. Copy env
-```bash
-cp .env.example .env
+### Bắt buộc
+
+- Windows + PowerShell (khuyến nghị PowerShell 7+).
+- Python 3.11 hoặc 3.12.
+- Node.js 20+ và npm.
+- Redis server (`redis-server.exe`) có trong `PATH` hoặc cài tại `C:\Program Files\Redis\redis-server.exe`.
+
+### Khuyến nghị
+
+- `ffmpeg` + `ffprobe` trong `PATH` để tạo file audio dub ổn định.
+- Docker Desktop nếu muốn chạy Postgres/Redis/MinIO bằng `docker compose`.
+
+## 3. Cấu hình môi trường
+
+Từ thư mục gốc dự án:
+
+```powershell
+Copy-Item .env.example .env
 ```
-2. Khởi động service nền
-```bash
+
+Biến quan trọng trong `.env`:
+
+- `DATABASE_URL`: mặc định Postgres local, có thể đổi sang SQLite.
+- `REDIS_URL`: ví dụ `redis://localhost:6379/0`.
+- `STORAGE_ROOT`: thư mục lưu dữ liệu project.
+- `GEMINI_API_KEYS`: danh sách key, cách nhau bởi dấu phẩy.
+- `DEFAULT_SOURCE_LANG`, `DEFAULT_TARGET_LANG`: ngôn ngữ mặc định.
+
+## 4. Chạy nhanh (khuyên dùng trên Windows)
+
+```powershell
+.\start-all.ps1
+```
+
+Script sẽ tự:
+
+- tạo/cài `.venv` cho backend,
+- cài dependency web nếu chưa có,
+- khởi động Redis (nếu chưa chạy), API, worker và frontend,
+- kiểm tra health endpoint.
+
+Địa chỉ truy cập:
+
+- Web: [http://127.0.0.1:5173](http://127.0.0.1:5173)
+- API: [http://127.0.0.1:8000](http://127.0.0.1:8000)
+- Health: [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)
+
+Dừng toàn bộ:
+
+```powershell
+.\stop-all.ps1
+```
+
+Log tiến trình nằm ở thư mục `logs/`.
+
+## 5. Chạy thủ công (phục vụ debug)
+
+### Bước 1: khởi động hạ tầng nền (tuỳ chọn)
+
+Nếu dùng Docker cho Postgres/Redis/MinIO:
+
+```powershell
 docker compose up -d postgres redis minio
 ```
-3. Chạy API
-```bash
+
+### Bước 2: chạy API
+
+```powershell
 cd apps/api
 python -m venv .venv
-.venv\Scripts\activate
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
-4. Chạy worker
-```bash
+
+### Bước 3: chạy worker
+
+Mở terminal mới:
+
+```powershell
 cd apps/worker
 python -m venv .venv
-.venv\Scripts\activate
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 python worker.py
 ```
-5. Chạy web
-```bash
+
+### Bước 4: chạy frontend
+
+Mở terminal mới:
+
+```powershell
 cd apps/web
 npm install
 npm run dev
 ```
 
-## 3) Luồng sử dụng
+## 6. Cách sử dụng app
 
-1. Tạo project
-2. Upload video
-3. Nhập ROI + prompt + glossary + API key (nếu có)
-4. Bấm Start Pipeline
-5. Theo dõi tiến độ và tải file export (`srt`, `json`, `tts script`)
-6. Tạo audio lồng tiếng từ SRT theo timestamp (1 file duy nhất, có thể khớp độ dài video gốc)
+1. Tạo project mới trên giao diện web.
+2. Upload video (hoặc ingest URL nếu luồng này được bật).
+3. Thiết lập ROI OCR, prompt và glossary nếu cần.
+4. Bấm **Start Pipeline** để chạy OCR + dịch.
+5. Kiểm tra danh sách segment, chỉnh sửa subtitle thủ công.
+6. Export subtitle theo định dạng mong muốn (`srt`, `vtt`, `csv`, `txt`, `json`).
+7. Chạy dub từ SRT để xuất audio (`wav` hoặc `mp3`).
 
-## 4) Trạng thái MVP
+## 7. Gợi ý cấu hình thực tế
 
-- Có đầy đủ flow end-to-end qua queue
-- OCR/TTS đang ở mức practical MVP (có fallback an toàn)
-- Cho phép nâng cấp nhanh sang OCR/TTS engine thật
-- Cho phép edit subtitle trước khi export
-- Export đa định dạng: `srt`, `vtt`, `csv`, `txt`, `json`
-- Export theo chế độ nội dung: `raw`, `translated`, `bilingual`
+- Máy yếu hoặc không muốn chạy queue: app có fallback chạy local khi enqueue lỗi, nhưng vẫn nên chạy Redis + worker để ổn định.
+- Ưu tiên `DATABASE_URL` dùng SQLite cho môi trường đơn giản:
 
-## 5) OCR thật (python-only)
-
-OCR đã chuyển sang `rapidocr-onnxruntime` + `opencv-python`.
-Chỉ cần:
-
-```bash
-cd apps/api
-pip install -r requirements.txt
+```env
+DATABASE_URL=sqlite+pysqlite:///./ocr.db
 ```
 
-Không cần cài Tesseract ngoài hệ điều hành. Nếu OCR lib chưa sẵn sàng, app tự fallback sang mode OCR mẫu.
-Nếu Gemini không phản hồi, hệ thống có fallback dịch bằng `deep-translator`.
+- Khi deploy 1 container (Railway hoặc tương tự), nên mount volume tại `/data` và đặt:
 
-## 7) Audio lồng tiếng từ SRT
-
-- Backend có endpoint: `POST /projects/{project_id}/dub/start`
-- Dữ liệu vào:
-  - `srt_key`: tên file SRT trong thư mục project (mặc định `manual.translated.srt`)
-  - `voice`: voice Edge TTS (mặc định `vi-VN-HoaiMyNeural`)
-  - `rate`, `volume`, `pitch`: thông số giọng đọc
-  - `output_format`: `wav` hoặc `mp3`
-  - `match_video_duration`: có pad đến đúng tổng độ dài video hay không
-- Job chạy nền qua RQ, xem tiến độ tại danh sách jobs như pipeline OCR.
-- Khi xong, tải file audio qua artifact key `dubbed_audio`.
-
-Yêu cầu runtime:
-- Đã cài `edge-tts` (có trong `requirements.txt`)
-- Hệ thống có `ffmpeg` + `ffprobe` trong `PATH`
-
-## 6) Deploy Railway (1 service duy nhất)
-
-Triển khai 1 service dùng `Dockerfile` ở repo root. Image sẽ:
-- build frontend `apps/web`
-- copy file static vào `apps/api/web_dist`
-- chạy `worker` nền + `uvicorn` trong cùng container
-
-### 6.1 Service `ocr-production`
-
-- Root directory: repo root
-- Dockerfile path: `Dockerfile`
-- Gắn 1 Railway Volume vào đường dẫn `/data`
-- Env cần set:
-
-```bash
-PORT=8000
-WEB_ORIGIN=https://<domain-cua-ban>
-REDIS_URL=<Redis private url tren Railway>
+```env
 DATABASE_URL=sqlite+pysqlite:////data/ocr.db
 STORAGE_ROOT=/data/projects
-GEMINI_API_KEYS=<key1,key2,...>
-DEFAULT_SOURCE_LANG=zh
-DEFAULT_TARGET_LANG=vi
 ```
 
-### 6.2 Biến build frontend (tuỳ chọn)
+## 8. Một số lỗi thường gặp
 
-`Dockerfile` đã mặc định `VITE_API_BASE=""` để web gọi API cùng domain. Không cần tạo service web riêng.
+- `Khong tim thay redis-server.exe`: cài Redis hoặc thêm `redis-server.exe` vào `PATH`.
+- Lỗi dub audio: kiểm tra `ffmpeg`/`ffprobe` đã cài và gọi được từ terminal.
+- CORS/không gọi được API từ web: kiểm tra `WEB_ORIGIN` trong `.env`.
+- Chạy pipeline chậm: giảm tần suất scan hoặc chạy trên máy có CPU/RAM tốt hơn.
+
+## 9. Giấy phép và tuỳ biến
+
+Bạn có thể đổi tên app, package, biến môi trường theo nhu cầu đội dự án. Nếu không có quy định đặt tên riêng, có thể dùng định danh `NanBao 男宝` để đồng bộ branding.

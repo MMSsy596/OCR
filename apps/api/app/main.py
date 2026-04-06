@@ -18,6 +18,8 @@ from .tts_dubber import run_dub_job
 
 settings = get_settings()
 settings.storage_path.mkdir(parents=True, exist_ok=True)
+web_dist_dir = Path(__file__).resolve().parents[1] / "web_dist"
+web_index_file = web_dist_dir / "index.html"
 
 app = FastAPI(title=settings.app_name)
 app.add_middleware(
@@ -532,3 +534,20 @@ def _to_project_read(project: models.Project) -> schemas.ProjectRead:
         prompt=project.prompt,
         glossary=project.glossary,
     )
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def serve_web_app(full_path: str):
+    if not web_index_file.exists():
+        raise HTTPException(status_code=404, detail="not_found")
+
+    target = (web_dist_dir / full_path).resolve()
+    if full_path:
+        try:
+            target.relative_to(web_dist_dir.resolve())
+        except ValueError:
+            raise HTTPException(status_code=404, detail="not_found")
+        if target.is_file():
+            return FileResponse(path=target, filename=target.name)
+
+    return FileResponse(path=web_index_file, filename="index.html")

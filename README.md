@@ -89,14 +89,14 @@ Yêu cầu runtime:
 - Đã cài `edge-tts` (có trong `requirements.txt`)
 - Hệ thống có `ffmpeg` + `ffprobe` trong `PATH`
 
-## 6) Deploy Railway (khuyến nghị)
+## 6) Deploy Railway (1 service duy nhất)
 
-Do `api` và `worker` cần đọc/ghi cùng thư mục file (`storage/projects`), cần deploy theo 2 service:
+Triển khai 1 service dùng `Dockerfile` ở repo root. Image sẽ:
+- build frontend `apps/web`
+- copy file static vào `apps/api/web_dist`
+- chạy `worker` nền + `uvicorn` trong cùng container
 
-1. `ocr-core` (1 container chạy cả API + worker)
-2. `ocr-web` (frontend React static)
-
-### 6.1 Service `ocr-core`
+### 6.1 Service `ocr-production`
 
 - Root directory: repo root
 - Dockerfile path: `Dockerfile`
@@ -105,23 +105,15 @@ Do `api` và `worker` cần đọc/ghi cùng thư mục file (`storage/projects`
 
 ```bash
 PORT=8000
-WEB_ORIGIN=https://<domain-ocr-web>
+WEB_ORIGIN=https://<domain-cua-ban>
 REDIS_URL=<Redis private url tren Railway>
 DATABASE_URL=sqlite+pysqlite:////data/ocr.db
 STORAGE_ROOT=/data/projects
+GEMINI_API_KEYS=<key1,key2,...>
+DEFAULT_SOURCE_LANG=zh
+DEFAULT_TARGET_LANG=vi
 ```
 
-`Dockerfile` sẽ tự chạy `worker` nền + `uvicorn` trong cùng container, tránh lỗi lệch file giữa 2 service.
+### 6.2 Biến build frontend (tuỳ chọn)
 
-### 6.2 Service `ocr-web`
-
-- Root directory: repo root
-- Dockerfile path: `Dockerfile.web`
-- Env build/runtime:
-
-```bash
-PORT=8080
-VITE_API_BASE=https://<domain-ocr-core>
-```
-
-Sau khi deploy xong, cập nhật lại `WEB_ORIGIN` của `ocr-core` = domain thực tế của `ocr-web`.
+`Dockerfile` đã mặc định `VITE_API_BASE=""` để web gọi API cùng domain. Không cần tạo service web riêng.

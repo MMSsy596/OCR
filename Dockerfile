@@ -1,4 +1,15 @@
 # syntax=docker/dockerfile:1.7
+FROM node:20-alpine AS web-builder
+WORKDIR /app/apps/web
+
+COPY apps/web/package*.json ./
+RUN npm ci
+
+COPY apps/web ./
+ARG VITE_API_BASE=""
+ENV VITE_API_BASE=${VITE_API_BASE}
+RUN npm run build
+
 FROM python:3.11-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -20,6 +31,7 @@ RUN pip install --upgrade pip \
 
 COPY apps/api /app/apps/api
 COPY apps/worker /app/apps/worker
+COPY --from=web-builder /app/apps/web/dist /app/apps/api/web_dist
 COPY scripts/start-core.sh /app/scripts/start-core.sh
 COPY storage /app/storage
 

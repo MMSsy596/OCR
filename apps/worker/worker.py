@@ -20,7 +20,12 @@ def main() -> None:
     from app.settings import get_settings  # noqa: WPS433
 
     settings = get_settings()
-    redis_conn = Redis.from_url(settings.redis_url)
+    try:
+        redis_conn = Redis.from_url(settings.resolved_redis_url)
+    except ValueError as ex:
+        print(f"[worker] Cau hinh REDIS_URL khong hop le: {ex}", flush=True)
+        print("[worker] Worker tam dung. API van chay; job se fallback local neu queue loi.", flush=True)
+        return
 
     # RQ worker can resolve "app.pipeline.run_pipeline"
     os.environ.setdefault("PYTHONPATH", str(api_dir))

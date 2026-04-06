@@ -6,6 +6,5 @@ from .settings import get_settings
 
 def get_queue() -> Queue:
     settings = get_settings()
-    redis_conn = Redis.from_url(settings.redis_url)
+    redis_conn = Redis.from_url(settings.resolved_redis_url)
     return Queue("pipeline", connection=redis_conn, default_timeout=3600)
-

@@ -45,6 +45,22 @@ class Settings(BaseSettings):
         base = Path(__file__).resolve().parent
         return (base / self.storage_root).resolve()
 
+    @property
+    def resolved_redis_url(self) -> str:
+        url = (self.redis_url or "").strip()
+        if not url:
+            return "redis://localhost:6379/0"
+        if url.startswith("${{") and url.endswith("}}"):
+            raise ValueError(
+                "REDIS_URL dang de o dang placeholder '${{...}}'. "
+                "Hay gan truc tiep gia tri redis://... tu Railway."
+            )
+        if "://" not in url:
+            url = f"redis://{url}"
+        if not (url.startswith("redis://") or url.startswith("rediss://") or url.startswith("unix://")):
+            raise ValueError("REDIS_URL phai bat dau bang redis://, rediss:// hoac unix://")
+        return url
+
 
 @lru_cache
 def get_settings() -> Settings:

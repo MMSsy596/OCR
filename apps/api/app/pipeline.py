@@ -17,8 +17,6 @@ from .exporter import export_subtitle_file
 from .models import JobStatus, PipelineJob, Project, ProjectStatus
 from .settings import get_settings
 
-DEFAULT_GEMINI_FALLBACK_KEY = "AIzaSyABHTaNRykCMkWKOdqcNutZkzS4WhUVlJU"
-
 
 def _update_job(db: Session, job: PipelineJob, status: JobStatus, progress: int, step: str, error_message: str = "", artifacts: dict | None = None) -> None:
     job.status = status
@@ -657,11 +655,10 @@ def _translate_with_fallback(
 def _resolve_gemini_keys(runtime_key: str | None) -> tuple[str | None, str | None]:
     runtime = (runtime_key or "").strip()
     keys = (get_settings().gemini_api_keys or "").strip()
-    env_first = keys.split(",")[0].strip() if keys else ""
-    default_key = DEFAULT_GEMINI_FALLBACK_KEY
+    env_keys = [item.strip() for item in keys.split(",") if item.strip()]
 
-    primary = runtime or env_first or default_key
-    backup = default_key if primary != default_key else (env_first if env_first and env_first != primary else None)
+    primary = runtime or (env_keys[0] if env_keys else "")
+    backup = next((k for k in env_keys if k != primary), "")
     return (primary or None), (backup or None)
 
 
@@ -802,7 +799,7 @@ def _translate_project_segments(
     translate_detail = {
         "total_segments": len(db_segments),
         "used_runtime_key": bool(primary_api_key),
-        "fallback_key_enabled": bool(backup_api_key or DEFAULT_GEMINI_FALLBACK_KEY),
+        "fallback_key_enabled": bool(backup_api_key),
         "provider_counts": translation_stats.copy(),
         "gemini_error_count": gemini_error_count,
         "deep_translator_error_count": deep_translator_error_count,
@@ -881,7 +878,7 @@ def run_pipeline(
                 "scan_interval_sec": float(scan_interval_sec),
                 "voice_map_size": len(voice_map),
                 "gemini_key_present": bool(primary_key),
-                "gemini_fallback_key_enabled": bool(backup_key or DEFAULT_GEMINI_FALLBACK_KEY),
+                "gemini_fallback_key_enabled": bool(backup_key),
             },
         )
         _update_job(db, job, JobStatus.running, 1, "init", artifacts=artifacts)
@@ -962,7 +959,7 @@ def run_pipeline(
         _push_event(
             artifacts,
             "translate",
-            f"Bat dau dich {len(segments)} doan, gemini_key={'co' if primary_key else 'khong'} (co fallback key mac dinh).",
+            f"Bat dau dich {len(segments)} doan, gemini_key={'co' if primary_key else 'khong'}, backup_key={'co' if backup_key else 'khong'}.",
             35,
         )
         _update_job(db, job, JobStatus.running, 35, "translate", artifacts=artifacts)

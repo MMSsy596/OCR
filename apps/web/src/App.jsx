@@ -183,6 +183,8 @@ export function App() {
   const stageRef = useRef(null);
   const segmentsRef = useRef([]);
   const pollTickRef = useRef(0);
+  const jobsRef = useRef([]);
+  const isEditingSegmentsRef = useRef(false);
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId) || null,
@@ -253,13 +255,39 @@ export function App() {
     if (!selectedProjectId) return;
     pollTickRef.current = 0;
     loadProjectData(selectedProjectId, { includeSegments: true });
-    const timer = setInterval(() => {
+    let stopped = false;
+    let timerId = null;
+
+    const scheduleNext = (ms) => {
+      if (stopped) return;
+      timerId = window.setTimeout(runPoll, ms);
+    };
+
+    const runPoll = async () => {
+      if (stopped) return;
       pollTickRef.current += 1;
-      const includeSegments = !isEditingSegments && pollTickRef.current % 4 === 0;
-      loadProjectData(selectedProjectId, { includeSegments });
-    }, 2500);
-    return () => clearInterval(timer);
-  }, [selectedProjectId, isEditingSegments]);
+      const hasActiveJob = (jobsRef.current || []).some(
+        (job) => job?.status === "queued" || job?.status === "running",
+      );
+      const includeSegments =
+        !isEditingSegmentsRef.current &&
+        pollTickRef.current % (hasActiveJob ? 8 : 4) === 0;
+      await loadProjectData(selectedProjectId, { includeSegments });
+
+      const nextDelay = document.hidden
+        ? 20000
+        : hasActiveJob
+          ? 5000
+          : 15000;
+      scheduleNext(nextDelay);
+    };
+
+    scheduleNext(document.hidden ? 12000 : 5000);
+    return () => {
+      stopped = true;
+      if (timerId) window.clearTimeout(timerId);
+    };
+  }, [selectedProjectId]);
 
   useEffect(() => {
     if (selectedProject?.roi) {
@@ -270,6 +298,14 @@ export function App() {
   useEffect(() => {
     segmentsRef.current = editableSegments;
   }, [editableSegments]);
+
+  useEffect(() => {
+    jobsRef.current = jobs;
+  }, [jobs]);
+
+  useEffect(() => {
+    isEditingSegmentsRef.current = isEditingSegments;
+  }, [isEditingSegments]);
 
   useEffect(() => {
     const onKeyDown = (event) => {

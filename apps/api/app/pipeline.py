@@ -96,6 +96,61 @@ def _fake_ocr_segments(project: Project) -> list[dict[str, Any]]:
     return output
 
 
+def _build_ocr_variants(cv2: Any, gray: Any) -> list[tuple[str, Any]]:
+    variants: list[tuple[str, Any]] = [("gray", gray)]
+    try:
+        upscaled = cv2.resize(gray, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+        variants.append(("gray_up", upscaled))
+
+        blur = cv2.GaussianBlur(upscaled, (3, 3), 0)
+        variants.append(("blur_up", blur))
+
+        _, otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        variants.append(("otsu_bin", otsu))
+
+        _, inv_otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        variants.append(("otsu_inv", inv_otsu))
+
+        clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
+        clahe_img = clahe.apply(gray)
+        clahe_up = cv2.resize(clahe_img, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+        variants.append(("clahe_up", clahe_up))
+
+        _, clahe_bin = cv2.threshold(clahe_up, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        variants.append(("clahe_bin", clahe_bin))
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        morph = cv2.morphologyEx(clahe_bin, cv2.MORPH_CLOSE, kernel, iterations=1)
+        variants.append(("clahe_close", morph))
+    except Exception:
+        return variants
+    return variants
+
+
+def _extract_best_ocr_text(ocr_result: Any) -> tuple[str, float]:
+    if not ocr_result:
+        return "", 0.0
+    texts = []
+    scores = []
+    for item in ocr_result:
+        if len(item) < 3:
+            continue
+        txt = str(item[1]).strip()
+        if not txt:
+            continue
+        texts.append(txt)
+        try:
+            scores.append(float(item[2]))
+        except Exception:
+            scores.append(0.8)
+    if not texts:
+        return "", 0.0
+    text = " ".join(texts).strip()
+    text = " ".join(text.split())
+    avg_score = sum(scores) / len(scores) if scores else 0.0
+    return text, avg_score
+
+
 def _ocr_segments_from_video(
     project: Project,
     scan_interval_sec: float = 1.0,
@@ -115,6 +170,9 @@ def _ocr_segments_from_video(
         "skipped_similar_frame_count": 0,
         "ignored_short_text": 0,
         "segments_before_merge": 0,
+        "ocr_variant_attempts": 0,
+        "ocr_variant_hits": 0,
+        "ocr_variant_best": {},
     }
     if not project.video_path:
         meta["engine"] = "missing_video"
@@ -160,17 +218,26 @@ def _ocr_segments_from_video(
         available_providers = []
     use_cuda = "CUDAExecutionProvider" in available_providers
 
-    engine = RapidOCR(
-        use_cuda=use_cuda,
-        det_limit_side_len=640 if not use_cuda else 960,
-        rec_batch_num=6 if not use_cuda else 10,
-        cls_batch_num=6 if not use_cuda else 10,
-    )
+    try:
+        engine = RapidOCR(
+            use_cuda=use_cuda,
+            det_limit_side_len=640 if not use_cuda else 960,
+            rec_batch_num=6 if not use_cuda else 10,
+            cls_batch_num=6 if not use_cuda else 10,
+        )
+        meta["engine_init_mode"] = "tuned"
+    except Exception as ex:
+        # rapidocr-onnxruntime 1.2.3 on Windows can throw KeyError("model_path")
+        # when kwargs are provided. Fall back to default init so pipeline still runs.
+        engine = RapidOCR()
+        meta["engine_init_mode"] = "default_fallback"
+        meta["engine_init_error"] = str(ex)[:240]
     meta["execution_provider"] = "CUDAExecutionProvider" if use_cuda else "CPUExecutionProvider"
     meta["cpu_threads"] = cpu_threads
     segments = []
     last_text = ""
     last_signature: tuple[int, int, int] | None = None
+    consecutive_similar_skips = 0
 
     frame_queue: Queue[tuple[int, Any] | None] = Queue(maxsize=6)
     producer_error: list[str] = []
@@ -240,41 +307,53 @@ def _ocr_segments_from_video(
         sig_diff = 0
         if last_signature is not None:
             sig_diff = abs(sig_mean - last_signature[0]) + abs(sig_std - last_signature[1])
-        if last_signature is not None and sig_diff <= 2:
+        should_skip_similar = (
+            last_signature is not None
+            and sig_diff <= 2
+            and bool(segments)
+            and consecutive_similar_skips < 2
+        )
+        if should_skip_similar:
             meta["skipped_similar_frame_count"] = int(meta["skipped_similar_frame_count"]) + 1
+            consecutive_similar_skips += 1
             if segments:
                 extended_end = (idx / fps) + max(0.5, scan_interval_sec)
                 segments[-1]["end_sec"] = max(float(segments[-1]["end_sec"]), float(extended_end))
                 meta["duplicate_extend_count"] = int(meta["duplicate_extend_count"]) + 1
             continue
+        consecutive_similar_skips = 0
         last_signature = (sig_mean, sig_std, sig_diff)
 
-        result = engine(gray)
-        # rapidocr tra ve tuple (ocr_result, elapsed)
-        ocr_result = result[0] if isinstance(result, tuple) else result
-        if not ocr_result:
+        best_text = ""
+        best_score = 0.0
+        best_variant = ""
+        for variant_name, variant_img in _build_ocr_variants(cv2, gray):
+            meta["ocr_variant_attempts"] = int(meta["ocr_variant_attempts"]) + 1
+            result = engine(variant_img)
+            # rapidocr tra ve tuple (ocr_result, elapsed)
+            ocr_result = result[0] if isinstance(result, tuple) else result
+            if not ocr_result:
+                continue
+            candidate_text, candidate_score = _extract_best_ocr_text(ocr_result)
+            if len(candidate_text) < 2:
+                continue
+            if (
+                not best_text
+                or candidate_score > best_score
+                or (candidate_score == best_score and len(candidate_text) > len(best_text))
+            ):
+                best_text = candidate_text
+                best_score = candidate_score
+                best_variant = variant_name
+
+        if not best_text:
             continue
         meta["ocr_hit_frames"] = int(meta["ocr_hit_frames"]) + 1
+        meta["ocr_variant_hits"] = int(meta["ocr_variant_hits"]) + 1
+        variant_best = meta.setdefault("ocr_variant_best", {})
+        variant_best[best_variant] = int(variant_best.get(best_variant, 0)) + 1
 
-        texts = []
-        scores = []
-        for item in ocr_result:
-            if len(item) < 3:
-                continue
-            txt = str(item[1]).strip()
-            if not txt:
-                continue
-            texts.append(txt)
-            try:
-                scores.append(float(item[2]))
-            except Exception:
-                scores.append(0.8)
-        if not texts:
-            idx += sample_step
-            continue
-
-        text = " ".join(texts).strip()
-        text = " ".join(text.split())
+        text = best_text
         if len(text) < 2:
             meta["ignored_short_text"] = int(meta["ignored_short_text"]) + 1
             continue
@@ -296,7 +375,7 @@ def _ocr_segments_from_video(
                 "translated_text": "",
                 "speaker": "narrator",
                 "voice": "narrator-neutral",
-                "confidence": sum(scores) / len(scores) if scores else 0.8,
+                "confidence": best_score or 0.8,
             }
         )
 

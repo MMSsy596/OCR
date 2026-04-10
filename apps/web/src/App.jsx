@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ExportDubBlock } from "./components/ExportDubBlock";
 import { PipelineBlock } from "./components/PipelineBlock";
+import { ProjectManagerBlock } from "./components/ProjectManagerBlock";
 import { SubtitleEditorTable } from "./components/SubtitleEditorTable";
 import { VideoUploadBlock } from "./components/VideoUploadBlock";
 import { WizardNav } from "./components/WizardNav";
+import { useProjectActions } from "./hooks/useProjectActions";
+import { useSubtitleActions } from "./hooks/useSubtitleActions";
 import { useProjectEventStream } from "./hooks/useProjectEventStream";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
@@ -134,18 +138,8 @@ export function App() {
   const [undoStack, setUndoStack] = useState([]);
   const [redoStack, setRedoStack] = useState([]);
   const [jobs, setJobs] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [clearingSessions, setClearingSessions] = useState(false);
-  const [forceClearingSessions, setForceClearingSessions] = useState(false);
-  const [savingRoi, setSavingRoi] = useState(false);
-  const [savingSegments, setSavingSegments] = useState(false);
-  const [retranslating, setRetranslating] = useState(false);
-  const [uploadingSrt, setUploadingSrt] = useState(false);
-  const [retryingStuckJobs, setRetryingStuckJobs] = useState(false);
   const [isEditingSegments, setIsEditingSegments] = useState(false);
-  const [exporting, setExporting] = useState(false);
-  const [dubbing, setDubbing] = useState(false);
+  const [pipelineLoading, setPipelineLoading] = useState(false);
   const [lastExport, setLastExport] = useState(null);
   const [projectForm, setProjectForm] = useState({
     name: "Dự án NanBao",
@@ -161,7 +155,6 @@ export function App() {
   const [autoApplyPromptPreset, setAutoApplyPromptPreset] = useState(true);
   const [videoFile, setVideoFile] = useState(null);
   const [sourceUrl, setSourceUrl] = useState("");
-  const [ingestingUrl, setIngestingUrl] = useState(false);
   const [autoStartAfterIngest, setAutoStartAfterIngest] = useState(true);
   const [srtUploadFile, setSrtUploadFile] = useState(null);
   const [pipelineForm, setPipelineForm] = useState({
@@ -627,211 +620,91 @@ export function App() {
     }
   }
 
-  async function createProject() {
-    setCreating(true);
-    setMessage("");
-    try {
-      const created = await jsonFetch(`${API_BASE}/projects`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...projectForm,
-          roi: normalizeRoi(projectForm.roi),
-        }),
-      });
-      await loadProjectsSafe();
-      setSelectedProjectId(created.id);
-      setMessage(`Đã tạo dự án: ${created.name}`);
-    } catch (err) {
-      setMessage(`Lỗi tạo dự án: ${err.message}`);
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  async function clearOldSessions() {
-    if (!window.confirm("Bạn có chắc muốn xóa toàn bộ phiên cũ (không ở trạng thái đang xử lý)?")) {
-      return;
-    }
-    setClearingSessions(true);
-    setMessage("");
-    try {
-      const out = await jsonFetch(`${API_BASE}/projects/clear-sessions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          include_processing: false,
-          delete_storage: true,
-        }),
-      });
-      await loadProjectsSafe();
-      if (selectedProjectId && out.deleted_project_ids?.includes(selectedProjectId)) {
-        setSelectedProjectId("");
-        setEditableSegments([]);
-        setJobs([]);
-      }
-      setMessage(
-        `Đã xóa ${out.deleted_projects} phiên cũ, bỏ qua ${out.skipped_processing_projects} phiên đang chạy.`,
-      );
-    } catch (err) {
-      setMessage(`Lỗi dọn phiên: ${err.message}`);
-    } finally {
-      setClearingSessions(false);
-    }
-  }
-
-  async function forceClearAllSessions() {
-    const step1 = window.confirm(
-      "CẢNH BÁO: thao tác này sẽ xóa TẤT CẢ phiên, kể cả phiên đang xử lý. Bạn tiếp tục?",
+  const composeCurrentPrompt = () =>
+    composePromptFromPreset(
+      translationPreset,
+      translationTone,
+      translationExtraRule,
     );
-    if (!step1) return;
-    const token = window.prompt(
-      "Bước 2/2: Nhập CHÍNH XÁC 'FORCE CLEAR ALL' để xác nhận:",
-      "",
-    );
-    if (token !== "FORCE CLEAR ALL") {
-      setMessage("Đã hủy thao tác xóa cưỡng bức do xác nhận không hợp lệ.");
-      return;
-    }
-    setForceClearingSessions(true);
-    setMessage("");
-    try {
-      const out = await jsonFetch(`${API_BASE}/projects/clear-sessions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          include_processing: true,
-          delete_storage: true,
-        }),
-      });
-      await loadProjectsSafe();
-      setSelectedProjectId("");
-      setEditableSegments([]);
-      setJobs([]);
-      setMessage(
-        `Đã xóa cưỡng bức: ${out.deleted_projects} phiên; dọn ${out.removed_storage_dirs} thư mục.`,
-      );
-    } catch (err) {
-      setMessage(`Lỗi xóa cưỡng bức phiên: ${err.message}`);
-    } finally {
-      setForceClearingSessions(false);
-    }
-  }
 
-  async function uploadVideo() {
-    if (!selectedProjectId || !videoFile) {
-      setMessage("Chọn dự án và tệp video trước.");
-      return;
-    }
-    setLoading(true);
-    setMessage("");
-    try {
-      const form = new FormData();
-      form.append("file", videoFile);
-      await fetch(`${API_BASE}/projects/${selectedProjectId}/upload`, {
-        method: "POST",
-        body: form,
-      }).then(async (res) => {
-        if (!res.ok) throw new Error(await res.text());
-      });
-      await loadProjectsSafe();
-      await loadProjectData(selectedProjectId);
-      setMessage("Tải video lên thành công.");
-      setWizardStep(2);
-    } catch (err) {
-      setMessage(`Lỗi tải lên: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  }
+  const {
+    creating,
+    clearingSessions,
+    forceClearingSessions,
+    loading: projectLoading,
+    savingRoi,
+    ingestingUrl,
+    createProject,
+    clearOldSessions,
+    forceClearAllSessions,
+    uploadVideo,
+    ingestVideoFromUrl,
+    saveSelectedRoi,
+    applyPresetToCreateForm,
+    applyPresetToCurrentProject,
+    syncPromptPresetForCurrentProjectIfEnabled,
+  } = useProjectActions({
+    apiBase: API_BASE,
+    jsonFetch,
+    normalizeRoi,
+    parseVoiceMap,
+    loadProjectsSafe,
+    loadProjectData,
+    setProjects,
+    setSelectedProjectId,
+    setEditableSegments,
+    setJobs,
+    setMessage,
+    setWizardStep,
+    projectForm,
+    sourceUrl,
+    autoStartAfterIngest,
+    pipelineForm,
+    selectedProjectId,
+    videoFile,
+    roiDraft,
+    composePrompt: composeCurrentPrompt,
+    selectedProject,
+    setProjectForm,
+    setRoiDraft,
+  });
 
-  async function ingestVideoFromUrl() {
-    if (!selectedProjectId || !sourceUrl.trim()) {
-      setMessage("Chọn dự án và dán link trước.");
-      return;
-    }
-    setIngestingUrl(true);
-    setMessage("");
-    try {
-      await jsonFetch(`${API_BASE}/projects/${selectedProjectId}/ingest-url/start`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          source_url: sourceUrl.trim(),
-          auto_start_pipeline: autoStartAfterIngest,
-          gemini_api_key: pipelineForm.gemini_api_key || null,
-          voice_map: parseVoiceMap(pipelineForm.voiceMapText),
-          scan_interval_sec: Number(pipelineForm.scan_interval_sec) || 1.5,
-        }),
-      });
-      await loadProjectData(selectedProjectId);
-      setMessage(
-        autoStartAfterIngest
-          ? "Đã nhận link, đang tải và sẽ tự chạy pipeline."
-          : "Đã nhận link, đang tự tải video vào dự án.",
-      );
-      setWizardStep(2);
-    } catch (err) {
-      setMessage(`Lỗi nhận link: ${err.message}`);
-    } finally {
-      setIngestingUrl(false);
-    }
-  }
+  const {
+    savingSegments,
+    retranslating,
+    exporting,
+    dubbing,
+    uploadingSrt,
+    retryingStuckJobs,
+    saveSegments,
+    retranslateOnly,
+    exportSubtitle,
+    startDubAudio,
+    uploadExternalSrt,
+    downloadDubAudio,
+    retryStuckJobs,
+  } = useSubtitleActions({
+    apiBase: API_BASE,
+    jsonFetch,
+    selectedProjectId,
+    editableSegments,
+    setEditableSegments,
+    setUndoStack,
+    setRedoStack,
+    setIsEditingSegments,
+    setMessage,
+    pipelineForm,
+    exportForm,
+    setLastExport,
+    dubForm,
+    setWizardStep,
+    latestDubAudioUrl,
+    latestDubAudioName,
+    loadProjectData,
+    syncPromptPresetForCurrentProjectIfEnabled,
+  });
 
-  async function uploadExternalSrt() {
-    if (!selectedProjectId || !srtUploadFile) {
-      setMessage("Chọn dự án và tệp SRT trước.");
-      return;
-    }
-    setUploadingSrt(true);
-    setMessage("");
-    try {
-      const form = new FormData();
-      form.append("file", srtUploadFile);
-      const res = await fetch(`${API_BASE}/projects/${selectedProjectId}/srt/upload`, {
-        method: "POST",
-        body: form,
-      });
-      if (!res.ok) {
-        throw new Error(await res.text());
-      }
-      const out = await res.json();
-      setDubForm((prev) => ({ ...prev, srt_key: out.output_key }));
-      setMessage(`Đã tải lên SRT: ${out.output_key}`);
-    } catch (err) {
-      setMessage(`Lỗi tải lên SRT: ${err.message}`);
-    } finally {
-      setUploadingSrt(false);
-    }
-  }
-
-  async function saveSelectedRoi() {
-    if (!selectedProjectId) {
-      setMessage("Chọn dự án trước khi lưu ROI.");
-      return;
-    }
-    setSavingRoi(true);
-    setMessage("");
-    try {
-      const updated = await jsonFetch(
-        `${API_BASE}/projects/${selectedProjectId}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ roi: normalizeRoi(roiDraft) }),
-        },
-      );
-      setProjects((prev) =>
-        prev.map((item) => (item.id === updated.id ? updated : item)),
-      );
-      setRoiDraft(normalizeRoi(updated.roi));
-      setMessage("Đã lưu ROI cho dự án.");
-    } catch (err) {
-      setMessage(`Lỗi lưu ROI: ${err.message}`);
-    } finally {
-      setSavingRoi(false);
-    }
-  }
+  const loading = pipelineLoading || projectLoading;
 
   function parseVoiceMap(input) {
     return input
@@ -850,10 +723,10 @@ export function App() {
       setMessage("Chọn dự án trước.");
       return;
     }
-    setLoading(true);
+    setPipelineLoading(true);
     setMessage("");
     try {
-      await syncPromptPresetForCurrentProjectIfEnabled();
+      await syncPromptPresetForCurrentProjectIfEnabled(autoApplyPromptPreset);
       await jsonFetch(
         `${API_BASE}/projects/${selectedProjectId}/pipeline/start`,
         {
@@ -873,7 +746,7 @@ export function App() {
     } catch (err) {
       setMessage(`Lỗi chạy quy trình xử lý: ${err.message}`);
     } finally {
-      setLoading(false);
+      setPipelineLoading(false);
     }
   }
 
@@ -975,243 +848,6 @@ export function App() {
     );
   }
 
-  async function saveSegments() {
-    if (!selectedProjectId) {
-      setMessage("Chọn dự án trước.");
-      return;
-    }
-    setSavingSegments(true);
-    setMessage("");
-    try {
-      const payload = editableSegments.map((row) => ({
-        id: row.id,
-        start_sec: Number(row.start_sec),
-        end_sec: Number(row.end_sec),
-        raw_text: row.raw_text ?? "",
-        translated_text: row.translated_text ?? "",
-        speaker: row.speaker ?? "narrator",
-        voice: row.voice ?? "narrator-neutral",
-      }));
-      const updated = await jsonFetch(
-        `${API_BASE}/projects/${selectedProjectId}/segments`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        },
-      );
-      setEditableSegments(updated.map((row) => ({ ...row })));
-      setUndoStack([]);
-      setRedoStack([]);
-      setIsEditingSegments(false);
-      setMessage("Đã lưu phụ đề đã chỉnh sửa.");
-    } catch (err) {
-      setMessage(`Lỗi lưu phụ đề: ${err.message}`);
-    } finally {
-      setSavingSegments(false);
-    }
-  }
-
-  async function retranslateOnly() {
-    if (!selectedProjectId) {
-      setMessage("Chọn dự án trước.");
-      return;
-    }
-    setRetranslating(true);
-    setMessage("");
-    try {
-      await syncPromptPresetForCurrentProjectIfEnabled();
-      const payload = editableSegments.map((row) => ({
-        id: row.id,
-        start_sec: Number(row.start_sec),
-        end_sec: Number(row.end_sec),
-        raw_text: row.raw_text ?? "",
-        translated_text: row.translated_text ?? "",
-        speaker: row.speaker ?? "narrator",
-        voice: row.voice ?? "narrator-neutral",
-      }));
-      await jsonFetch(`${API_BASE}/projects/${selectedProjectId}/segments`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const out = await jsonFetch(
-        `${API_BASE}/projects/${selectedProjectId}/segments/retranslate`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            gemini_api_key: pipelineForm.gemini_api_key || null,
-          }),
-        },
-      );
-      setEditableSegments((out.segments || []).map((row) => ({ ...row })));
-      setUndoStack([]);
-      setRedoStack([]);
-      setIsEditingSegments(false);
-      setMessage(`Đã dịch lại. Thống kê: ${JSON.stringify(out.translation_stats || {})}`);
-    } catch (err) {
-      setMessage(`Lỗi dịch lại: ${err.message}`);
-    } finally {
-      setRetranslating(false);
-    }
-  }
-
-  async function exportSubtitle() {
-    if (!selectedProjectId) {
-      setMessage("Chọn dự án trước.");
-      return;
-    }
-    setExporting(true);
-    setMessage("");
-    try {
-      const out = await jsonFetch(
-        `${API_BASE}/projects/${selectedProjectId}/export`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(exportForm),
-        },
-      );
-      setLastExport({ ...out, url: `${API_BASE}${out.download_url}` });
-      setMessage(
-        `Đã xuất ${exportForm.export_format.toUpperCase()} (${exportForm.content_mode}).`,
-      );
-    } catch (err) {
-      setMessage(`Lỗi xuất tệp: ${err.message}`);
-    } finally {
-      setExporting(false);
-    }
-  }
-
-  async function startDubAudio() {
-    if (!selectedProjectId) {
-      setMessage("Chọn dự án trước.");
-      return;
-    }
-    setDubbing(true);
-    setMessage("");
-    try {
-      await jsonFetch(`${API_BASE}/projects/${selectedProjectId}/dub/start`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(dubForm),
-      });
-      setMessage(
-        `Đã bắt đầu dựng âm thanh (${dubForm.output_format.toUpperCase()}).`,
-      );
-      setWizardStep(4);
-    } catch (err) {
-      setMessage(`Lỗi dựng âm thanh: ${err.message}`);
-    } finally {
-      setDubbing(false);
-    }
-  }
-
-  function applyPresetToCreateForm() {
-    const prompt = composePromptFromPreset(
-      translationPreset,
-      translationTone,
-      translationExtraRule,
-    );
-    setProjectForm((prev) => ({ ...prev, prompt }));
-    setMessage("Đã nạp prompt preset vào ô 'Lời nhắc'.");
-  }
-
-  async function applyPresetToCurrentProject() {
-    if (!selectedProjectId) {
-      setMessage("Chọn dự án trước.");
-      return;
-    }
-    const prompt = composePromptFromPreset(
-      translationPreset,
-      translationTone,
-      translationExtraRule,
-    );
-    try {
-      const updated = await jsonFetch(`${API_BASE}/projects/${selectedProjectId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
-      });
-      setProjects((prev) =>
-        prev.map((item) => (item.id === updated.id ? updated : item)),
-      );
-      setProjectForm((prev) => ({ ...prev, prompt }));
-      setMessage("Đã áp dụng prompt preset vào dự án hiện tại.");
-    } catch (err) {
-      setMessage(`Lỗi cập nhật prompt dự án: ${err.message}`);
-    }
-  }
-
-  async function syncPromptPresetForCurrentProjectIfEnabled() {
-    if (!autoApplyPromptPreset || !selectedProjectId) return;
-    const prompt = composePromptFromPreset(
-      translationPreset,
-      translationTone,
-      translationExtraRule,
-    );
-    if ((selectedProject?.prompt || "").trim() === prompt.trim()) return;
-    const updated = await jsonFetch(`${API_BASE}/projects/${selectedProjectId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt }),
-    });
-    setProjects((prev) =>
-      prev.map((item) => (item.id === updated.id ? updated : item)),
-    );
-  }
-
-  async function downloadDubAudio() {
-    if (!latestDubAudioUrl) {
-      setMessage("Chưa có file âm thanh để tải.");
-      return;
-    }
-    try {
-      const res = await fetch(latestDubAudioUrl);
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-      const blob = await res.blob();
-      const blobUrl = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = blobUrl;
-      link.download = latestDubAudioName;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(blobUrl);
-      setMessage(`Đã tải file âm thanh: ${latestDubAudioName}`);
-    } catch (err) {
-      setMessage(`Lỗi tải file âm thanh: ${err.message}`);
-    }
-  }
-
-  async function retryStuckJobs() {
-    if (!selectedProjectId) {
-      setMessage("Chọn dự án trước.");
-      return;
-    }
-    setRetryingStuckJobs(true);
-    setMessage("");
-    try {
-      const out = await jsonFetch(
-        `${API_BASE}/projects/${selectedProjectId}/jobs/retry-stuck`,
-        {
-          method: "POST",
-        },
-      );
-      await loadProjectData(selectedProjectId, { includeSegments: false });
-      setMessage(
-        `Đã thử lại ${out.retried_count} tác vụ bị kẹt. Bỏ qua ${out.skipped_count}.`,
-      );
-    } catch (err) {
-      setMessage(`Lỗi thử lại tác vụ trong hàng đợi: ${err.message}`);
-    } finally {
-      setRetryingStuckJobs(false);
-    }
-  }
-
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -1253,137 +889,28 @@ export function App() {
 
       <main className="workspace">
         <aside className="sidebar card">
-          <section className="block">
-            <h2>Dự án hiện tại</h2>
-            <label>
-              Chọn dự án
-              <select
-                value={selectedProjectId}
-                onChange={(e) => setSelectedProjectId(e.target.value)}
-              >
-                <option value="">-- Chọn --</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({statusLabel(p.status)})
-                  </option>
-                ))}
-              </select>
-            </label>
-            <details>
-              <summary>Quản lý dự án nâng cao</summary>
-              <button disabled={clearingSessions} onClick={clearOldSessions}>
-                {clearingSessions ? "Đang dọn phiên..." : "Dọn phiên cũ"}
-              </button>
-              <button
-                disabled={forceClearingSessions}
-                onClick={forceClearAllSessions}
-              >
-                {forceClearingSessions
-                  ? "Đang xóa cưỡng bức..."
-                  : "Xóa cưỡng bức tất cả (kể cả đang xử lý)"}
-              </button>
-            </details>
-            <details>
-              <summary>Tạo dự án mới</summary>
-              <label>
-                Tên dự án
-                <input
-                  value={projectForm.name}
-                  onChange={(e) =>
-                    setProjectForm((f) => ({ ...f, name: e.target.value }))
-                  }
-                />
-              </label>
-              <div className="inline-two">
-                <label>
-                  Ngôn ngữ nguồn
-                  <input
-                    value={projectForm.source_lang}
-                    onChange={(e) =>
-                      setProjectForm((f) => ({
-                        ...f,
-                        source_lang: e.target.value,
-                      }))
-                    }
-                  />
-                </label>
-                <label>
-                  Ngôn ngữ đích
-                  <input
-                    value={projectForm.target_lang}
-                    onChange={(e) =>
-                      setProjectForm((f) => ({
-                        ...f,
-                        target_lang: e.target.value,
-                      }))
-                    }
-                  />
-                </label>
-              </div>
-              <label>
-                Lời nhắc
-                <textarea
-                  rows={2}
-                  value={projectForm.prompt}
-                  onChange={(e) =>
-                    setProjectForm((f) => ({ ...f, prompt: e.target.value }))
-                  }
-                />
-              </label>
-              <div className="inline-two">
-                <label>
-                  Preset ngữ cảnh
-                  <select
-                    value={translationPreset}
-                    onChange={(e) => setTranslationPreset(e.target.value)}
-                  >
-                    {Object.entries(PROMPT_PRESETS).map(([key, item]) => (
-                      <option key={key} value={key}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Giọng điệu
-                  <select
-                    value={translationTone}
-                    onChange={(e) => setTranslationTone(e.target.value)}
-                  >
-                    <option value="accurate">Chính xác</option>
-                    <option value="natural">Tự nhiên</option>
-                    <option value="witty">Dí dỏm</option>
-                    <option value="teasing">Trêu ghẹo</option>
-                    <option value="dramatic">Kịch tính</option>
-                  </select>
-                </label>
-              </div>
-              <label>
-                Yêu cầu bổ sung (tùy chọn)
-                <input
-                  value={translationExtraRule}
-                  onChange={(e) => setTranslationExtraRule(e.target.value)}
-                  placeholder="Ví dụ: dùng xưng hô huynh - muội cho cặp chính"
-                />
-              </label>
-              <button type="button" onClick={applyPresetToCreateForm}>
-                Nạp preset vào lời nhắc
-              </button>
-              <label>
-                Bảng thuật ngữ
-                <textarea
-                  rows={3}
-                  value={projectForm.glossary}
-                  onChange={(e) =>
-                    setProjectForm((f) => ({ ...f, glossary: e.target.value }))
-                  }
-                />
-              </label>
-              <button disabled={creating} onClick={createProject}>
-                {creating ? "Đang tạo..." : "Tạo dự án"}
-              </button>
-            </details>
-          </section>
+          <ProjectManagerBlock
+            projects={projects}
+            selectedProjectId={selectedProjectId}
+            setSelectedProjectId={setSelectedProjectId}
+            statusLabel={statusLabel}
+            clearingSessions={clearingSessions}
+            clearOldSessions={clearOldSessions}
+            forceClearingSessions={forceClearingSessions}
+            forceClearAllSessions={forceClearAllSessions}
+            projectForm={projectForm}
+            setProjectForm={setProjectForm}
+            translationPreset={translationPreset}
+            setTranslationPreset={setTranslationPreset}
+            translationTone={translationTone}
+            setTranslationTone={setTranslationTone}
+            translationExtraRule={translationExtraRule}
+            setTranslationExtraRule={setTranslationExtraRule}
+            PROMPT_PRESETS={PROMPT_PRESETS}
+            applyPresetToCreateForm={applyPresetToCreateForm}
+            creating={creating}
+            createProject={createProject}
+          />
 
           <VideoUploadBlock
             wizardStep={wizardStep}
@@ -1508,157 +1035,27 @@ export function App() {
             </details>
           </section>
 
-          <section className={`block ${wizardStep === 4 ? "" : "hidden-step"}`}>
-            <h2>Bước 4: Xuất SRT và TTS</h2>
-            <label>
-              Chế độ nội dung
-              <select
-                value={exportForm.content_mode}
-                onChange={(e) =>
-                  setExportForm((f) => ({ ...f, content_mode: e.target.value }))
-                }
-              >
-                <option value="raw">Bản gốc</option>
-                <option value="translated">Bản dịch</option>
-                <option value="bilingual">Song ngữ</option>
-              </select>
-            </label>
-            <label>
-              Định dạng phụ đề
-              <select
-                value={exportForm.export_format}
-                onChange={(e) =>
-                  setExportForm((f) => ({
-                    ...f,
-                    export_format: e.target.value,
-                  }))
-                }
-              >
-                <option value="srt">SRT (CapCut)</option>
-                <option value="vtt">VTT</option>
-                <option value="csv">CSV</option>
-                <option value="txt">TXT</option>
-                <option value="json">JSON</option>
-              </select>
-            </label>
-            <button
-              disabled={exporting || editableSegments.length === 0}
-              onClick={exportSubtitle}
-            >
-              {exporting ? "Đang xuất phụ đề..." : "Xuất phụ đề"}
-            </button>
-
-            <label>
-              Chèn tệp SRT khác
-              <input
-                type="file"
-                accept=".srt"
-                onChange={(e) => setSrtUploadFile(e.target.files?.[0] || null)}
-              />
-            </label>
-            <button
-              disabled={uploadingSrt || !srtUploadFile || !selectedProjectId}
-              onClick={uploadExternalSrt}
-            >
-              {uploadingSrt ? "Đang tải lên SRT..." : "Tải lên SRT vào dự án"}
-            </button>
-
-            <label>
-              SRT dùng để lồng tiếng
-              <input
-                value={dubForm.srt_key}
-                onChange={(e) =>
-                  setDubForm((f) => ({ ...f, srt_key: e.target.value }))
-                }
-                placeholder="manual.translated.srt"
-              />
-            </label>
-            <label>
-              Giọng đọc
-              <input
-                value={dubForm.voice}
-                onChange={(e) =>
-                  setDubForm((f) => ({ ...f, voice: e.target.value }))
-                }
-                placeholder="vi-VN-HoaiMyNeural"
-              />
-            </label>
-            <div className="inline-two">
-              <label>
-                Tốc độ
-                <input
-                  value={dubForm.rate}
-                  onChange={(e) =>
-                    setDubForm((f) => ({ ...f, rate: e.target.value }))
-                  }
-                  placeholder="+0%"
-                />
-              </label>
-              <label>
-                Định dạng âm thanh
-                <select
-                  value={dubForm.output_format}
-                  onChange={(e) =>
-                    setDubForm((f) => ({ ...f, output_format: e.target.value }))
-                  }
-                >
-                  <option value="wav">WAV</option>
-                  <option value="mp3">MP3</option>
-                </select>
-              </label>
-            </div>
-            <label>
-              <input
-                type="checkbox"
-                checked={dubForm.match_video_duration}
-                onChange={(e) =>
-                  setDubForm((f) => ({
-                    ...f,
-                    match_video_duration: e.target.checked,
-                  }))
-                }
-              />
-              Khớp tổng thời lượng video gốc
-            </label>
-            <button
-              disabled={dubbing || editableSegments.length === 0}
-              onClick={startDubAudio}
-            >
-              {dubbing ? "Đang dựng âm thanh..." : "Tạo âm thanh lồng tiếng"}
-            </button>
-            {lastExport ? (
-              <a
-                className="download-link"
-                href={lastExport.url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Tải phụ đề: {lastExport.output_key}
-              </a>
-            ) : null}
-            {latestDubJob?.artifacts?.dub_output_key ? (
-              <a
-                className="download-link"
-                href={`${API_BASE}/jobs/${latestDubJob.id}/artifact/dubbed_audio`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Tải âm thanh: {latestDubJob.artifacts.dub_output_key}
-              </a>
-            ) : null}
-            {latestDubJob?.status === "done" && !latestDubJob?.artifacts?.dubbed_audio ? (
-              <p className="error">
-                Job lồng tiếng đã hoàn tất nhưng thiếu đường dẫn file âm thanh trong artifacts (`dubbed_audio`).
-              </p>
-            ) : null}
-            <button
-              type="button"
-              disabled={!latestDubAudioUrl}
-              onClick={downloadDubAudio}
-            >
-              Tải file âm thanh về máy
-            </button>
-          </section>
+          <ExportDubBlock
+            wizardStep={wizardStep}
+            exportForm={exportForm}
+            setExportForm={setExportForm}
+            exporting={exporting}
+            editableSegments={editableSegments}
+            exportSubtitle={exportSubtitle}
+            uploadingSrt={uploadingSrt}
+            srtUploadFile={srtUploadFile}
+            setSrtUploadFile={setSrtUploadFile}
+            selectedProjectId={selectedProjectId}
+            uploadExternalSrt={() => uploadExternalSrt(srtUploadFile, setDubForm)}
+            dubForm={dubForm}
+            setDubForm={setDubForm}
+            dubbing={dubbing}
+            startDubAudio={startDubAudio}
+            lastExport={lastExport}
+            latestDubJob={latestDubJob}
+            latestDubAudioUrl={latestDubAudioUrl}
+            downloadDubAudio={downloadDubAudio}
+          />
         </aside>
 
         <section className="content">

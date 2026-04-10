@@ -1,3 +1,5 @@
+import asyncio
+import json
 import logging
 import shutil
 import threading
@@ -6,10 +8,11 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from . import crud, models, schemas
-from .db import Base, engine, ensure_runtime_indexes, get_db
+from .db import Base, SessionLocal, engine, ensure_runtime_indexes, get_db
 from .downloader import run_url_ingest_job
 from .exporter import export_subtitle_file
 from .models import JobStatus
@@ -570,6 +573,58 @@ def _to_project_read(project: models.Project) -> schemas.ProjectRead:
         roi=schemas.ROI(x=project.roi_x, y=project.roi_y, w=project.roi_w, h=project.roi_h),
         prompt=project.prompt,
         glossary=project.glossary,
+    )
+
+
+def _job_to_job_read(job: models.PipelineJob) -> schemas.JobRead:
+    return schemas.JobRead.model_validate(job)
+
+
+def _build_project_snapshot(project_id: str) -> dict:
+    db = SessionLocal()
+    try:
+        project = crud.get_project(db, project_id)
+        if not project:
+            return {"type": "project_missing", "project_id": project_id}
+        jobs = crud.list_jobs(db, project_id)
+        return {
+            "type": "snapshot",
+            "project": _to_project_read(project).model_dump(),
+            "jobs": [_job_to_job_read(job).model_dump() for job in jobs],
+        }
+    finally:
+        db.close()
+
+
+@app.get("/projects/{project_id}/stream")
+async def stream_project(project_id: str):
+    initial = _build_project_snapshot(project_id)
+    if initial.get("type") == "project_missing":
+        raise HTTPException(status_code=404, detail="project_not_found")
+
+    async def _event_generator():
+        last_payload = ""
+        heartbeat_every = 15
+        tick = 0
+        while True:
+            snapshot = _build_project_snapshot(project_id)
+            payload = json.dumps(snapshot, ensure_ascii=False)
+            if payload != last_payload:
+                last_payload = payload
+                yield f"data: {payload}\n\n"
+            elif tick % heartbeat_every == 0:
+                yield ": keepalive\n\n"
+            tick += 1
+            await asyncio.sleep(2.0)
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

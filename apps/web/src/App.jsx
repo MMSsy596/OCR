@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { SubtitleEditorTable } from "./components/SubtitleEditorTable";
+import { WizardNav } from "./components/WizardNav";
+import { useProjectEventStream } from "./hooks/useProjectEventStream";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
@@ -186,6 +189,7 @@ export function App() {
   const [roiEditMode, setRoiEditMode] = useState(false);
   const [isShiftPressed, setIsShiftPressed] = useState(false);
   const [wizardStep, setWizardStep] = useState(1);
+  const [streamErrorCount, setStreamErrorCount] = useState(0);
 
   const stageRef = useRef(null);
   const segmentsRef = useRef([]);
@@ -194,6 +198,7 @@ export function App() {
   const isEditingSegmentsRef = useRef(false);
   const lastDubDoneRef = useRef("");
   const hadActiveJobRef = useRef(false);
+  const lastStreamSnapshotRef = useRef("");
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId) || null,
@@ -255,6 +260,45 @@ export function App() {
     () => latestPipelineJob?.artifacts?.stats || {},
     [latestPipelineJob],
   );
+  const streamState = useProjectEventStream(selectedProjectId, {
+    apiBase: API_BASE,
+    enabled: Boolean(selectedProjectId),
+    onSnapshot: (payload) => {
+      const serialized = JSON.stringify(payload);
+      if (serialized === lastStreamSnapshotRef.current) return;
+      lastStreamSnapshotRef.current = serialized;
+
+      const project = payload?.project || null;
+      const incomingJobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+      const hadRunningBefore = (jobsRef.current || []).some(
+        (job) => job?.status === "queued" || job?.status === "running",
+      );
+      const hasRunningNow = incomingJobs.some(
+        (job) => job?.status === "queued" || job?.status === "running",
+      );
+
+      if (project) {
+        setProjects((prev) => {
+          const exists = prev.some((item) => item.id === project.id);
+          if (!exists) return [...prev, project];
+          return prev.map((item) => (item.id === project.id ? project : item));
+        });
+      }
+      setJobs(incomingJobs);
+
+      if (
+        hadRunningBefore &&
+        !hasRunningNow &&
+        !isEditingSegmentsRef.current &&
+        selectedProjectId
+      ) {
+        loadProjectData(selectedProjectId, { includeSegments: true });
+      }
+    },
+    onError: () => {
+      setStreamErrorCount((count) => count + 1);
+    },
+  });
   const hasVideo = Boolean(selectedProject?.video_path);
   const hasSavedRoi = useMemo(
     () => hasVideo && hasValidRoi(selectedProject?.roi),
@@ -346,12 +390,16 @@ export function App() {
 
     const runPoll = async () => {
       if (stopped) return;
+      if (streamState === "open") {
+        scheduleNext(document.hidden ? 25000 : 15000);
+        return;
+      }
       pollTickRef.current += 1;
-      const hasActiveJob = (jobsRef.current || []).some(
+      const hasLiveJob = (jobsRef.current || []).some(
         (job) => job?.status === "queued" || job?.status === "running",
       );
       let includeSegments = false;
-      if (hasActiveJob) {
+      if (hasLiveJob) {
         hadActiveJobRef.current = true;
       } else if (!isEditingSegmentsRef.current) {
         includeSegments =
@@ -362,7 +410,7 @@ export function App() {
 
       const nextDelay = document.hidden
         ? 20000
-        : hasActiveJob
+        : hasLiveJob
           ? 5000
           : 15000;
       scheduleNext(nextDelay);
@@ -379,7 +427,7 @@ export function App() {
     if (selectedProject?.roi) {
       setRoiDraft(normalizeRoi(selectedProject.roi));
     }
-  }, [selectedProjectId]);
+  }, [selectedProjectId, streamState]);
 
   useEffect(() => {
     setWizardStep((current) => Math.min(current, maxUnlockedStep));
@@ -404,6 +452,7 @@ export function App() {
     setWizardStep(4);
     setMessage(`Đã tạo xong âm thanh: ${latestDubJob.artifacts.dub_output_key || "dub-output.wav"}`);
   }, [latestDubJob]);
+
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -1177,37 +1226,14 @@ export function App() {
         </div>
       </header>
 
-      <section className="wizard-nav card">
-        <div className="wizard-steps">
-          {wizardSteps.map((step) => (
-            <button
-              key={step.id}
-              type="button"
-              className={`wizard-step ${wizardStep === step.id ? "active" : ""}`}
-              onClick={() => goToStep(step.id)}
-            >
-              <span>{step.id}</span>
-              <strong>{step.title}</strong>
-            </button>
-          ))}
-        </div>
-        <div className="wizard-actions">
-          <button
-            type="button"
-            disabled={wizardStep <= 1}
-            onClick={() => setWizardStep((s) => Math.max(1, s - 1))}
-          >
-            Bước trước
-          </button>
-          <button
-            type="button"
-            disabled={!canGoNext}
-            onClick={() => setWizardStep((s) => Math.min(maxUnlockedStep, s + 1))}
-          >
-            Bước tiếp
-          </button>
-        </div>
-      </section>
+      <WizardNav
+        wizardSteps={wizardSteps}
+        wizardStep={wizardStep}
+        canGoNext={canGoNext}
+        maxUnlockedStep={maxUnlockedStep}
+        goToStep={goToStep}
+        setWizardStep={setWizardStep}
+      />
 
       {latestDubJob?.artifacts?.dubbed_audio ? (
         <section className="card" style={{ padding: 10, marginBottom: 12 }}>
@@ -1524,6 +1550,16 @@ export function App() {
                 </p>
                 <p>
                   <strong>Loại tác vụ:</strong> {(latestPipelineJob?.artifacts?.job_kind || "pipeline")}
+                </p>
+                <p>
+                  <strong>Realtime:</strong>{" "}
+                  {streamState === "open"
+                    ? "đang stream SSE"
+                    : streamState === "connecting"
+                      ? "đang kết nối SSE"
+                      : streamErrorCount > 0
+                        ? `fallback polling (${streamErrorCount} lần ngắt stream)`
+                        : "polling"}
                 </p>
                 <p>
                   <strong>Tiến độ:</strong> {latestPipelineJob?.progress ?? 0}%
@@ -1930,126 +1966,11 @@ export function App() {
             </div>
             <details>
               <summary>Mở bảng chỉnh sửa subtitle chi tiết</summary>
-              <div className="table-wrap">
-                <table>
-                <colgroup>
-                  <col className="col-id" />
-                  <col className="col-time" />
-                  <col className="col-time" />
-                  <col className="col-text" />
-                  <col className="col-text" />
-                  <col className="col-meta" />
-                  <col className="col-meta" />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Bắt đầu</th>
-                    <th>Kết thúc</th>
-                    <th>Gốc</th>
-                    <th>Bản dịch</th>
-                    <th>Nhân vật</th>
-                    <th>Giọng</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {editableSegments.length === 0 ? (
-                    <tr>
-                      <td colSpan={7}>Chưa có dữ liệu</td>
-                    </tr>
-                  ) : (
-                    editableSegments.map((s) => (
-                      <tr
-                        key={s.id}
-                        className={
-                          activeSegment?.id === s.id ? "active-row" : ""
-                        }
-                      >
-                        <td>{s.id}</td>
-                        <td>
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={s.start_sec}
-                            onChange={(e) =>
-                              updateEditableSegment(
-                                s.id,
-                                "start_sec",
-                                e.target.value,
-                              )
-                            }
-                          />
-                        </td>
-                        <td>
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={s.end_sec}
-                            onChange={(e) =>
-                              updateEditableSegment(
-                                s.id,
-                                "end_sec",
-                                e.target.value,
-                              )
-                            }
-                          />
-                        </td>
-                        <td>
-                          <textarea
-                            rows={2}
-                            value={s.raw_text}
-                            onChange={(e) =>
-                              updateEditableSegment(
-                                s.id,
-                                "raw_text",
-                                e.target.value,
-                              )
-                            }
-                          />
-                        </td>
-                        <td>
-                          <textarea
-                            rows={2}
-                            value={s.translated_text}
-                            onChange={(e) =>
-                              updateEditableSegment(
-                                s.id,
-                                "translated_text",
-                                e.target.value,
-                              )
-                            }
-                          />
-                        </td>
-                        <td>
-                          <input
-                            value={s.speaker}
-                            onChange={(e) =>
-                              updateEditableSegment(
-                                s.id,
-                                "speaker",
-                                e.target.value,
-                              )
-                            }
-                          />
-                        </td>
-                        <td>
-                          <input
-                            value={s.voice}
-                            onChange={(e) =>
-                              updateEditableSegment(
-                                s.id,
-                                "voice",
-                                e.target.value,
-                              )
-                            }
-                          />
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-                </table>
-              </div>
+              <SubtitleEditorTable
+                editableSegments={editableSegments}
+                activeSegment={activeSegment}
+                updateEditableSegment={updateEditableSegment}
+              />
             </details>
           </section>
         </section>

@@ -102,10 +102,7 @@ export function PipelineBlock({
             }
           />
         </label>
-        <button
-          disabled={retryingStuckJobs || loading}
-          onClick={retryStuckJobs}
-        >
+        <button disabled={retryingStuckJobs || loading} onClick={retryStuckJobs}>
           {retryingStuckJobs
             ? "Đang thử lại tác vụ trong hàng đợi..."
             : "Thử lại tác vụ trong hàng đợi cũ"}

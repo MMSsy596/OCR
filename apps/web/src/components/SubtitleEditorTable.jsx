@@ -72,7 +72,11 @@ export function SubtitleEditorTable({
                     rows={2}
                     value={s.translated_text}
                     onChange={(e) =>
-                      updateEditableSegment(s.id, "translated_text", e.target.value)
+                      updateEditableSegment(
+                        s.id,
+                        "translated_text",
+                        e.target.value,
+                      )
                     }
                   />
                 </td>

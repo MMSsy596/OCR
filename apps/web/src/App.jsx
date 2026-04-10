@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ExportDubBlock } from "./components/ExportDubBlock";
 import { PipelineBlock } from "./components/PipelineBlock";
 import { ProjectManagerBlock } from "./components/ProjectManagerBlock";
@@ -6,8 +6,11 @@ import { SubtitleEditorTable } from "./components/SubtitleEditorTable";
 import { VideoUploadBlock } from "./components/VideoUploadBlock";
 import { WizardNav } from "./components/WizardNav";
 import { useProjectActions } from "./hooks/useProjectActions";
+import { useProjectRealtime } from "./hooks/useProjectRealtime";
+import { useProjectWizard } from "./hooks/useProjectWizard";
+import { useRoiEditor } from "./hooks/useRoiEditor";
 import { useSubtitleActions } from "./hooks/useSubtitleActions";
-import { useProjectEventStream } from "./hooks/useProjectEventStream";
+import { useSubtitleEditor } from "./hooks/useSubtitleEditor";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
@@ -38,18 +41,6 @@ function hasValidRoi(roi) {
   if (!roi) return false;
   const normalized = normalizeRoi(roi);
   return normalized.w > 0.01 && normalized.h > 0.01;
-}
-
-function normalizeTextForMerge(text) {
-  return String(text || "")
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, "")
-    .replace(/[.,;:!?'"`~\-_=+*/\\|()[\]{}<>,。!?;:、]/g, "");
-}
-
-function cloneSegments(segments) {
-  return (segments || []).map((row) => ({ ...row }));
 }
 
 function formatEventTime(isoText) {
@@ -131,14 +122,9 @@ function composePromptFromPreset(presetKey, toneKey, extraRule) {
 }
 
 export function App() {
-  const MAX_HISTORY = 100;
   const [projects, setProjects] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
-  const [editableSegments, setEditableSegments] = useState([]);
-  const [undoStack, setUndoStack] = useState([]);
-  const [redoStack, setRedoStack] = useState([]);
   const [jobs, setJobs] = useState([]);
-  const [isEditingSegments, setIsEditingSegments] = useState(false);
   const [pipelineLoading, setPipelineLoading] = useState(false);
   const [lastExport, setLastExport] = useState(null);
   const [projectForm, setProjectForm] = useState({
@@ -178,22 +164,6 @@ export function App() {
   });
   const [message, setMessage] = useState("");
   const [apiStatus, setApiStatus] = useState("checking");
-  const [roiDraft, setRoiDraft] = useState({ x: 0.1, y: 0.75, w: 0.8, h: 0.2 });
-  const [dragState, setDragState] = useState(null);
-  const [currentVideoTime, setCurrentVideoTime] = useState(0);
-  const [roiEditMode, setRoiEditMode] = useState(false);
-  const [isShiftPressed, setIsShiftPressed] = useState(false);
-  const [wizardStep, setWizardStep] = useState(1);
-  const [streamErrorCount, setStreamErrorCount] = useState(0);
-
-  const stageRef = useRef(null);
-  const segmentsRef = useRef([]);
-  const pollTickRef = useRef(0);
-  const jobsRef = useRef([]);
-  const isEditingSegmentsRef = useRef(false);
-  const lastDubDoneRef = useRef("");
-  const hadActiveJobRef = useRef(false);
-  const lastStreamSnapshotRef = useRef("");
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId) || null,
@@ -202,26 +172,46 @@ export function App() {
   const videoSrc = selectedProjectId
     ? `${API_BASE}/projects/${selectedProjectId}/video`
     : "";
-  const activeSegment = useMemo(() => {
-    let left = 0;
-    let right = editableSegments.length - 1;
-    while (left <= right) {
-      const mid = Math.floor((left + right) / 2);
-      const seg = editableSegments[mid];
-      const start = Number(seg.start_sec);
-      const end = Number(seg.end_sec);
-      if (currentVideoTime < start) {
-        right = mid - 1;
-        continue;
-      }
-      if (currentVideoTime > end) {
-        left = mid + 1;
-        continue;
-      }
-      return seg;
-    }
-    return null;
-  }, [editableSegments, currentVideoTime]);
+
+  const {
+    editableSegments,
+    setEditableSegments,
+    undoStack,
+    setUndoStack,
+    redoStack,
+    setRedoStack,
+    isEditingSegments,
+    setIsEditingSegments,
+    currentVideoTime,
+    setCurrentVideoTime,
+    activeSegment,
+    resetHistory,
+    updateEditableSegment,
+    mergeAdjacentDuplicateSegments,
+    undoSegments,
+    redoSegments,
+  } = useSubtitleEditor({
+    maxHistory: 100,
+    setMessage,
+  });
+
+  const {
+    stageRef,
+    roiDraft,
+    setRoiDraft,
+    roiEditMode,
+    toggleRoiEditMode,
+    beginDraw,
+    beginMove,
+    beginResize,
+    onVideoTimeUpdate,
+  } = useRoiEditor({
+    normalizeRoi,
+    selectedProject,
+    setMessage,
+    setCurrentVideoTime,
+  });
+
   const latestPipelineJob = useMemo(
     () =>
       jobs.find((job) => (job?.artifacts?.job_kind || "pipeline") === "pipeline") ||
@@ -229,11 +219,7 @@ export function App() {
     [jobs],
   );
   const latestDubJob = useMemo(
-    () =>
-      jobs.find(
-        (job) =>
-          job?.artifacts?.job_kind === "dub",
-      ),
+    () => jobs.find((job) => job?.artifacts?.job_kind === "dub") || null,
     [jobs],
   );
   const latestDubAudioUrl = useMemo(
@@ -255,347 +241,18 @@ export function App() {
     () => latestPipelineJob?.artifacts?.stats || {},
     [latestPipelineJob],
   );
-  const streamState = useProjectEventStream(selectedProjectId, {
-    apiBase: API_BASE,
-    enabled: Boolean(selectedProjectId),
-    onSnapshot: (payload) => {
-      const serialized = JSON.stringify(payload);
-      if (serialized === lastStreamSnapshotRef.current) return;
-      lastStreamSnapshotRef.current = serialized;
-
-      const project = payload?.project || null;
-      const incomingJobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
-      const hadRunningBefore = (jobsRef.current || []).some(
-        (job) => job?.status === "queued" || job?.status === "running",
-      );
-      const hasRunningNow = incomingJobs.some(
-        (job) => job?.status === "queued" || job?.status === "running",
-      );
-
-      if (project) {
-        setProjects((prev) => {
-          const exists = prev.some((item) => item.id === project.id);
-          if (!exists) return [...prev, project];
-          return prev.map((item) => (item.id === project.id ? project : item));
-        });
-      }
-      setJobs(incomingJobs);
-
-      if (
-        hadRunningBefore &&
-        !hasRunningNow &&
-        !isEditingSegmentsRef.current &&
-        selectedProjectId
-      ) {
-        loadProjectData(selectedProjectId, { includeSegments: true });
-      }
-    },
-    onError: () => {
-      setStreamErrorCount((count) => count + 1);
-    },
-  });
-  const hasVideo = Boolean(selectedProject?.video_path);
-  const hasSavedRoi = useMemo(
-    () => hasVideo && hasValidRoi(selectedProject?.roi),
-    [hasVideo, selectedProject?.roi],
-  );
-  const hasOcrProgress = useMemo(() => {
-    if ((latestPipelineJob?.progress || 0) > 0) return true;
-    if (latestJobEvents.length > 0) return true;
-    if (Object.keys(latestJobStats || {}).length > 0) return true;
-    if (editableSegments.length > 0) return true;
-    return false;
-  }, [latestPipelineJob, latestJobEvents, latestJobStats, editableSegments]);
-  const hasDubActivity = useMemo(
-    () =>
-      jobs.some(
-        (job) =>
-          job?.artifacts?.job_kind === "dub" &&
-          (job?.status === "running" ||
-            job?.status === "done" ||
-            Boolean(job?.artifacts?.dubbed_audio) ||
-            Boolean(job?.artifacts?.dub_output_key)),
-      ),
-    [jobs],
-  );
-  const maxUnlockedStep = useMemo(() => {
-    if (!hasVideo) return 1;
-    if (!hasSavedRoi) return 2;
-    if (!hasOcrProgress && !hasDubActivity) return 3;
-    return 4;
-  }, [hasVideo, hasSavedRoi, hasOcrProgress, hasDubActivity]);
-  const canGoNext = wizardStep < maxUnlockedStep;
-  const statusLabel = (status) => {
-    if (status === "draft") return "nháp";
-    if (status === "processing") return "đang xử lý";
-    if (status === "ready") return "sẵn sàng";
-    if (status === "failed") return "lỗi";
-    return status || "";
-  };
-  const wizardSteps = [
-    { id: 1, title: "Video" },
-    { id: 2, title: "ROI" },
-    { id: 3, title: "OCR Log" },
-    { id: 4, title: "SRT/TTS" },
-  ];
-
-  function goToStep(stepId) {
-    if (stepId <= maxUnlockedStep) {
-      setWizardStep(stepId);
-      return;
-    }
-    if (stepId === 2) {
-      setMessage("Cần tải video trước khi sang bước ROI.");
-      return;
-    }
-    if (stepId === 3) {
-      setMessage("Cần có video và lưu ROI trước khi sang bước OCR Log.");
-      return;
-    }
-    if (stepId === 4) {
-      setMessage("Cần chạy OCR để có tiến trình trước khi sang bước SRT/TTS.");
-      return;
-    }
-  }
-
-  function pushUndoSnapshot(snapshot) {
-    setUndoStack((prev) => {
-      const next = [...prev, cloneSegments(snapshot)];
-      if (next.length > MAX_HISTORY) next.shift();
-      return next;
-    });
-    setRedoStack([]);
-  }
-
-  useEffect(() => {
-    loadProjectsSafe();
-  }, []);
-
-  useEffect(() => {
-    if (!selectedProjectId) return;
-    pollTickRef.current = 0;
-    loadProjectData(selectedProjectId, { includeSegments: true });
-    let stopped = false;
-    let timerId = null;
-
-    const scheduleNext = (ms) => {
-      if (stopped) return;
-      timerId = window.setTimeout(runPoll, ms);
-    };
-
-    const runPoll = async () => {
-      if (stopped) return;
-      if (streamState === "open") {
-        scheduleNext(document.hidden ? 25000 : 15000);
-        return;
-      }
-      pollTickRef.current += 1;
-      const hasLiveJob = (jobsRef.current || []).some(
-        (job) => job?.status === "queued" || job?.status === "running",
-      );
-      let includeSegments = false;
-      if (hasLiveJob) {
-        hadActiveJobRef.current = true;
-      } else if (!isEditingSegmentsRef.current) {
-        includeSegments =
-          hadActiveJobRef.current || pollTickRef.current % 6 === 0;
-        hadActiveJobRef.current = false;
-      }
-      await loadProjectData(selectedProjectId, { includeSegments });
-
-      const nextDelay = document.hidden
-        ? 20000
-        : hasLiveJob
-          ? 5000
-          : 15000;
-      scheduleNext(nextDelay);
-    };
-
-    scheduleNext(document.hidden ? 12000 : 5000);
-    return () => {
-      stopped = true;
-      if (timerId) window.clearTimeout(timerId);
-    };
-  }, [selectedProjectId]);
-
-  useEffect(() => {
-    if (selectedProject?.roi) {
-      setRoiDraft(normalizeRoi(selectedProject.roi));
-    }
-  }, [selectedProjectId, streamState]);
-
-  useEffect(() => {
-    setWizardStep((current) => Math.min(current, maxUnlockedStep));
-  }, [maxUnlockedStep]);
-
-  useEffect(() => {
-    segmentsRef.current = editableSegments;
-  }, [editableSegments]);
-
-  useEffect(() => {
-    jobsRef.current = jobs;
-  }, [jobs]);
-
-  useEffect(() => {
-    isEditingSegmentsRef.current = isEditingSegments;
-  }, [isEditingSegments]);
-
-  useEffect(() => {
-    if (!latestDubJob?.artifacts?.dubbed_audio) return;
-    if (lastDubDoneRef.current === latestDubJob.id) return;
-    lastDubDoneRef.current = latestDubJob.id;
-    setWizardStep(4);
-    setMessage(`Đã tạo xong âm thanh: ${latestDubJob.artifacts.dub_output_key || "dub-output.wav"}`);
-  }, [latestDubJob]);
-
-
-  useEffect(() => {
-    const onKeyDown = (event) => {
-      const hotkey = event.ctrlKey || event.metaKey;
-      if (!hotkey || event.altKey) return;
-
-      const key = event.key.toLowerCase();
-      const isUndo = key === "z" && !event.shiftKey;
-      const isRedo = key === "y" || (key === "z" && event.shiftKey);
-      if (!isUndo && !isRedo) return;
-
-      if (isUndo && undoStack.length === 0) return;
-      if (isRedo && redoStack.length === 0) return;
-
-      event.preventDefault();
-      if (isUndo) {
-        const current = cloneSegments(segmentsRef.current);
-        setUndoStack((prev) => {
-          if (!prev.length) return prev;
-          const previous = prev[prev.length - 1];
-          setRedoStack((rprev) => {
-            const next = [current, ...rprev];
-            return next.slice(0, MAX_HISTORY);
-          });
-          setEditableSegments(cloneSegments(previous));
-          setIsEditingSegments(true);
-          setMessage("Đã hoàn tác (Ctrl+Z).");
-          return prev.slice(0, -1);
-        });
-      } else {
-        const current = cloneSegments(segmentsRef.current);
-        setRedoStack((prev) => {
-          if (!prev.length) return prev;
-          const nextState = prev[0];
-          setUndoStack((uprev) => {
-            const next = [...uprev, current];
-            if (next.length > MAX_HISTORY) next.shift();
-            return next;
-          });
-          setEditableSegments(cloneSegments(nextState));
-          setIsEditingSegments(true);
-          setMessage("Đã làm lại (Ctrl+Y).");
-          return prev.slice(1);
-        });
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [undoStack, redoStack]);
-
-  useEffect(() => {
-    if (!dragState) return undefined;
-    const onMove = (event) => {
-      const pt = eventToPoint(event);
-      if (!pt) return;
-      const { mode, handle, start, base } = dragState;
-
-      if (mode === "draw") {
-        const x1 = Math.min(start.x, pt.x);
-        const y1 = Math.min(start.y, pt.y);
-        const x2 = Math.max(start.x, pt.x);
-        const y2 = Math.max(start.y, pt.y);
-        setRoiDraft(normalizeRoi({ x: x1, y: y1, w: x2 - x1, h: y2 - y1 }));
-        return;
-      }
-      if (mode === "move") {
-        const dx = pt.x - start.x;
-        const dy = pt.y - start.y;
-        setRoiDraft(
-          normalizeRoi({
-            x: base.x + dx,
-            y: base.y + dy,
-            w: base.w,
-            h: base.h,
-          }),
-        );
-        return;
-      }
-      if (mode === "resize") {
-        const dx = pt.x - start.x;
-        const dy = pt.y - start.y;
-        let next = { ...base };
-        if (handle === "nw")
-          next = {
-            x: base.x + dx,
-            y: base.y + dy,
-            w: base.w - dx,
-            h: base.h - dy,
-          };
-        if (handle === "ne")
-          next = { x: base.x, y: base.y + dy, w: base.w + dx, h: base.h - dy };
-        if (handle === "sw")
-          next = { x: base.x + dx, y: base.y, w: base.w - dx, h: base.h + dy };
-        if (handle === "se")
-          next = { x: base.x, y: base.y, w: base.w + dx, h: base.h + dy };
-        setRoiDraft(normalizeRoi(next));
-      }
-    };
-    const onUp = () => setDragState(null);
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, [dragState]);
-
-  useEffect(() => {
-    const onKeyDown = (event) => {
-      if (event.key === "Shift") setIsShiftPressed(true);
-    };
-    const onKeyUp = (event) => {
-      if (event.key === "Shift") setIsShiftPressed(false);
-    };
-    const onWindowBlur = () => setIsShiftPressed(false);
-
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("blur", onWindowBlur);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("blur", onWindowBlur);
-    };
-  }, []);
-
-  function eventToPoint(event) {
-    const stage = stageRef.current;
-    if (!stage) return null;
-    const rect = stage.getBoundingClientRect();
-    if (!rect.width || !rect.height) return null;
-    return {
-      x: clamp((event.clientX - rect.left) / rect.width, 0, 1),
-      y: clamp((event.clientY - rect.top) / rect.height, 0, 1),
-    };
-  }
 
   async function loadProjectsSafe() {
     try {
       const data = await jsonFetch(`${API_BASE}/projects`);
       setProjects(data);
       setApiStatus("online");
-      if (!selectedProjectId && data.length) setSelectedProjectId(data[0].id);
+      if (!selectedProjectId && data.length) {
+        setSelectedProjectId(data[0].id);
+      }
     } catch (err) {
       setApiStatus("offline");
-      setMessage(
-        `Không kết nối được API ${API_BASE}. Hãy chạy backend.`,
-      );
+      setMessage(`Không kết nối được API ${API_BASE}. Hãy chạy backend.`);
       console.error(err);
     }
   }
@@ -603,22 +260,57 @@ export function App() {
   async function loadProjectData(projectId, options = {}) {
     const includeSegments = options.includeSegments ?? true;
     try {
-      const [j, p] = await Promise.all([
+      const [incomingJobs, project] = await Promise.all([
         jsonFetch(`${API_BASE}/projects/${projectId}/jobs`),
         jsonFetch(`${API_BASE}/projects/${projectId}`),
       ]);
       if (includeSegments && !isEditingSegments) {
-        const s = await jsonFetch(`${API_BASE}/projects/${projectId}/segments`);
-        setEditableSegments(s.map((row) => ({ ...row })));
-        setUndoStack([]);
-        setRedoStack([]);
+        const segments = await jsonFetch(`${API_BASE}/projects/${projectId}/segments`);
+        setEditableSegments(segments.map((row) => ({ ...row })));
+        resetHistory();
       }
-      setJobs(j);
-      setProjects((prev) => prev.map((item) => (item.id === p.id ? p : item)));
+      setJobs(incomingJobs);
+      setProjects((prev) => prev.map((item) => (item.id === project.id ? project : item)));
     } catch {
-      // ignore poll errors
+      // Bỏ qua lỗi polling tạm thời để không làm gián đoạn UI
     }
   }
+
+  const {
+    wizardStep,
+    setWizardStep,
+    maxUnlockedStep,
+    canGoNext,
+    wizardSteps,
+    statusLabel,
+    goToStep,
+  } = useProjectWizard({
+    selectedProject,
+    latestPipelineJob,
+    latestJobEvents,
+    latestJobStats,
+    editableSegments,
+    jobs,
+    hasValidRoi,
+    setMessage,
+  });
+
+  const { streamState, streamErrorCount } = useProjectRealtime({
+    apiBase: API_BASE,
+    selectedProjectId,
+    latestDubJob,
+    jobs,
+    isEditingSegments,
+    loadProjectData,
+    setProjects,
+    setJobs,
+    setWizardStep,
+    setMessage,
+  });
+
+  useEffect(() => {
+    loadProjectsSafe();
+  }, []);
 
   const composeCurrentPrompt = () =>
     composePromptFromPreset(
@@ -626,6 +318,18 @@ export function App() {
       translationTone,
       translationExtraRule,
     );
+
+  function parseVoiceMap(input) {
+    return input
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .reduce((acc, line) => {
+        const [k, v] = line.split("=", 2);
+        if (k && v) acc[k.trim()] = v.trim();
+        return acc;
+      }, {});
+  }
 
   const {
     creating,
@@ -706,18 +410,6 @@ export function App() {
 
   const loading = pipelineLoading || projectLoading;
 
-  function parseVoiceMap(input) {
-    return input
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .reduce((acc, line) => {
-        const [k, v] = line.split("=", 2);
-        if (k && v) acc[k.trim()] = v.trim();
-        return acc;
-      }, {});
-  }
-
   async function startPipeline() {
     if (!selectedProjectId) {
       setMessage("Chọn dự án trước.");
@@ -727,18 +419,15 @@ export function App() {
     setMessage("");
     try {
       await syncPromptPresetForCurrentProjectIfEnabled(autoApplyPromptPreset);
-      await jsonFetch(
-        `${API_BASE}/projects/${selectedProjectId}/pipeline/start`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            gemini_api_key: pipelineForm.gemini_api_key || null,
-            voice_map: parseVoiceMap(pipelineForm.voiceMapText),
-            scan_interval_sec: Number(pipelineForm.scan_interval_sec) || 1.0,
-          }),
-        },
-      );
+      await jsonFetch(`${API_BASE}/projects/${selectedProjectId}/pipeline/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          gemini_api_key: pipelineForm.gemini_api_key || null,
+          voice_map: parseVoiceMap(pipelineForm.voiceMapText),
+          scan_interval_sec: Number(pipelineForm.scan_interval_sec) || 1.0,
+        }),
+      });
       setIsEditingSegments(false);
       await loadProjectData(selectedProjectId);
       setMessage("Đã đưa quy trình xử lý vào hàng đợi.");
@@ -748,104 +437,6 @@ export function App() {
     } finally {
       setPipelineLoading(false);
     }
-  }
-
-  function beginDraw(event) {
-    if (!roiEditMode || !selectedProject?.video_path || !event.shiftKey) return;
-    const start = eventToPoint(event);
-    if (!start) return;
-    setDragState({ mode: "draw", start, base: roiDraft, handle: null });
-  }
-
-  function beginMove(event) {
-    if (!roiEditMode) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const start = eventToPoint(event);
-    if (!start) return;
-    setDragState({ mode: "move", start, base: roiDraft, handle: null });
-  }
-
-  function beginResize(handle, event) {
-    if (!roiEditMode) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const start = eventToPoint(event);
-    if (!start) return;
-    setDragState({ mode: "resize", start, base: roiDraft, handle });
-  }
-
-  function onVideoTimeUpdate(event) {
-    setCurrentVideoTime(event.currentTarget.currentTime || 0);
-  }
-
-  function updateEditableSegment(id, field, value) {
-    pushUndoSnapshot(editableSegments);
-    setIsEditingSegments(true);
-    setEditableSegments((prev) =>
-      prev.map((row) =>
-        row.id === id
-          ? {
-              ...row,
-              [field]:
-                field === "start_sec" || field === "end_sec"
-                  ? Number(value)
-                  : value,
-            }
-          : row,
-      ),
-    );
-  }
-
-  function mergeAdjacentDuplicateSegments() {
-    if (!editableSegments.length) {
-      setMessage("Chưa có dữ liệu để gộp.");
-      return;
-    }
-    pushUndoSnapshot(editableSegments);
-    const ordered = [...editableSegments].sort(
-      (a, b) => Number(a.start_sec) - Number(b.start_sec),
-    );
-    const merged = [];
-    for (const seg of ordered) {
-      const current = { ...seg };
-      const prev = merged[merged.length - 1];
-      if (!prev) {
-        merged.push(current);
-        continue;
-      }
-      const prevRaw = normalizeTextForMerge(prev.raw_text);
-      const curRaw = normalizeTextForMerge(current.raw_text);
-      const prevTrans = normalizeTextForMerge(prev.translated_text);
-      const curTrans = normalizeTextForMerge(current.translated_text);
-      const isDuplicate =
-        (prevRaw && curRaw && prevRaw === curRaw) ||
-        (prevTrans && curTrans && prevTrans === curTrans);
-
-      if (isDuplicate) {
-        prev.end_sec = Math.max(Number(prev.end_sec), Number(current.end_sec));
-        if (
-          String(current.raw_text || "").length >
-          String(prev.raw_text || "").length
-        ) {
-          prev.raw_text = current.raw_text;
-        }
-        if (
-          String(current.translated_text || "").length >
-          String(prev.translated_text || "").length
-        ) {
-          prev.translated_text = current.translated_text;
-        }
-      } else {
-        merged.push(current);
-      }
-    }
-
-    setEditableSegments(merged);
-    setIsEditingSegments(true);
-    setMessage(
-      `Đã gộp dòng trùng kề nhau: ${editableSegments.length} -> ${merged.length} dòng.`,
-    );
   }
 
   return (
@@ -929,7 +520,7 @@ export function App() {
 
           <section className={`block ${wizardStep === 2 ? "" : "hidden-step"}`}>
             <h2>Bước 2: ROI</h2>
-            <button type="button" onClick={() => setRoiEditMode((v) => !v)}>
+            <button type="button" onClick={toggleRoiEditMode}>
               {roiEditMode ? "Tắt chỉnh ROI" : "Bật chỉnh ROI"}
             </button>
             <button
@@ -982,42 +573,10 @@ export function App() {
               >
                 {savingSegments ? "Đang lưu phụ đề..." : "Lưu phụ đề"}
               </button>
-              <button
-                disabled={undoStack.length === 0}
-                onClick={() => {
-                  const current = cloneSegments(segmentsRef.current);
-                  setUndoStack((prev) => {
-                    if (!prev.length) return prev;
-                    const previous = prev[prev.length - 1];
-                    setRedoStack((rprev) =>
-                      [current, ...rprev].slice(0, MAX_HISTORY),
-                    );
-                    setEditableSegments(cloneSegments(previous));
-                    setIsEditingSegments(true);
-                    return prev.slice(0, -1);
-                  });
-                }}
-              >
+              <button disabled={undoStack.length === 0} onClick={undoSegments}>
                 Hoàn tác (Ctrl+Z)
               </button>
-              <button
-                disabled={redoStack.length === 0}
-                onClick={() => {
-                  const current = cloneSegments(segmentsRef.current);
-                  setRedoStack((prev) => {
-                    if (!prev.length) return prev;
-                    const nextState = prev[0];
-                    setUndoStack((uprev) => {
-                      const next = [...uprev, current];
-                      if (next.length > MAX_HISTORY) next.shift();
-                      return next;
-                    });
-                    setEditableSegments(cloneSegments(nextState));
-                    setIsEditingSegments(true);
-                    return prev.slice(1);
-                  });
-                }}
-              >
+              <button disabled={redoStack.length === 0} onClick={redoSegments}>
                 Làm lại (Ctrl+Y)
               </button>
               <button
@@ -1086,7 +645,7 @@ export function App() {
               <>
                 <p className="hint">
                   {roiEditMode
-                    ? "Giữ Shift + kéo để tạo khung mới. Kéo khung/góc để chỉnh ngay."
+                    ? "Giữ Shift + kéo để tạo khung mới. Kéo khung hoặc góc để chỉnh ngay."
                     : "Tua video để kiểm tra phụ đề có nằm đúng ROI không."}
                 </p>
                 <div
@@ -1141,8 +700,8 @@ export function App() {
                   {activeSegment ? (
                     <>
                       <p>
-                        <strong>Đang hiển thị:</strong> #{activeSegment.id}{" "}
-                        ({Number(activeSegment.start_sec).toFixed(2)} -{" "}
+                        <strong>Đang hiển thị:</strong> #{activeSegment.id} (
+                        {Number(activeSegment.start_sec).toFixed(2)} -{" "}
                         {Number(activeSegment.end_sec).toFixed(2)})
                       </p>
                       <p>
@@ -1158,9 +717,7 @@ export function App() {
                 </div>
               </>
             ) : (
-              <p className="hint">
-                Tải video lên để bắt đầu xem trước.
-              </p>
+              <p className="hint">Tải video lên để bắt đầu xem trước.</p>
             )}
           </section>
 
@@ -1181,7 +738,9 @@ export function App() {
                 ))}
               </div>
             ) : (
-              <p className="hint">Chưa có log OCR. Hãy chạy pipeline để theo dõi tiến trình tách khung hình.</p>
+              <p className="hint">
+                Chưa có log OCR. Hãy chạy pipeline để theo dõi tiến trình tách khung hình.
+              </p>
             )}
           </section>
 
@@ -1206,6 +765,3 @@ export function App() {
     </div>
   );
 }
-
-
-

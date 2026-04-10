@@ -149,7 +149,7 @@ export function ExportDubBlock({
       {latestDubJob?.status === "done" && !latestDubJob?.artifacts?.dubbed_audio ? (
         <p className="error">
           Job lồng tiếng đã hoàn tất nhưng thiếu đường dẫn file âm thanh trong
-          artifacts (`dubbed_audio`).
+          `artifacts.dubbed_audio`.
         </p>
       ) : null}
       <button

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from sqlalchemy import desc, select
+from sqlalchemy import delete, desc, select
 from sqlalchemy.orm import Session
 
 from .models import PipelineJob, Project, ProjectStatus, SubtitleSegment
@@ -73,19 +73,23 @@ def set_project_status(db: Session, project: Project, status: ProjectStatus) -> 
 
 
 def replace_segments(db: Session, project_id: str, segments: list[dict]) -> None:
-    db.query(SubtitleSegment).filter(SubtitleSegment.project_id == project_id).delete()
-    for seg in segments:
-        db.add(
-            SubtitleSegment(
-                project_id=project_id,
-                start_sec=seg["start_sec"],
-                end_sec=seg["end_sec"],
-                raw_text=seg.get("raw_text", ""),
-                translated_text=seg.get("translated_text", ""),
-                speaker=seg.get("speaker", "narrator"),
-                voice=seg.get("voice", "female-soft"),
-                confidence=seg.get("confidence", 0.9),
-            )
+    db.execute(delete(SubtitleSegment).where(SubtitleSegment.project_id == project_id))
+    if segments:
+        db.bulk_insert_mappings(
+            SubtitleSegment,
+            [
+                {
+                    "project_id": project_id,
+                    "start_sec": seg["start_sec"],
+                    "end_sec": seg["end_sec"],
+                    "raw_text": seg.get("raw_text", ""),
+                    "translated_text": seg.get("translated_text", ""),
+                    "speaker": seg.get("speaker", "narrator"),
+                    "voice": seg.get("voice", "female-soft"),
+                    "confidence": seg.get("confidence", 0.9),
+                }
+                for seg in segments
+            ],
         )
     db.commit()
 

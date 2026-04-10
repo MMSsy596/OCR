@@ -1,3 +1,5 @@
+import ipaddress
+import socket
 import shutil
 import time
 from datetime import datetime, timezone
@@ -61,15 +63,32 @@ def _update_job(
     error_message: str = "",
     artifacts: dict | None = None,
 ) -> None:
+    now = time.monotonic()
+    prev_status = job.status
+    prev_progress = int(job.progress or 0)
+    prev_step = job.step or ""
+    force_flush = (
+        status != prev_status
+        or step != prev_step
+        or bool(error_message)
+        or int(progress) >= 100
+        or status in {JobStatus.done, JobStatus.failed}
+    )
     job.status = status
     job.progress = progress
     job.step = step
     job.error_message = error_message
     if artifacts is not None:
         job.artifacts = artifacts
+    last_flush = float(getattr(job, "_nanbao_last_flush_at", 0.0))
+    last_progress = int(getattr(job, "_nanbao_last_flush_progress", prev_progress))
+    if not force_flush and (now - last_flush) < 1.5 and abs(int(progress) - last_progress) < 3:
+        return
     db.add(job)
     db.commit()
     db.refresh(job)
+    job._nanbao_last_flush_at = now
+    job._nanbao_last_flush_progress = int(progress)
 
 
 def _detect_platform(url_text: str) -> tuple[str, str]:
@@ -121,6 +140,38 @@ def _sanitize_stem(raw: str, fallback: str = "source") -> str:
     safe = "".join(ch if (ch.isalnum() or ch in {"-", "_", "."}) else "_" for ch in (raw or ""))
     safe = safe.strip("._")[:96]
     return safe or fallback
+
+
+def _is_public_host(host: str) -> bool:
+    host = (host or "").strip().lower()
+    if not host or host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".local"):
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+        return ip.is_global
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return False
+    resolved = []
+    for info in infos:
+        raw_ip = info[4][0]
+        try:
+            resolved.append(ipaddress.ip_address(raw_ip))
+        except ValueError:
+            return False
+    return bool(resolved) and all(ip.is_global for ip in resolved)
+
+
+def _validate_source_url(source_url: str) -> str:
+    parsed = parse.urlparse((source_url or "").strip())
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("unsupported_url_scheme")
+    if not _is_public_host(parsed.hostname or ""):
+        raise ValueError("blocked_private_or_invalid_host")
+    return parsed.geturl()
 
 
 def _download_direct(
@@ -307,6 +358,7 @@ def run_url_ingest_job(
 ) -> dict[str, Any]:
     db = SessionLocal()
     try:
+        source_url = _validate_source_url(source_url)
         job = db.get(PipelineJob, job_id)
         if not job:
             return {"ok": False, "error": "job_not_found"}

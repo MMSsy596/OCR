@@ -1,4 +1,6 @@
+import logging
 import shutil
+import threading
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
@@ -7,7 +9,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from . import crud, models, schemas
-from .db import Base, engine, get_db
+from .db import Base, engine, ensure_runtime_indexes, get_db
 from .downloader import run_url_ingest_job
 from .exporter import export_subtitle_file
 from .models import JobStatus
@@ -20,6 +22,7 @@ settings = get_settings()
 settings.storage_path.mkdir(parents=True, exist_ok=True)
 web_dist_dir = Path(__file__).resolve().parents[1] / "web_dist"
 web_index_file = web_dist_dir / "index.html"
+logger = logging.getLogger("nanbao.ocr.api")
 
 app = FastAPI(title=settings.app_name)
 app.add_middleware(
@@ -34,6 +37,7 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup() -> None:
     Base.metadata.create_all(bind=engine)
+    ensure_runtime_indexes()
     settings.storage_path.mkdir(parents=True, exist_ok=True)
 
 
@@ -52,6 +56,34 @@ def _enqueue_pipeline_job(job_id: str, payload: schemas.PipelineStartRequest) ->
         scan_interval_sec=payload.scan_interval_sec,
         job_id=job_id,
     )
+
+
+def _run_job_in_background(label: str, target, *args, **kwargs) -> None:
+    def _runner() -> None:
+        try:
+            target(*args, **kwargs)
+        except Exception:
+            logger.exception("Background fallback job failed: %s", label)
+
+    threading.Thread(target=_runner, name=f"nanbao-{label}", daemon=True).start()
+
+
+def _resolve_in_dir(base_dir: Path, relative_name: str) -> Path:
+    target = (base_dir / relative_name).resolve()
+    try:
+        target.relative_to(base_dir.resolve())
+    except ValueError as ex:
+        raise HTTPException(status_code=400, detail="invalid_path") from ex
+    return target
+
+
+def _resolve_storage_artifact(path_text: str) -> Path:
+    artifact_path = Path(path_text).resolve()
+    try:
+        artifact_path.relative_to(settings.storage_path.resolve())
+    except ValueError as ex:
+        raise HTTPException(status_code=400, detail="artifact_outside_storage") from ex
+    return artifact_path
 
 
 def _enqueue_dub_job(job_id: str, payload: schemas.DubStartRequest) -> None:
@@ -213,7 +245,9 @@ def start_url_ingest(project_id: str, payload: schemas.UrlIngestStartRequest, db
     try:
         _enqueue_url_ingest_job(job.id, payload)
     except Exception:
-        run_url_ingest_job(
+        _run_job_in_background(
+            f"url-ingest-{job.id}",
+            run_url_ingest_job,
             job.id,
             source_url=payload.source_url,
             auto_start_pipeline=payload.auto_start_pipeline,
@@ -282,8 +316,9 @@ def start_pipeline(project_id: str, payload: schemas.PipelineStartRequest, db: S
     try:
         _enqueue_pipeline_job(job.id, payload)
     except Exception:
-        # Fallback local mode when Redis/worker is unavailable.
-        run_pipeline(
+        _run_job_in_background(
+            f"pipeline-{job.id}",
+            run_pipeline,
             job.id,
             gemini_api_key=payload.gemini_api_key,
             voice_map=payload.voice_map,
@@ -311,7 +346,9 @@ def start_dub(project_id: str, payload: schemas.DubStartRequest, db: Session = D
     try:
         _enqueue_dub_job(job.id, payload)
     except Exception:
-        run_dub_job(
+        _run_job_in_background(
+            f"dub-{job.id}",
+            run_dub_job,
             job.id,
             srt_key=payload.srt_key,
             output_format=payload.output_format,
@@ -377,7 +414,7 @@ def export_project(project_id: str, payload: schemas.ExportRequest, db: Session 
 
     project_dir = Path(project.video_path).parent
     output_key = f"manual.{mode}.{fmt}"
-    output_path = project_dir / output_key
+    output_path = _resolve_in_dir(project_dir, output_key)
 
     export_subtitle_file(
         segments=[{"start_sec": s.start_sec, "end_sec": s.end_sec, "raw_text": s.raw_text, "translated_text": s.translated_text} for s in segments],
@@ -400,7 +437,7 @@ def download_project_export(project_id: str, output_key: str, db: Session = Depe
     if not project.video_path:
         raise HTTPException(status_code=404, detail="video_not_found")
     project_dir = Path(project.video_path).parent
-    file_path = project_dir / output_key
+    file_path = _resolve_in_dir(project_dir, output_key)
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="export_not_found")
     return FileResponse(path=file_path, filename=file_path.name)
@@ -516,7 +553,7 @@ def download_artifact(job_id: str, artifact_key: str, db: Session = Depends(get_
     artifact = job.artifacts.get(artifact_key)
     if not artifact:
         raise HTTPException(status_code=404, detail="artifact_not_found")
-    artifact_path = Path(artifact)
+    artifact_path = _resolve_storage_artifact(str(artifact))
     if not artifact_path.exists():
         raise HTTPException(status_code=404, detail="artifact_missing")
     return FileResponse(path=artifact_path, filename=artifact_path.name)

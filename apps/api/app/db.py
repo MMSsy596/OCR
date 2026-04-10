@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from .settings import get_settings
@@ -19,3 +19,14 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def ensure_runtime_indexes() -> None:
+    statements = [
+        "CREATE INDEX IF NOT EXISTS ix_subtitle_segments_project_start ON subtitle_segments (project_id, start_sec)",
+        "CREATE INDEX IF NOT EXISTS ix_pipeline_jobs_project_created ON pipeline_jobs (project_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_projects_created_at ON projects (created_at)",
+    ]
+    with engine.begin() as conn:
+        for stmt in statements:
+            conn.execute(text(stmt))

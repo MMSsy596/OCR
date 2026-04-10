@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import threading
+import time
 from queue import Empty, Queue
 from pathlib import Path
 from typing import Any, Callable
@@ -22,15 +23,32 @@ logger = logging.getLogger("nanbao.ocr.pipeline")
 
 
 def _update_job(db: Session, job: PipelineJob, status: JobStatus, progress: int, step: str, error_message: str = "", artifacts: dict | None = None) -> None:
+    now = time.monotonic()
+    prev_status = job.status
+    prev_progress = int(job.progress or 0)
+    prev_step = job.step or ""
+    force_flush = (
+        status != prev_status
+        or step != prev_step
+        or bool(error_message)
+        or int(progress) >= 100
+        or status in {JobStatus.done, JobStatus.failed}
+    )
     job.status = status
     job.progress = progress
     job.step = step
     job.error_message = error_message
     if artifacts is not None:
         job.artifacts = artifacts
+    last_flush = float(getattr(job, "_nanbao_last_flush_at", 0.0))
+    last_progress = int(getattr(job, "_nanbao_last_flush_progress", prev_progress))
+    if not force_flush and (now - last_flush) < 1.5 and abs(int(progress) - last_progress) < 3:
+        return
     db.add(job)
     db.commit()
     db.refresh(job)
+    job._nanbao_last_flush_at = now
+    job._nanbao_last_flush_progress = int(progress)
 
 
 def _utc_now_iso() -> str:

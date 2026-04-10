@@ -193,6 +193,7 @@ export function App() {
   const jobsRef = useRef([]);
   const isEditingSegmentsRef = useRef(false);
   const lastDubDoneRef = useRef("");
+  const hadActiveJobRef = useRef(false);
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId) || null,
@@ -202,11 +203,24 @@ export function App() {
     ? `${API_BASE}/projects/${selectedProjectId}/video`
     : "";
   const activeSegment = useMemo(() => {
-    return editableSegments.find(
-      (seg) =>
-        currentVideoTime >= Number(seg.start_sec) &&
-        currentVideoTime <= Number(seg.end_sec),
-    );
+    let left = 0;
+    let right = editableSegments.length - 1;
+    while (left <= right) {
+      const mid = Math.floor((left + right) / 2);
+      const seg = editableSegments[mid];
+      const start = Number(seg.start_sec);
+      const end = Number(seg.end_sec);
+      if (currentVideoTime < start) {
+        right = mid - 1;
+        continue;
+      }
+      if (currentVideoTime > end) {
+        left = mid + 1;
+        continue;
+      }
+      return seg;
+    }
+    return null;
   }, [editableSegments, currentVideoTime]);
   const latestPipelineJob = useMemo(
     () =>
@@ -336,9 +350,14 @@ export function App() {
       const hasActiveJob = (jobsRef.current || []).some(
         (job) => job?.status === "queued" || job?.status === "running",
       );
-      const includeSegments =
-        !isEditingSegmentsRef.current &&
-        pollTickRef.current % (hasActiveJob ? 8 : 4) === 0;
+      let includeSegments = false;
+      if (hasActiveJob) {
+        hadActiveJobRef.current = true;
+      } else if (!isEditingSegmentsRef.current) {
+        includeSegments =
+          hadActiveJobRef.current || pollTickRef.current % 6 === 0;
+        hadActiveJobRef.current = false;
+      }
       await loadProjectData(selectedProjectId, { includeSegments });
 
       const nextDelay = document.hidden

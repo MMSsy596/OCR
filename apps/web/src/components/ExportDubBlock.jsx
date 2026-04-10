@@ -19,6 +19,9 @@ export function ExportDubBlock({
   latestDubAudioUrl,
   downloadDubAudio,
 }) {
+  const safeDubAudioUrl = latestDubAudioUrl || "#";
+  const safeExportUrl = lastExport?.url || "#";
+
   return (
     <section className={`block ${wizardStep === 4 ? "" : "hidden-step"}`}>
       <h2>Bước 4: Xuất SRT và TTS</h2>
@@ -129,7 +132,7 @@ export function ExportDubBlock({
       {lastExport ? (
         <a
           className="download-link"
-          href={lastExport.url}
+          href={safeExportUrl}
           target="_blank"
           rel="noreferrer"
         >
@@ -139,7 +142,7 @@ export function ExportDubBlock({
       {latestDubJob?.artifacts?.dub_output_key ? (
         <a
           className="download-link"
-          href={latestDubAudioUrl}
+          href={safeDubAudioUrl}
           target="_blank"
           rel="noreferrer"
         >

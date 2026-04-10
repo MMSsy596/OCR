@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { appendApiToken } from "../lib/api";
 
 export function useProjectEventStream(projectId, options = {}) {
   const { apiBase, enabled = true, onSnapshot, onError } = options;
@@ -23,7 +24,7 @@ export function useProjectEventStream(projectId, options = {}) {
     try {
       setStreamState("connecting");
       eventSource = new EventSource(
-        `${apiBase}/projects/${projectId}/stream`,
+        appendApiToken(`${apiBase}/projects/${projectId}/stream`),
       );
     } catch (error) {
       setStreamState("error");

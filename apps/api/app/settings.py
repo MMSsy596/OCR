@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     gemini_api_keys: str = ""
     default_source_lang: str = "zh"
     default_target_lang: str = "vi"
+    api_token: str = ""
+    job_inline_event_limit: int = 80
+    job_inline_stats_limit: int = 8
+    ocr_profile: str = "balanced"
+    ocr_long_video_threshold_samples: int = 1200
+    tts_max_parallel_workers: int = 3
 
     @property
     def resolved_database_url(self) -> str:

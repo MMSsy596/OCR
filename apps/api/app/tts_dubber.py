@@ -1,17 +1,20 @@
 import asyncio
+import hashlib
 import re
 import shutil
 import subprocess
 import time
 import wave
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy.orm import Session
 
 from .db import SessionLocal
+from .job_state import persist_snapshot, prepare_job_artifacts, push_event, set_stat
 from .models import JobStatus, PipelineJob, Project, ProjectStatus
+from .settings import get_settings
 
 
 TIMESTAMP_RE = re.compile(
@@ -57,42 +60,13 @@ def _update_job(
     last_progress = int(getattr(job, "_nanbao_last_flush_progress", prev_progress))
     if not force_flush and (now - last_flush) < 1.5 and abs(int(progress) - last_progress) < 3:
         return
+    if artifacts is not None:
+        persist_snapshot(job, artifacts)
     db.add(job)
     db.commit()
     db.refresh(job)
     job._nanbao_last_flush_at = now
     job._nanbao_last_flush_progress = int(progress)
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _job_artifacts(job: PipelineJob) -> dict:
-    base = job.artifacts if isinstance(job.artifacts, dict) else {}
-    base.setdefault("events", [])
-    base.setdefault("stats", {})
-    return base
-
-
-def _push_event(artifacts: dict, phase: str, message: str, progress: int, level: str = "info") -> None:
-    events = artifacts.setdefault("events", [])
-    events.append(
-        {
-            "time": _utc_now_iso(),
-            "phase": phase,
-            "level": level,
-            "progress": int(progress),
-            "message": message,
-        }
-    )
-    if len(events) > 400:
-        artifacts["events"] = events[-400:]
-
-
-def _set_stat(artifacts: dict, phase: str, payload: dict) -> None:
-    stats = artifacts.setdefault("stats", {})
-    stats[phase] = payload
 
 
 def _parse_timestamp(ts: str) -> float:
@@ -340,6 +314,85 @@ def _resolve_srt_path(project_dir: Path, preferred_key: str) -> Path | None:
     return None
 
 
+def _make_tts_cache_id(text: str, voice: str, rate: str, volume: str, pitch: str) -> str:
+    raw = "\n".join([text, voice, rate, volume, pitch]).encode("utf-8", errors="ignore")
+    return hashlib.sha1(raw).hexdigest()[:20]
+
+
+def _render_tts_variant(
+    *,
+    text: str,
+    voice: str,
+    rate: str,
+    volume: str,
+    pitch: str,
+    cache_dir: Path,
+    gtts_lang: str,
+) -> tuple[Path, str]:
+    cache_id = _make_tts_cache_id(text, voice, rate, volume, pitch)
+    seg_wav = cache_dir / f"{cache_id}.wav"
+    if seg_wav.exists():
+        return seg_wav, "cache_existing"
+
+    raw_mp3 = cache_dir / f"{cache_id}.edge.mp3"
+    gtts_mp3 = cache_dir / f"{cache_id}.gtts.mp3"
+    try:
+        asyncio.run(
+            _save_edge_tts(
+                text=text,
+                output_path=raw_mp3,
+                voice=voice,
+                rate=rate,
+                volume=volume,
+                pitch=pitch,
+            )
+        )
+        _run_cmd(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(raw_mp3),
+                "-ac",
+                "1",
+                "-ar",
+                "24000",
+                "-sample_fmt",
+                "s16",
+                str(seg_wav),
+            ]
+        )
+        return seg_wav, "edge"
+    except Exception as edge_ex:
+        try:
+            _save_gtts_mp3(text, gtts_mp3, gtts_lang)
+            _run_cmd(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(gtts_mp3),
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "24000",
+                    "-sample_fmt",
+                    "s16",
+                    str(seg_wav),
+                ]
+            )
+            return seg_wav, "gtts"
+        except Exception as gtts_ex:
+            try:
+                _save_pyttsx3_wav(text, seg_wav, rate)
+                return seg_wav, "pyttsx3"
+            except Exception as py_ex:
+                raise RuntimeError(
+                    "tts_failed_all_engines: "
+                    f"edge={str(edge_ex)[:120]} | gtts={str(gtts_ex)[:120]} | pyttsx3={str(py_ex)[:120]}"
+                ) from py_ex
+
+
 def run_dub_job(
     job_id: str,
     srt_key: str = "manual.translated.srt",
@@ -351,6 +404,7 @@ def run_dub_job(
     match_video_duration: bool = True,
 ) -> dict:
     db = SessionLocal()
+    tmp_dir: Path | None = None
     try:
         job = db.get(PipelineJob, job_id)
         if not job:
@@ -366,8 +420,9 @@ def run_dub_job(
         project.status = ProjectStatus.processing
         db.add(project)
         db.commit()
-        artifacts = _job_artifacts(job)
-        _set_stat(
+
+        artifacts = prepare_job_artifacts(job)
+        set_stat(
             artifacts,
             "dub",
             {
@@ -379,24 +434,25 @@ def run_dub_job(
                 "match_video_duration": bool(match_video_duration),
             },
         )
-        _push_event(artifacts, "dub", "Bắt đầu job lồng tiếng từ SRT.", 1)
+        push_event(job, artifacts, "dub", "B?t ??u job l?ng ti?ng t? SRT.", 1, logger_name="tts")
         _update_job(db, job, JobStatus.running, 1, "init", artifacts=artifacts)
 
         project_dir = Path(project.video_path).parent
         srt_path = _resolve_srt_path(project_dir, srt_key)
         if not srt_path:
-            _push_event(artifacts, "dub", f"Không tìm thấy SRT: {srt_key}", 1, level="error")
+            push_event(job, artifacts, "dub", f"Kh?ng t?m th?y SRT: {srt_key}", 1, level="error", logger_name="tts")
             _update_job(db, job, JobStatus.failed, 0, "error", "srt_not_found", artifacts=artifacts)
             return {"ok": False, "error": "srt_not_found"}
 
-        _push_event(artifacts, "parse_srt", f"Đang parse SRT: {srt_path.name}", 5)
+        push_event(job, artifacts, "parse_srt", f"?ang parse SRT: {srt_path.name}", 5, logger_name="tts")
         _update_job(db, job, JobStatus.running, 5, "parse_srt", artifacts=artifacts)
         cues = _parse_srt(srt_path)
         if not cues:
-            _push_event(artifacts, "parse_srt", "SRT rỗng hoặc không parse được cue.", 5, level="error")
+            push_event(job, artifacts, "parse_srt", "SRT r?ng ho?c kh?ng parse ???c cue.", 5, level="error", logger_name="tts")
             _update_job(db, job, JobStatus.failed, 5, "error", "srt_empty", artifacts=artifacts)
             return {"ok": False, "error": "srt_empty"}
-        _set_stat(
+
+        set_stat(
             artifacts,
             "parse_srt",
             {
@@ -406,11 +462,11 @@ def run_dub_job(
                 "last_end_sec": cues[-1].end_sec,
             },
         )
-        _push_event(artifacts, "parse_srt", f"Parse xong {len(cues)} cue.", 8)
+        push_event(job, artifacts, "parse_srt", f"Parse xong {len(cues)} cue.", 8, logger_name="tts")
 
         fmt = (output_format or "wav").lower().strip()
         if fmt not in {"wav", "mp3"}:
-            _push_event(artifacts, "dub", f"Output format không hợp lệ: {output_format}", 8, level="error")
+            push_event(job, artifacts, "dub", f"Output format kh?ng h?p l?: {output_format}", 8, level="error", logger_name="tts")
             _update_job(db, job, JobStatus.failed, 5, "error", "invalid_output_format", artifacts=artifacts)
             return {"ok": False, "error": "invalid_output_format"}
 
@@ -418,105 +474,111 @@ def run_dub_job(
         if tmp_dir.exists():
             shutil.rmtree(tmp_dir, ignore_errors=True)
         tmp_dir.mkdir(parents=True, exist_ok=True)
+        cache_dir = tmp_dir / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
 
-        _push_event(artifacts, "synthesize_tts", "Đang synth TTS từng cue...", 10)
-        _update_job(db, job, JobStatus.running, 10, "synthesize_tts", artifacts=artifacts)
-        cache: dict[tuple[str, str, str, str, str], Path] = {}
-        rendered_wavs: list[tuple[SrtCue, Path]] = []
         total = len(cues)
-        cache_hit = 0
-        cache_miss = 0
-        edge_ok = 0
-        edge_failed = 0
-        pyttsx3_ok = 0
-        pyttsx3_failed = 0
-        gtts_ok = 0
-        gtts_failed = 0
         gtts_lang = _map_gtts_lang(project.target_lang, voice)
-        fit_applied = 0
-        fit_total_ms_saved = 0.0
-        fit_max_speed = 1.0
-        for idx, cue in enumerate(cues, start=1):
+        workers = max(1, min(int(get_settings().tts_max_parallel_workers or 3), 6))
+
+        cue_plans: list[tuple[SrtCue, float, tuple[str, str, str, str, str]]] = []
+        unique_keys: dict[tuple[str, str, str, str, str], None] = {}
+        for cue in cues:
             slot_sec = max(0.05, cue.end_sec - cue.start_sec)
             dynamic_rate = _adaptive_rate(cue.text, slot_sec, rate)
             cache_key = (cue.text, voice, dynamic_rate, volume, pitch)
+            cue_plans.append((cue, slot_sec, cache_key))
+            unique_keys.setdefault(cache_key, None)
 
-            if cache_key in cache:
-                seg_wav = cache[cache_key]
-                cache_hit += 1
-            else:
-                cache_miss += 1
-                raw_mp3 = tmp_dir / f"seg_{idx:06d}.mp3"
-                gtts_mp3 = tmp_dir / f"seg_{idx:06d}.gtts.mp3"
-                seg_wav = tmp_dir / f"seg_{idx:06d}.wav"
-                try:
-                    asyncio.run(
-                        _save_edge_tts(
-                            text=cue.text,
-                            output_path=raw_mp3,
-                            voice=voice,
-                            rate=dynamic_rate,
-                            volume=volume,
-                            pitch=pitch,
-                        )
-                    )
-                    _run_cmd(
-                        [
-                            "ffmpeg",
-                            "-y",
-                            "-i",
-                            str(raw_mp3),
-                            "-ac",
-                            "1",
-                            "-ar",
-                            "24000",
-                            "-sample_fmt",
-                            "s16",
-                            str(seg_wav),
-                        ]
-                    )
+        set_stat(
+            artifacts,
+            "synthesize_tts",
+            {
+                "total_cues": total,
+                "unique_tts_variants": len(unique_keys),
+                "parallel_workers": workers,
+                "gtts_lang": gtts_lang,
+            },
+        )
+        push_event(
+            job,
+            artifacts,
+            "synthesize_tts",
+            f"?ang synth {len(unique_keys)} bi?n th? TTS cho {total} cue b?ng {workers} worker.",
+            10,
+            logger_name="tts",
+        )
+        _update_job(db, job, JobStatus.running, 10, "synthesize_tts", artifacts=artifacts)
+
+        render_results: dict[tuple[str, str, str, str, str], tuple[Path, str]] = {}
+        edge_ok = 0
+        gtts_ok = 0
+        pyttsx3_ok = 0
+        render_done = 0
+        unique_total = max(1, len(unique_keys))
+
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="nanbao-tts") as executor:
+            future_map = {
+                executor.submit(
+                    _render_tts_variant,
+                    text=cache_key[0],
+                    voice=cache_key[1],
+                    rate=cache_key[2],
+                    volume=cache_key[3],
+                    pitch=cache_key[4],
+                    cache_dir=cache_dir,
+                    gtts_lang=gtts_lang,
+                ): cache_key
+                for cache_key in unique_keys.keys()
+            }
+            for future in as_completed(future_map):
+                cache_key = future_map[future]
+                wav_path, engine_name = future.result()
+                render_results[cache_key] = (wav_path, engine_name)
+                render_done += 1
+                if engine_name == "edge":
                     edge_ok += 1
-                except Exception as edge_ex:
-                    edge_failed += 1
-                    _push_event(
+                elif engine_name == "gtts":
+                    gtts_ok += 1
+                elif engine_name == "pyttsx3":
+                    pyttsx3_ok += 1
+
+                if render_done == unique_total or render_done % max(1, unique_total // 6) == 0:
+                    progress = 10 + int((render_done / unique_total) * 25)
+                    set_stat(
                         artifacts,
                         "synthesize_tts",
-                        f"Edge-TTS loi cue {idx}, fallback gTTS({gtts_lang})/pyttsx3: {str(edge_ex)[:120]}",
-                        min(80, 10 + int((idx / total) * 70)),
-                        level="warning",
+                        {
+                            "total_cues": total,
+                            "unique_tts_variants": unique_total,
+                            "rendered_variants": render_done,
+                            "parallel_workers": workers,
+                            "edge_ok": edge_ok,
+                            "gtts_ok": gtts_ok,
+                            "pyttsx3_ok": pyttsx3_ok,
+                            "gtts_lang": gtts_lang,
+                            "percent_in_phase": round((render_done / unique_total) * 100, 1),
+                        },
                     )
-                    try:
-                        _save_gtts_mp3(cue.text, gtts_mp3, gtts_lang)
-                        _run_cmd(
-                            [
-                                "ffmpeg",
-                                "-y",
-                                "-i",
-                                str(gtts_mp3),
-                                "-ac",
-                                "1",
-                                "-ar",
-                                "24000",
-                                "-sample_fmt",
-                                "s16",
-                                str(seg_wav),
-                            ]
-                        )
-                        gtts_ok += 1
-                    except Exception as gtts_ex:
-                        gtts_failed += 1
-                        try:
-                            _save_pyttsx3_wav(cue.text, seg_wav, dynamic_rate)
-                            pyttsx3_ok += 1
-                        except Exception as py_ex:
-                            pyttsx3_failed += 1
-                            raise RuntimeError(
-                                "tts_failed_all_engines: "
-                                f"edge={str(edge_ex)[:120]} | gtts={str(gtts_ex)[:120]} | pyttsx3={str(py_ex)[:120]}"
-                            ) from py_ex
-                cache[cache_key] = seg_wav
+                    push_event(
+                        job,
+                        artifacts,
+                        "synthesize_tts",
+                        f"?? render {render_done}/{unique_total} bi?n th? TTS.",
+                        progress,
+                        logger_name="tts",
+                    )
+                    _update_job(db, job, JobStatus.running, progress, "synthesize_tts", artifacts=artifacts)
 
-            # Auto-fit by duration: if segment exceeds slot, speed up with atempo chain.
+        rendered_wavs: list[tuple[SrtCue, Path]] = []
+        cache_hit = max(0, total - len(unique_keys))
+        cache_miss = len(unique_keys)
+        fit_applied = 0
+        fit_total_ms_saved = 0.0
+        fit_max_speed = 1.0
+
+        for idx, (cue, slot_sec, cache_key) in enumerate(cue_plans, start=1):
+            seg_wav, _engine_name = render_results[cache_key]
             fitted_wav = tmp_dir / f"seg_{idx:06d}.fit.wav"
             fit_used, before_sec, after_sec = _fit_wav_to_slot(seg_wav, fitted_wav, slot_sec)
             if fit_used:
@@ -524,33 +586,34 @@ def run_dub_job(
                 fit_total_ms_saved += max(0.0, (before_sec - after_sec) * 1000.0)
                 if slot_sec > 0:
                     fit_max_speed = max(fit_max_speed, before_sec / slot_sec)
-                _push_event(
+                push_event(
+                    job,
                     artifacts,
                     "auto_fit",
                     f"Cue {idx}: auto-fit {before_sec:.2f}s -> {after_sec:.2f}s (slot {slot_sec:.2f}s).",
-                    min(80, 10 + int((idx / total) * 70)),
+                    min(80, 35 + int((idx / total) * 45)),
+                    logger_name="tts",
                 )
                 rendered_wavs.append((cue, fitted_wav))
             else:
                 rendered_wavs.append((cue, fitted_wav if fitted_wav.exists() else seg_wav))
 
             if idx == total or idx % max(1, total // 10) == 0:
-                progress = 10 + int((idx / total) * 70)
-                _set_stat(
+                progress = 35 + int((idx / total) * 45)
+                set_stat(
                     artifacts,
                     "synthesize_tts",
                     {
                         "total_cues": total,
                         "processed_cues": idx,
+                        "unique_tts_variants": len(unique_keys),
                         "cache_hit": cache_hit,
                         "cache_miss": cache_miss,
                         "edge_ok": edge_ok,
-                        "edge_failed": edge_failed,
                         "gtts_ok": gtts_ok,
-                        "gtts_failed": gtts_failed,
-                        "gtts_lang": gtts_lang,
                         "pyttsx3_ok": pyttsx3_ok,
-                        "pyttsx3_failed": pyttsx3_failed,
+                        "parallel_workers": workers,
+                        "gtts_lang": gtts_lang,
                         "auto_fit_applied": fit_applied,
                         "auto_fit_ratio_percent": round((fit_applied / max(1, idx)) * 100, 1),
                         "auto_fit_saved_ms": round(fit_total_ms_saved, 1),
@@ -558,15 +621,17 @@ def run_dub_job(
                         "percent_in_phase": round((idx / total) * 100, 1),
                     },
                 )
-                _push_event(
+                push_event(
+                    job,
                     artifacts,
                     "synthesize_tts",
-                    f"Synth {idx}/{total} cue ({round((idx / total) * 100, 1)}%).",
+                    f"?? chu?n b? {idx}/{total} cue ({round((idx / total) * 100, 1)}%).",
                     min(progress, 80),
+                    logger_name="tts",
                 )
                 _update_job(db, job, JobStatus.running, min(progress, 80), "synthesize_tts", artifacts=artifacts)
 
-        _push_event(artifacts, "stitch_timeline", "Đang ghép audio vào timeline...", 85)
+        push_event(job, artifacts, "stitch_timeline", "?ang gh?p audio v?o timeline...", 85, logger_name="tts")
         _update_job(db, job, JobStatus.running, 85, "stitch_timeline", artifacts=artifacts)
         output_basename = f"dub.{srt_path.stem}.{fmt}"
         output_path = project_dir / output_basename
@@ -611,7 +676,8 @@ def run_dub_job(
             if written_frames < target_total_frames:
                 tail = target_total_frames - written_frames
                 out_wav.writeframesraw(b"\x00" * (tail * frame_bytes))
-        _set_stat(
+
+        set_stat(
             artifacts,
             "stitch_timeline",
             {
@@ -624,7 +690,7 @@ def run_dub_job(
         )
 
         if fmt == "mp3":
-            _push_event(artifacts, "encode_output", "Đang encode WAV -> MP3...", 95)
+            push_event(job, artifacts, "encode_output", "?ang encode WAV sang MP3...", 95, logger_name="tts")
             _update_job(db, job, JobStatus.running, 95, "encode_output", artifacts=artifacts)
             _run_cmd(
                 [
@@ -650,23 +716,27 @@ def run_dub_job(
             "dub_pitch": pitch,
             "dub_output_key": output_basename,
         }
-        _push_event(artifacts, "done", f"Long tieng xong: {output_basename}", 100)
+        push_event(job, artifacts, "done", f"L?ng ti?ng xong: {output_basename}", 100, logger_name="tts")
         _update_job(db, job, JobStatus.done, 100, "done", artifacts=artifacts)
+
         project.status = ProjectStatus.ready
         db.add(project)
         db.commit()
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
         return {"ok": True, "job_id": job_id, "artifacts": artifacts}
     except Exception as ex:
         job = db.get(PipelineJob, job_id)
         if job:
-            artifacts = _job_artifacts(job)
-            _push_event(
+            artifacts = prepare_job_artifacts(job)
+            push_event(
+                job,
                 artifacts,
                 "error",
-                f"Dub loi: {str(ex)[:320]}",
+                f"Dub l?i: {str(ex)[:320]}",
                 int(job.progress if job.progress else 0),
                 level="error",
+                logger_name="tts",
             )
             _update_job(db, job, JobStatus.failed, job.progress if job.progress else 0, "error", str(ex), artifacts=artifacts)
         if job:
@@ -675,6 +745,8 @@ def run_dub_job(
                 project.status = ProjectStatus.failed
                 db.add(project)
                 db.commit()
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
         return {"ok": False, "job_id": job_id, "error": str(ex)}
     finally:
         db.close()

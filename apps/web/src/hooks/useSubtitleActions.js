@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { appendApiToken, withApiAuth } from "../lib/api";
 
 function normalizeApiError(err, fallback) {
   return err?.message || fallback;
@@ -116,7 +117,7 @@ export function useSubtitleActions(deps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(exportForm),
       });
-      setLastExport({ ...out, url: `${apiBase}${out.download_url}` });
+      setLastExport({ ...out, url: appendApiToken(`${apiBase}${out.download_url}`) });
       setMessage(`Đã xuất ${exportForm.export_format.toUpperCase()} (${exportForm.content_mode}).`);
     } catch (err) {
       setMessage(`Lỗi xuất tệp: ${normalizeApiError(err, "export_failed")}`);
@@ -157,10 +158,10 @@ export function useSubtitleActions(deps) {
     try {
       const form = new FormData();
       form.append("file", srtUploadFile);
-      const res = await fetch(`${apiBase}/projects/${selectedProjectId}/srt/upload`, {
+      const res = await fetch(`${apiBase}/projects/${selectedProjectId}/srt/upload`, withApiAuth({
         method: "POST",
         body: form,
-      });
+      }));
       if (!res.ok) throw new Error(await res.text());
       const out = await res.json();
       setDubForm((prev) => ({ ...prev, srt_key: out.output_key }));
@@ -178,7 +179,7 @@ export function useSubtitleActions(deps) {
       return;
     }
     try {
-      const res = await fetch(latestDubAudioUrl);
+      const res = await fetch(appendApiToken(latestDubAudioUrl), withApiAuth());
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
       const blobUrl = window.URL.createObjectURL(blob);

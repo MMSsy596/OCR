@@ -9,13 +9,12 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib import error, request
 from difflib import SequenceMatcher
-from datetime import datetime, timezone
-
 from sqlalchemy.orm import Session
 
 from .crud import list_segments, replace_segments
 from .db import SessionLocal
 from .exporter import export_subtitle_file
+from .job_state import persist_snapshot, prepare_job_artifacts, push_event, set_stat
 from .models import JobStatus, PipelineJob, Project, ProjectStatus
 from .settings import get_settings
 
@@ -44,50 +43,13 @@ def _update_job(db: Session, job: PipelineJob, status: JobStatus, progress: int,
     last_progress = int(getattr(job, "_nanbao_last_flush_progress", prev_progress))
     if not force_flush and (now - last_flush) < 1.5 and abs(int(progress) - last_progress) < 3:
         return
+    if artifacts is not None:
+        persist_snapshot(job, artifacts)
     db.add(job)
     db.commit()
     db.refresh(job)
     job._nanbao_last_flush_at = now
     job._nanbao_last_flush_progress = int(progress)
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _job_artifacts(job: PipelineJob) -> dict[str, Any]:
-    base = job.artifacts if isinstance(job.artifacts, dict) else {}
-    base.setdefault("events", [])
-    base.setdefault("stats", {})
-    return base
-
-
-def _push_event(
-    artifacts: dict[str, Any],
-    phase: str,
-    message: str,
-    progress: int,
-    level: str = "info",
-) -> None:
-    events = artifacts.setdefault("events", [])
-    events.append(
-        {
-            "time": _utc_now_iso(),
-            "phase": phase,
-            "level": level,
-            "progress": int(progress),
-            "message": message,
-        }
-    )
-    if len(events) > 400:
-        artifacts["events"] = events[-400:]
-    logger.info("[pipeline][%s][%s%%][%s] %s", phase, int(progress), level, message)
-    print(f"[pipeline][{phase}][{int(progress)}%][{level}] {message}", flush=True)
-
-
-def _set_stat(artifacts: dict[str, Any], phase: str, payload: dict[str, Any]) -> None:
-    stats = artifacts.setdefault("stats", {})
-    stats[phase] = payload
 
 
 def _fake_ocr_segments(project: Project) -> list[dict[str, Any]]:
@@ -117,11 +79,15 @@ def _fake_ocr_segments(project: Project) -> list[dict[str, Any]]:
     return output
 
 
-def _build_ocr_variants(cv2: Any, gray: Any) -> list[tuple[str, Any]]:
+def _build_ocr_variants(cv2: Any, gray: Any, profile: str = "balanced") -> list[tuple[str, Any]]:
     variants: list[tuple[str, Any]] = [("gray", gray)]
     try:
+        profile_key = (profile or "balanced").strip().lower()
         upscaled = cv2.resize(gray, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
         variants.append(("gray_up", upscaled))
+
+        if profile_key == "fast":
+            return variants
 
         blur = cv2.GaussianBlur(upscaled, (3, 3), 0)
         variants.append(("blur_up", blur))
@@ -131,6 +97,9 @@ def _build_ocr_variants(cv2: Any, gray: Any) -> list[tuple[str, Any]]:
 
         _, inv_otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         variants.append(("otsu_inv", inv_otsu))
+
+        if profile_key == "balanced":
+            return variants
 
         clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
         clahe_img = clahe.apply(gray)
@@ -175,6 +144,7 @@ def _extract_best_ocr_text(ocr_result: Any) -> tuple[str, float]:
 def _ocr_segments_from_video(
     project: Project,
     scan_interval_sec: float = 1.0,
+    variant_profile: str = "balanced",
     progress_hook: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     meta: dict[str, Any] = {
@@ -194,6 +164,7 @@ def _ocr_segments_from_video(
         "ocr_variant_attempts": 0,
         "ocr_variant_hits": 0,
         "ocr_variant_best": {},
+        "variant_profile": variant_profile,
     }
     if not project.video_path:
         meta["engine"] = "missing_video"
@@ -348,7 +319,7 @@ def _ocr_segments_from_video(
         best_text = ""
         best_score = 0.0
         best_variant = ""
-        for variant_name, variant_img in _build_ocr_variants(cv2, gray):
+        for variant_name, variant_img in _build_ocr_variants(cv2, gray, variant_profile):
             meta["ocr_variant_attempts"] = int(meta["ocr_variant_attempts"]) + 1
             result = engine(variant_img)
             # rapidocr tra ve tuple (ocr_result, elapsed)
@@ -884,14 +855,16 @@ def run_pipeline(
         db.add(project)
         db.commit()
 
-        artifacts = _job_artifacts(job)
-        _push_event(
+        artifacts = prepare_job_artifacts(job)
+        push_event(
+            job,
             artifacts,
             "pipeline",
             f"Bat dau pipeline, interval OCR={scan_interval_sec:.2f}s, voice_map={len(voice_map)}.",
             1,
+            logger_name="pipeline",
         )
-        _set_stat(
+        set_stat(
             artifacts,
             "pipeline",
             {
@@ -906,7 +879,7 @@ def run_pipeline(
         )
         _update_job(db, job, JobStatus.running, 1, "init", artifacts=artifacts)
 
-        _push_event(artifacts, "ocr", "Dang tach video thanh frame va OCR...", 5)
+        push_event(job, artifacts, "ocr", "Dang tach video thanh frame va OCR...", 5, logger_name="pipeline")
         _update_job(db, job, JobStatus.running, 5, "ocr", artifacts=artifacts)
         last_ocr_progress = 5
         last_ocr_event_sample = 0
@@ -929,7 +902,7 @@ def run_pipeline(
             duplicate_extend_count = int(live_meta.get("duplicate_extend_count", 0) or 0)
             skipped_similar_frame_count = int(live_meta.get("skipped_similar_frame_count", 0) or 0)
 
-            _set_stat(
+            set_stat(
                 artifacts,
                 "ocr_live",
                 {
@@ -961,27 +934,49 @@ def run_pipeline(
                         f"(chua uoc luong duoc tong so frame), frame co text={ocr_hit_frames}, "
                         f"bo qua tuong tu={skipped_similar_frame_count}, noi doan={duplicate_extend_count}."
                     )
-                _push_event(
+                push_event(
+                    job,
                     artifacts,
                     "ocr",
                     msg,
                     progress,
+                    logger_name="pipeline",
                 )
                 _update_job(db, job, JobStatus.running, progress, "ocr", artifacts=artifacts)
+
+        estimated_samples = 0
+        try:
+            if project.video_path:
+                import cv2  # type: ignore
+
+                cap_probe = cv2.VideoCapture(str(project.video_path))
+                fps_probe = float(cap_probe.get(cv2.CAP_PROP_FPS) or 0.0)
+                frames_probe = int(cap_probe.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                cap_probe.release()
+                if fps_probe > 0 and frames_probe > 0:
+                    estimated_samples = max(1, int((frames_probe / fps_probe) / max(scan_interval_sec, 0.1)))
+        except Exception:
+            estimated_samples = 0
+        variant_profile = (get_settings().ocr_profile or "balanced").strip().lower()
+        if estimated_samples >= int(get_settings().ocr_long_video_threshold_samples):
+            variant_profile = "fast"
 
         segments, ocr_meta = _ocr_segments_from_video(
             project,
             scan_interval_sec=scan_interval_sec,
+            variant_profile=variant_profile,
             progress_hook=_on_ocr_progress,
         )
         ocr_source = "rapidocr"
         if not segments:
-            _push_event(
+            push_event(
+                job,
                 artifacts,
                 "ocr",
                 "OCR that khong co ket qua, fallback sang mau subtitle gia lap.",
                 12,
                 level="warning",
+                logger_name="pipeline",
             )
             segments = _fake_ocr_segments(project)
             ocr_source = "fake_fallback"
@@ -990,7 +985,7 @@ def run_pipeline(
                 "engine": "fake_fallback",
                 "segments_before_merge": len(segments),
             }
-        _set_stat(
+        set_stat(
             artifacts,
             "ocr",
             {
@@ -999,14 +994,16 @@ def run_pipeline(
                 "segments_raw": len(segments),
             },
         )
-        _push_event(
+        push_event(
+            job,
             artifacts,
             "ocr",
             f"OCR xong: {len(segments)} doan text (source={ocr_source}).",
             28,
+            logger_name="pipeline",
         )
         segments = _merge_adjacent_similar_segments(segments, max_gap_sec=max(0.8, scan_interval_sec * 1.5), ratio_threshold=0.9)
-        _set_stat(
+        set_stat(
             artifacts,
             "dedupe_ocr",
             {
@@ -1014,14 +1011,15 @@ def run_pipeline(
                 "after": len(segments),
             },
         )
-        _push_event(artifacts, "ocr", f"Sau merge OCR: {len(segments)} doan.", 34)
-        replace_segments(db, project.id, segments)
+        push_event(job, artifacts, "ocr", f"Sau merge OCR: {len(segments)} doan.", 34, logger_name="pipeline")
 
-        _push_event(
+        push_event(
+            job,
             artifacts,
             "translate",
             f"Bat dau dich {len(segments)} doan, gemini_key={'co' if primary_key else 'khong'}, backup_key={'co' if backup_key else 'khong'}.",
             35,
+            logger_name="pipeline",
         )
         _update_job(db, job, JobStatus.running, 35, "translate", artifacts=artifacts)
         last_translate_progress = 35
@@ -1036,7 +1034,7 @@ def run_pipeline(
             if progress <= last_translate_progress:
                 return
             last_translate_progress = progress
-            _set_stat(
+            set_stat(
                 artifacts,
                 "translate_live",
                 {
@@ -1055,7 +1053,7 @@ def run_pipeline(
             voice_map=voice_map,
             progress_hook=_on_translate_progress,
         )
-        _set_stat(
+        set_stat(
             artifacts,
             "translate",
             {
@@ -1064,29 +1062,34 @@ def run_pipeline(
             },
         )
         if translation_stats.get("fallback_tag", 0) > 0:
-            _push_event(
+            push_event(
+                job,
                 artifacts,
                 "translate",
                 f"Co {translation_stats['fallback_tag']} doan fallback tag vi dich that bai.",
                 58,
                 level="warning",
+                logger_name="pipeline",
             )
         if translation_stats.get("deep_translator", 0) > 0:
-            _push_event(
+            push_event(
+                job,
                 artifacts,
                 "translate",
                 f"Deep-translator duoc dung cho {translation_stats['deep_translator']} doan.",
                 60,
+                logger_name="pipeline",
             )
-        _push_event(
+        push_event(
+            job,
             artifacts,
             "translate",
             f"Dich xong: gemini={translation_stats.get('gemini', 0)}, deep_translator={translation_stats.get('deep_translator', 0)}, fallback={translation_stats.get('fallback_tag', 0)}.",
             64,
+            logger_name="pipeline",
         )
-        replace_segments(db, project.id, normalized)
 
-        _push_event(artifacts, "dedupe_merge", "Dang merge subtitle trung lap lan cuoi...", 65)
+        push_event(job, artifacts, "dedupe_merge", "Dang merge subtitle trung lap lan cuoi...", 65, logger_name="pipeline")
         _update_job(db, job, JobStatus.running, 65, "dedupe_merge", artifacts=artifacts)
         # MVP: bo qua merge nang cao, chi loai dong trung lien tiep.
         deduped = _merge_adjacent_similar_segments(
@@ -1094,7 +1097,7 @@ def run_pipeline(
             max_gap_sec=max(0.8, scan_interval_sec * 1.5),
             ratio_threshold=0.92,
         )
-        _set_stat(
+        set_stat(
             artifacts,
             "dedupe_final",
             {
@@ -1103,17 +1106,17 @@ def run_pipeline(
                 "removed": max(0, len(normalized) - len(deduped)),
             },
         )
-        _push_event(artifacts, "dedupe_merge", f"Merge xong: {len(normalized)} -> {len(deduped)} doan.", 78)
+        push_event(job, artifacts, "dedupe_merge", f"Merge xong: {len(normalized)} -> {len(deduped)} doan.", 78, logger_name="pipeline")
         replace_segments(db, project.id, deduped)
 
-        _push_event(artifacts, "tts", "Dang tao tts_lines.txt cho long tieng...", 80)
+        push_event(job, artifacts, "tts", "Dang tao tts_lines.txt cho long tieng...", 80, logger_name="pipeline")
         _update_job(db, job, JobStatus.running, 80, "tts", artifacts=artifacts)
         project_dir = Path(project.video_path).parent if project.video_path else Path.cwd()
         tts_script = project_dir / "tts_lines.txt"
         with tts_script.open("w", encoding="utf-8") as f:
             for seg in deduped:
                 f.write(f"{seg['start_sec']:.2f}-{seg['end_sec']:.2f} [{seg['voice']}] {seg['translated_text']}\n")
-        _set_stat(
+        set_stat(
             artifacts,
             "tts_script",
             {
@@ -1122,7 +1125,7 @@ def run_pipeline(
             },
         )
 
-        _push_event(artifacts, "export", "Dang xuat SRT + JSON...", 90)
+        push_event(job, artifacts, "export", "Dang xuat SRT + JSON...", 90, logger_name="pipeline")
         _update_job(db, job, JobStatus.running, 90, "export", artifacts=artifacts)
         srt_path = project_dir / "output.vi.srt"
         json_path = project_dir / "output.project.json"
@@ -1156,7 +1159,7 @@ def run_pipeline(
             "translation_stats": translation_stats,
             "translation_error_hint": first_translation_error,
         }
-        _set_stat(
+        set_stat(
             artifacts,
             "export",
             {
@@ -1165,7 +1168,7 @@ def run_pipeline(
                 "segments": len(deduped),
             },
         )
-        _push_event(artifacts, "done", "Pipeline hoan tat.", 100)
+        push_event(job, artifacts, "done", "Pipeline hoan tat.", 100, logger_name="pipeline")
         _update_job(db, job, JobStatus.done, 100, "done", artifacts=artifacts)
         project.status = ProjectStatus.ready
         db.add(project)
@@ -1174,13 +1177,15 @@ def run_pipeline(
     except Exception as ex:
         job = db.get(PipelineJob, job_id)
         if job:
-            artifacts = _job_artifacts(job)
-            _push_event(
+            artifacts = prepare_job_artifacts(job)
+            push_event(
+                job,
                 artifacts,
                 "error",
                 f"Pipeline loi: {str(ex)[:320]}",
                 int(job.progress if job.progress else 0),
                 level="error",
+                logger_name="pipeline",
             )
             _update_job(db, job, JobStatus.failed, job.progress if job.progress else 0, "error", str(ex), artifacts=artifacts)
         project = db.get(Project, job.project_id) if job else None

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { withApiAuth } from "../lib/api";
 
 function normalizeApiError(err, fallback) {
   return err?.message || fallback;
@@ -139,10 +140,10 @@ export function useProjectActions(deps) {
     try {
       const form = new FormData();
       form.append("file", videoFile);
-      await fetch(`${apiBase}/projects/${selectedProjectId}/upload`, {
+      await fetch(`${apiBase}/projects/${selectedProjectId}/upload`, withApiAuth({
         method: "POST",
         body: form,
-      }).then(async (res) => {
+      })).then(async (res) => {
         if (!res.ok) throw new Error(await res.text());
       });
       await loadProjectsSafe();

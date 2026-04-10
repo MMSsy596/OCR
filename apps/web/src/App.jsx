@@ -11,11 +11,12 @@ import { useProjectWizard } from "./hooks/useProjectWizard";
 import { useRoiEditor } from "./hooks/useRoiEditor";
 import { useSubtitleActions } from "./hooks/useSubtitleActions";
 import { useSubtitleEditor } from "./hooks/useSubtitleEditor";
+import { appendApiToken, withApiAuth } from "./lib/api";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
 async function jsonFetch(url, options = {}) {
-  const res = await fetch(url, options);
+  const res = await fetch(url, withApiAuth(options));
   if (!res.ok) {
     const text = await res.text();
     throw new Error(text || `HTTP ${res.status}`);
@@ -170,7 +171,7 @@ export function App() {
     [projects, selectedProjectId],
   );
   const videoSrc = selectedProjectId
-    ? `${API_BASE}/projects/${selectedProjectId}/video`
+    ? appendApiToken(`${API_BASE}/projects/${selectedProjectId}/video`)
     : "";
 
   const {
@@ -469,7 +470,7 @@ export function App() {
           <strong>Âm thanh mới nhất:</strong>{" "}
           <a
             className="download-link"
-            href={`${API_BASE}/jobs/${latestDubJob.id}/artifact/dubbed_audio`}
+            href={appendApiToken(`${API_BASE}/jobs/${latestDubJob.id}/artifact/dubbed_audio`)}
             target="_blank"
             rel="noreferrer"
           >

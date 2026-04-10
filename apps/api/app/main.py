@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from . import crud, models, schemas
+from .auth import require_api_auth
 from .db import Base, SessionLocal, engine, ensure_runtime_indexes, get_db
 from .downloader import run_url_ingest_job
 from .exporter import export_subtitle_file
@@ -35,6 +36,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def enforce_api_auth(request, call_next):
+    await require_api_auth(request)
+    return await call_next(request)
 
 
 @app.on_event("startup")

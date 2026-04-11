@@ -1,212 +1,153 @@
+param(
+    [int]$BackendPort = 8000,
+    [int]$FrontendPort = 5173,
+    [switch]$SkipInstall,
+    [switch]$NoBackend,
+    [switch]$NoFrontend
+)
+
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$root = $PSScriptRoot
-$apiDir = Join-Path $root "apps\api"
-$workerDir = Join-Path $root "apps\worker"
-$webDir = Join-Path $root "apps\web"
-$logDir = Join-Path $root "logs"
-$tmpDir = Join-Path $root "tmp"
+$ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ApiDir = Join-Path $ProjectRoot "apps\\api"
+$WebDir = Join-Path $ProjectRoot "apps\\web"
+$LogsDir = Join-Path $ProjectRoot "logs"
 
-New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+$ApiPython = Join-Path $ApiDir ".venv\\Scripts\\python.exe"
 
-function Write-Info {
-  param([string]$Message)
-  Write-Host "[start-all] $Message"
+$ApiPidFile = Join-Path $LogsDir "api-dev.pid"
+$ApiOutLog = Join-Path $LogsDir "api-dev.out.log"
+$ApiErrLog = Join-Path $LogsDir "api-dev.err.log"
+
+$WebPidFile = Join-Path $LogsDir "web-dev.pid"
+$WebOutLog = Join-Path $LogsDir "web-dev.out.log"
+$WebErrLog = Join-Path $LogsDir "web-dev.err.log"
+
+New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
+
+function Write-Info([string]$Text) {
+    Write-Host "[NanBao OCR] $Text"
 }
 
-function Get-PythonExe {
-  $candidates = @(
-    (Join-Path $apiDir ".venv\Scripts\python.exe"),
-    "C:\Python312\python.exe",
-    "python.exe"
-  )
-  foreach ($candidate in $candidates) {
-    if (Test-Path $candidate) {
-      return $candidate
+function Stop-ByPidFile([string]$PidFile, [string]$Name) {
+    if (-not (Test-Path $PidFile)) { return }
+    $raw = (Get-Content -Path $PidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if (-not $raw) { return }
+    $targetPid = 0
+    if (-not [int]::TryParse($raw.Trim(), [ref]$targetPid)) { return }
+    $proc = Get-Process -Id $targetPid -ErrorAction SilentlyContinue
+    if ($proc) {
+        try {
+            Stop-Process -Id $targetPid -Force -ErrorAction Stop
+            Write-Info "Stopped old process of $Name (PID $targetPid)."
+        } catch {
+            Write-Info "Cannot stop old process of $Name (PID $targetPid): $($_.Exception.Message)"
+        }
     }
-  }
-  return "python.exe"
 }
 
-function Get-NodeExe {
-  $candidates = @(
-    "C:\Program Files\nodejs\node.exe",
-    "node.exe"
-  )
-  foreach ($candidate in $candidates) {
-    if ($candidate -eq "node.exe") {
-      return $candidate
-    }
-    if (Test-Path $candidate) {
-      return $candidate
-    }
-  }
-  return "node.exe"
-}
+function Start-DetachedCmd(
+    [string]$Name,
+    [string]$WorkingDir,
+    [string]$CommandLine,
+    [string]$OutLog,
+    [string]$ErrLog,
+    [string]$PidFile
+) {
+    if (Test-Path $OutLog) { Remove-Item -Force $OutLog -ErrorAction SilentlyContinue }
+    if (Test-Path $ErrLog) { Remove-Item -Force $ErrLog -ErrorAction SilentlyContinue }
 
-function Get-RedisExe {
-  $command = Get-Command redis-server.exe -ErrorAction SilentlyContinue
-  if ($command) {
-    return $command.Source
-  }
-  $candidates = @(
-    "C:\Program Files\Redis\redis-server.exe"
-  )
-  foreach ($candidate in $candidates) {
-    if (Test-Path $candidate) {
-      return $candidate
-    }
-  }
-  throw "Không tìm thấy redis-server.exe"
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "cmd.exe"
+    $psi.WorkingDirectory = $WorkingDir
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.Arguments = ('/c {0} 1>>"{1}" 2>>"{2}"' -f $CommandLine, $OutLog, $ErrLog)
+
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    Set-Content -Path $PidFile -Value $proc.Id -Encoding ascii
+    Write-Info "Started $Name (PID $($proc.Id))."
 }
 
 function Ensure-ApiEnv {
-  $pythonExe = Get-PythonExe
-  $venvPython = Join-Path $apiDir ".venv\Scripts\python.exe"
-  if (-not (Test-Path $venvPython)) {
-    Write-Info "Tạo môi trường Python tại apps\\api\\.venv"
-    & $pythonExe -m venv (Join-Path $apiDir ".venv")
-  }
-  Write-Info "Cài dependency backend/worker"
-  & $venvPython -m pip install -r (Join-Path $apiDir "requirements.txt") | Out-Host
+    if (Test-Path $ApiPython) {
+        try {
+            & $ApiPython -c "import fastapi, uvicorn, sqlalchemy" | Out-Null
+            Write-Info "Backend venv is ready."
+            return
+        } catch {
+            Write-Info "Backend venv missing dependencies, installing..."
+        }
+    } else {
+        Write-Info "Creating backend venv..."
+        if (Test-Path "C:\\Python312\\python.exe") {
+            & "C:\\Python312\\python.exe" -m venv (Join-Path $ApiDir ".venv")
+        } elseif (Get-Command py -ErrorAction SilentlyContinue) {
+            & py -3.12 -m venv (Join-Path $ApiDir ".venv")
+        } else {
+            throw "Python 3.12 not found."
+        }
+    }
+
+    if ($SkipInstall) {
+        Write-Info "Skip backend dependency install because -SkipInstall is set."
+        return
+    }
+
+    Write-Info "Installing backend dependencies..."
+    try {
+        & $ApiPython -m ensurepip --upgrade | Out-Null
+    } catch {
+    }
+    & $ApiPython -m pip install --upgrade pip
+    & $ApiPython -m pip install -r (Join-Path $ApiDir "requirements.txt")
 }
 
-function Ensure-WebEnv {
-  if (-not (Test-Path (Join-Path $webDir "node_modules"))) {
-    Write-Info "Cài dependency frontend"
-    Push-Location $webDir
-    npm.cmd install | Out-Host
-    Pop-Location
-  }
+function Wait-Http([string]$Name, [string]$Url, [int]$TimeoutSec = 20) {
+    $start = Get-Date
+    while (((Get-Date) - $start).TotalSeconds -lt $TimeoutSec) {
+        try {
+            $res = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2
+            if ($res.StatusCode -ge 200 -and $res.StatusCode -lt 500) {
+                Write-Info "$Name is reachable at $Url"
+                return
+            }
+        } catch {
+        }
+        Start-Sleep -Milliseconds 600
+    }
+    Write-Info "$Name did not respond in $TimeoutSec seconds: $Url"
 }
 
-function Stop-ListeningPort {
-  param([int]$Port)
-  $connections = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-  if ($null -eq $connections) {
-    return
-  }
-  $pids = $connections | Select-Object -ExpandProperty OwningProcess -Unique
-  foreach ($procId in $pids) {
-    Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
-  }
+if (-not $NoBackend) { Stop-ByPidFile -PidFile $ApiPidFile -Name "backend" }
+if (-not $NoFrontend) { Stop-ByPidFile -PidFile $WebPidFile -Name "frontend" }
+
+if (-not $NoBackend) {
+    Ensure-ApiEnv
+    $apiCmd = "`"$ApiPython`" -m uvicorn app.main:app --host 0.0.0.0 --port $BackendPort"
+    Start-DetachedCmd -Name "backend" -WorkingDir $ApiDir -CommandLine $apiCmd -OutLog $ApiOutLog -ErrLog $ApiErrLog -PidFile $ApiPidFile
+    Wait-Http -Name "Backend" -Url "http://127.0.0.1:$BackendPort/health"
 }
 
-function Start-BackgroundProcess {
-  param(
-    [string]$Name,
-    [string]$FilePath,
-    [string]$Arguments,
-    [string]$WorkingDirectory,
-    [string]$PidFile
-  )
-
-  $outLog = Join-Path $logDir "$Name.out.log"
-  $errLog = Join-Path $logDir "$Name.err.log"
-
-  $proc = Start-Process `
-    -FilePath $FilePath `
-    -ArgumentList $Arguments `
-    -WorkingDirectory $WorkingDirectory `
-    -RedirectStandardOutput $outLog `
-    -RedirectStandardError $errLog `
-    -PassThru
-  Start-Sleep -Seconds 3
-  if ($proc.HasExited) {
-    $stdout = if (Test-Path $outLog) { Get-Content $outLog -Raw } else { "" }
-    $stderr = if (Test-Path $errLog) { Get-Content $errLog -Raw } else { "" }
-    throw "Không khởi động được $Name. ExitCode=$($proc.ExitCode)`n$stdout`n$stderr"
-  }
-
-  Set-Content -Path $PidFile -Value $proc.Id
-  [PSCustomObject]@{
-    Name = $Name
-    Id = $proc.Id
-    OutLog = $outLog
-    ErrLog = $errLog
-  }
+if (-not $NoFrontend) {
+    $webCmd = "npm.cmd run dev -- --host 0.0.0.0 --port $FrontendPort"
+    Start-DetachedCmd -Name "frontend" -WorkingDir $WebDir -CommandLine $webCmd -OutLog $WebOutLog -ErrLog $WebErrLog -PidFile $WebPidFile
+    Wait-Http -Name "Frontend" -Url "http://127.0.0.1:$FrontendPort"
 }
-
-Ensure-ApiEnv
-Ensure-WebEnv
-
-$pythonExe = Join-Path $apiDir ".venv\Scripts\python.exe"
-$nodeExe = Get-NodeExe
-
-Write-Info "Dọn cổng cũ 5173 và 8000"
-Stop-ListeningPort -Port 5173
-Stop-ListeningPort -Port 8000
-
-$redisPort = Get-NetTCPConnection -LocalPort 6379 -State Listen -ErrorAction SilentlyContinue
-if ($null -eq $redisPort) {
-  Write-Info "Khởi động Docker containers (postgres, redis, minio)"
-  & docker compose up -d | Out-Host
-  Start-Sleep -Seconds 3
-  $redisPort = Get-NetTCPConnection -LocalPort 6379 -State Listen -ErrorAction SilentlyContinue
-  if ($null -eq $redisPort) {
-    $redisExe = Get-RedisExe
-    Write-Info "Khởi động Redis (local)"
-    $redisInfo = Start-BackgroundProcess `
-      -Name "redis" `
-      -FilePath $redisExe `
-      -Arguments "--port 6379 --save \"\"" `
-      -WorkingDirectory $root `
-      -PidFile (Join-Path $logDir "redis.pid")
-  } else {
-    Write-Info "Redis Docker đã sẵn sàng trên cổng 6379"
-  }
-} else {
-  Write-Info "Redis đã chạy sẵn trên cổng 6379"
-}
-
-Write-Info "Khởi động API"
-$apiInfo = Start-BackgroundProcess `
-  -Name "api-dev" `
-  -FilePath $pythonExe `
-  -Arguments "-m uvicorn app.main:app --host 0.0.0.0 --port 8000" `
-  -WorkingDirectory $apiDir `
-  -PidFile (Join-Path $logDir "api-dev.pid")
-
-Write-Info "Khởi động worker"
-$workerInfo = Start-BackgroundProcess `
-  -Name "worker" `
-  -FilePath $pythonExe `
-  -Arguments "worker.py" `
-  -WorkingDirectory $workerDir `
-  -PidFile (Join-Path $logDir "worker.pid")
-
-Write-Info "Khởi động frontend"
-$webInfo = Start-BackgroundProcess `
-  -Name "web-dev" `
-  -FilePath $nodeExe `
-  -Arguments "node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173" `
-  -WorkingDirectory $webDir `
-  -PidFile (Join-Path $logDir "web-dev.pid")
-
-Start-Sleep -Seconds 2
-
-$apiHealth = Invoke-WebRequest -Uri "http://127.0.0.1:8000/health" -UseBasicParsing
-$webHealth = Invoke-WebRequest -Uri "http://127.0.0.1:5173" -UseBasicParsing
 
 Write-Host ""
-Write-Host "Stack đã chạy xong."
-Write-Host "API: http://127.0.0.1:8000 (PID $($apiInfo.Id))"
-Write-Host "Web: http://127.0.0.1:5173 (PID $($webInfo.Id))"
-Write-Host "Worker PID: $($workerInfo.Id)"
-if ($redisInfo) {
-  Write-Host "Redis PID: $($redisInfo.Id)"
-} else {
-  Write-Host "Redis: đang dùng tiến trình có sẵn trên máy"
+Write-Info "Startup done."
+if (-not $NoFrontend) {
+    Write-Host "  Web: http://localhost:$FrontendPort"
+    Write-Host "  Web log: $WebOutLog"
+}
+if (-not $NoBackend) {
+    Write-Host "  API: http://localhost:$BackendPort"
+    Write-Host "  Health: http://localhost:$BackendPort/health"
+    Write-Host "  API log: $ApiOutLog"
 }
 Write-Host ""
-Write-Host "Health API: $($apiHealth.StatusCode)"
-Write-Host "Health Web: $($webHealth.StatusCode)"
-Write-Host ""
-Write-Host "PID files:"
-Write-Host "  $(Join-Path $logDir 'api-dev.pid')"
-Write-Host "  $(Join-Path $logDir 'worker.pid')"
-Write-Host "  $(Join-Path $logDir 'web-dev.pid')"
-if ($redisInfo) {
-  Write-Host "  $(Join-Path $logDir 'redis.pid')"
-}
+Write-Host "Quick stop commands:"
+Write-Host "  Stop-Process -Id (Get-Content `"$ApiPidFile`") -Force"
+Write-Host "  Stop-Process -Id (Get-Content `"$WebPidFile`") -Force"

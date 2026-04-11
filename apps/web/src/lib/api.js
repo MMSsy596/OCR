@@ -23,3 +23,36 @@ export function appendApiToken(url) {
   }
   return nextUrl.toString();
 }
+
+export async function readApiErrorMessage(input, fallback = "request_failed") {
+  if (!input) return fallback;
+
+  if (input instanceof Response) {
+    let bodyText = "";
+    try {
+      bodyText = await input.text();
+    } catch {
+      return fallback;
+    }
+    if (!bodyText) return `HTTP ${input.status}`;
+    try {
+      const parsed = JSON.parse(bodyText);
+      if (parsed?.detail) return String(parsed.detail);
+      if (parsed?.message) return String(parsed.message);
+    } catch {
+      return bodyText;
+    }
+    return bodyText;
+  }
+
+  const message = input?.message || "";
+  if (!message) return fallback;
+  try {
+    const parsed = JSON.parse(message);
+    if (parsed?.detail) return String(parsed.detail);
+    if (parsed?.message) return String(parsed.message);
+  } catch {
+    return message;
+  }
+  return message;
+}

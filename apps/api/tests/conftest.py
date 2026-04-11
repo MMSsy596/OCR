@@ -22,7 +22,10 @@ def app_module(tmp_path_factory):
     os.environ["DATABASE_URL"] = f"sqlite+pysqlite:///{db_path.as_posix()}"
     os.environ["STORAGE_ROOT"] = str(storage_path)
     os.environ["API_TOKEN"] = "nanbao-test-token"
+    os.environ["API_TOKENS"] = "nanbao-test-token,nanbao-backup-token"
     os.environ["WEB_ORIGIN"] = "http://localhost:5173"
+    os.environ["ALLOWED_HOSTS"] = "localhost,127.0.0.1,testserver"
+    os.environ["MAX_UPLOAD_SIZE_MB"] = "1"
 
     for module_name in list(sys.modules):
         if module_name == "app" or module_name.startswith("app."):
@@ -46,3 +49,8 @@ def client(app_module):
 @pytest.fixture()
 def auth_headers():
     return {"Authorization": "Bearer nanbao-test-token"}
+
+
+@pytest.fixture()
+def api_key_headers():
+    return {"X-API-Key": "nanbao-backup-token"}

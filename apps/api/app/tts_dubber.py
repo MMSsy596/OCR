@@ -319,6 +319,12 @@ def _make_tts_cache_id(text: str, voice: str, rate: str, volume: str, pitch: str
     return hashlib.sha1(raw).hexdigest()[:20]
 
 
+def _shared_tts_cache_dir(project_dir: Path) -> Path:
+    path = project_dir / "_dub_tmp" / "_shared_cache"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def _render_tts_variant(
     *,
     text: str,
@@ -434,21 +440,21 @@ def run_dub_job(
                 "match_video_duration": bool(match_video_duration),
             },
         )
-        push_event(job, artifacts, "dub", "B?t ??u job l?ng ti?ng t? SRT.", 1, logger_name="tts")
+        push_event(job, artifacts, "dub", "Bắt đầu job lồng tiếng từ SRT.", 1, logger_name="tts")
         _update_job(db, job, JobStatus.running, 1, "init", artifacts=artifacts)
 
         project_dir = Path(project.video_path).parent
         srt_path = _resolve_srt_path(project_dir, srt_key)
         if not srt_path:
-            push_event(job, artifacts, "dub", f"Kh?ng t?m th?y SRT: {srt_key}", 1, level="error", logger_name="tts")
+            push_event(job, artifacts, "dub", f"Không tìm thấy SRT: {srt_key}", 1, level="error", logger_name="tts")
             _update_job(db, job, JobStatus.failed, 0, "error", "srt_not_found", artifacts=artifacts)
             return {"ok": False, "error": "srt_not_found"}
 
-        push_event(job, artifacts, "parse_srt", f"?ang parse SRT: {srt_path.name}", 5, logger_name="tts")
+        push_event(job, artifacts, "parse_srt", f"Đang parse SRT: {srt_path.name}", 5, logger_name="tts")
         _update_job(db, job, JobStatus.running, 5, "parse_srt", artifacts=artifacts)
         cues = _parse_srt(srt_path)
         if not cues:
-            push_event(job, artifacts, "parse_srt", "SRT r?ng ho?c kh?ng parse ???c cue.", 5, level="error", logger_name="tts")
+            push_event(job, artifacts, "parse_srt", "SRT rỗng hoặc không parse được cue.", 5, level="error", logger_name="tts")
             _update_job(db, job, JobStatus.failed, 5, "error", "srt_empty", artifacts=artifacts)
             return {"ok": False, "error": "srt_empty"}
 
@@ -466,7 +472,7 @@ def run_dub_job(
 
         fmt = (output_format or "wav").lower().strip()
         if fmt not in {"wav", "mp3"}:
-            push_event(job, artifacts, "dub", f"Output format kh?ng h?p l?: {output_format}", 8, level="error", logger_name="tts")
+            push_event(job, artifacts, "dub", f"Output format không hợp lệ: {output_format}", 8, level="error", logger_name="tts")
             _update_job(db, job, JobStatus.failed, 5, "error", "invalid_output_format", artifacts=artifacts)
             return {"ok": False, "error": "invalid_output_format"}
 
@@ -474,12 +480,13 @@ def run_dub_job(
         if tmp_dir.exists():
             shutil.rmtree(tmp_dir, ignore_errors=True)
         tmp_dir.mkdir(parents=True, exist_ok=True)
-        cache_dir = tmp_dir / "cache"
-        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_dir = _shared_tts_cache_dir(project_dir)
 
         total = len(cues)
         gtts_lang = _map_gtts_lang(project.target_lang, voice)
         workers = max(1, min(int(get_settings().tts_max_parallel_workers or 3), 6))
+        total_chars = sum(len(re.sub(r"\s+", "", cue.text or "")) for cue in cues)
+        total_slot_sec = round(sum(max(0.0, cue.end_sec - cue.start_sec) for cue in cues), 3)
 
         cue_plans: list[tuple[SrtCue, float, tuple[str, str, str, str, str]]] = []
         unique_keys: dict[tuple[str, str, str, str, str], None] = {}
@@ -498,13 +505,16 @@ def run_dub_job(
                 "unique_tts_variants": len(unique_keys),
                 "parallel_workers": workers,
                 "gtts_lang": gtts_lang,
+                "total_chars": total_chars,
+                "total_slot_sec": total_slot_sec,
+                "shared_cache_dir": str(cache_dir),
             },
         )
         push_event(
             job,
             artifacts,
             "synthesize_tts",
-            f"?ang synth {len(unique_keys)} bi?n th? TTS cho {total} cue b?ng {workers} worker.",
+            f"Đang synth {len(unique_keys)} biến thể TTS cho {total} cue bằng {workers} worker.",
             10,
             logger_name="tts",
         )
@@ -564,7 +574,7 @@ def run_dub_job(
                         job,
                         artifacts,
                         "synthesize_tts",
-                        f"?? render {render_done}/{unique_total} bi?n th? TTS.",
+                        f"Đã render {render_done}/{unique_total} biến thể TTS.",
                         progress,
                         logger_name="tts",
                     )
@@ -625,13 +635,13 @@ def run_dub_job(
                     job,
                     artifacts,
                     "synthesize_tts",
-                    f"?? chu?n b? {idx}/{total} cue ({round((idx / total) * 100, 1)}%).",
+                    f"Đã chuẩn bị {idx}/{total} cue ({round((idx / total) * 100, 1)}%).",
                     min(progress, 80),
                     logger_name="tts",
                 )
                 _update_job(db, job, JobStatus.running, min(progress, 80), "synthesize_tts", artifacts=artifacts)
 
-        push_event(job, artifacts, "stitch_timeline", "?ang gh?p audio v?o timeline...", 85, logger_name="tts")
+        push_event(job, artifacts, "stitch_timeline", "Đang ghép audio vào timeline...", 85, logger_name="tts")
         _update_job(db, job, JobStatus.running, 85, "stitch_timeline", artifacts=artifacts)
         output_basename = f"dub.{srt_path.stem}.{fmt}"
         output_path = project_dir / output_basename
@@ -690,7 +700,7 @@ def run_dub_job(
         )
 
         if fmt == "mp3":
-            push_event(job, artifacts, "encode_output", "?ang encode WAV sang MP3...", 95, logger_name="tts")
+            push_event(job, artifacts, "encode_output", "Đang encode WAV sang MP3...", 95, logger_name="tts")
             _update_job(db, job, JobStatus.running, 95, "encode_output", artifacts=artifacts)
             _run_cmd(
                 [
@@ -716,7 +726,7 @@ def run_dub_job(
             "dub_pitch": pitch,
             "dub_output_key": output_basename,
         }
-        push_event(job, artifacts, "done", f"L?ng ti?ng xong: {output_basename}", 100, logger_name="tts")
+        push_event(job, artifacts, "done", f"Lồng tiếng xong: {output_basename}", 100, logger_name="tts")
         _update_job(db, job, JobStatus.done, 100, "done", artifacts=artifacts)
 
         project.status = ProjectStatus.ready
@@ -733,7 +743,7 @@ def run_dub_job(
                 job,
                 artifacts,
                 "error",
-                f"Dub l?i: {str(ex)[:320]}",
+                f"Dub lỗi: {str(ex)[:320]}",
                 int(job.progress if job.progress else 0),
                 level="error",
                 logger_name="tts",

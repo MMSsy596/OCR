@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { withApiAuth } from "../lib/api";
+import { readApiErrorMessage, withApiAuth } from "../lib/api";
 
-function normalizeApiError(err, fallback) {
-  return err?.message || fallback;
+async function normalizeApiError(err, fallback) {
+  return readApiErrorMessage(err, fallback);
 }
 
 export function useProjectActions(deps) {
@@ -55,7 +55,7 @@ export function useProjectActions(deps) {
       setSelectedProjectId(created.id);
       setMessage(`Đã tạo dự án: ${created.name}`);
     } catch (err) {
-      setMessage(`Lỗi tạo dự án: ${normalizeApiError(err, "create_project_failed")}`);
+      setMessage(`Lỗi tạo dự án: ${await normalizeApiError(err, "create_project_failed")}`);
     } finally {
       setCreating(false);
     }
@@ -86,7 +86,7 @@ export function useProjectActions(deps) {
         `Đã xóa ${out.deleted_projects} phiên cũ, bỏ qua ${out.skipped_processing_projects} phiên đang chạy.`,
       );
     } catch (err) {
-      setMessage(`Lỗi dọn phiên: ${normalizeApiError(err, "clear_sessions_failed")}`);
+      setMessage(`Lỗi dọn phiên: ${await normalizeApiError(err, "clear_sessions_failed")}`);
     } finally {
       setClearingSessions(false);
     }
@@ -124,7 +124,7 @@ export function useProjectActions(deps) {
         `Đã xóa cưỡng bức: ${out.deleted_projects} phiên; dọn ${out.removed_storage_dirs} thư mục.`,
       );
     } catch (err) {
-      setMessage(`Lỗi xóa cưỡng bức phiên: ${normalizeApiError(err, "force_clear_failed")}`);
+      setMessage(`Lỗi xóa cưỡng bức phiên: ${await normalizeApiError(err, "force_clear_failed")}`);
     } finally {
       setForceClearingSessions(false);
     }
@@ -140,18 +140,17 @@ export function useProjectActions(deps) {
     try {
       const form = new FormData();
       form.append("file", videoFile);
-      await fetch(`${apiBase}/projects/${selectedProjectId}/upload`, withApiAuth({
+      const res = await fetch(`${apiBase}/projects/${selectedProjectId}/upload`, withApiAuth({
         method: "POST",
         body: form,
-      })).then(async (res) => {
-        if (!res.ok) throw new Error(await res.text());
-      });
+      }));
+      if (!res.ok) throw new Error(await readApiErrorMessage(res, "upload_video_failed"));
       await loadProjectsSafe();
       await loadProjectData(selectedProjectId);
       setMessage("Tải video lên thành công.");
       setWizardStep(2);
     } catch (err) {
-      setMessage(`Lỗi tải lên: ${normalizeApiError(err, "upload_video_failed")}`);
+      setMessage(`Lỗi tải lên: ${await normalizeApiError(err, "upload_video_failed")}`);
     } finally {
       setLoading(false);
     }
@@ -184,7 +183,7 @@ export function useProjectActions(deps) {
       );
       setWizardStep(2);
     } catch (err) {
-      setMessage(`Lỗi nhận link: ${normalizeApiError(err, "ingest_url_failed")}`);
+      setMessage(`Lỗi nhận link: ${await normalizeApiError(err, "ingest_url_failed")}`);
     } finally {
       setIngestingUrl(false);
     }
@@ -207,7 +206,7 @@ export function useProjectActions(deps) {
       setRoiDraft(normalizeRoi(updated.roi));
       setMessage("Đã lưu ROI cho dự án.");
     } catch (err) {
-      setMessage(`Lỗi lưu ROI: ${normalizeApiError(err, "save_roi_failed")}`);
+      setMessage(`Lỗi lưu ROI: ${await normalizeApiError(err, "save_roi_failed")}`);
     } finally {
       setSavingRoi(false);
     }
@@ -235,7 +234,7 @@ export function useProjectActions(deps) {
       setProjectForm((prev) => ({ ...prev, prompt }));
       setMessage("Đã áp dụng prompt preset vào dự án hiện tại.");
     } catch (err) {
-      setMessage(`Lỗi cập nhật prompt dự án: ${normalizeApiError(err, "apply_preset_failed")}`);
+      setMessage(`Lỗi cập nhật prompt dự án: ${await normalizeApiError(err, "apply_preset_failed")}`);
     }
   }
 

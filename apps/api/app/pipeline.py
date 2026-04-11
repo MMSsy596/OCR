@@ -21,6 +21,26 @@ from .settings import get_settings
 logger = logging.getLogger("nanbao.ocr.pipeline")
 
 
+def _compute_effective_scan_interval(
+    *,
+    fps: float,
+    total_frames: int,
+    requested_interval_sec: float,
+) -> tuple[float, int]:
+    safe_requested = max(0.1, float(requested_interval_sec))
+    if fps <= 0 or total_frames <= 0:
+        return safe_requested, 0
+    settings = get_settings()
+    duration_sec = total_frames / max(fps, 0.001)
+    requested_samples = max(1, int(duration_sec / safe_requested))
+    max_samples = max(100, int(settings.ocr_max_samples_per_video or 1600))
+    if requested_samples <= max_samples:
+        return safe_requested, requested_samples
+    effective_interval = max(safe_requested, duration_sec / max_samples)
+    effective_samples = max(1, int(duration_sec / effective_interval))
+    return round(effective_interval, 3), effective_samples
+
+
 def _update_job(db: Session, job: PipelineJob, status: JobStatus, progress: int, step: str, error_message: str = "", artifacts: dict | None = None) -> None:
     now = time.monotonic()
     prev_status = job.status
@@ -198,11 +218,20 @@ def _ocr_segments_from_video(
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 24
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    sample_step = int(max(1, fps * max(0.1, scan_interval_sec)))
+    effective_scan_interval, effective_estimated_samples = _compute_effective_scan_interval(
+        fps=float(fps),
+        total_frames=total_frames,
+        requested_interval_sec=scan_interval_sec,
+    )
+    sample_step = int(max(1, fps * max(0.1, effective_scan_interval)))
     meta["fps"] = float(fps)
     meta["frames_total"] = total_frames
+    meta["requested_scan_interval_sec"] = float(scan_interval_sec)
+    meta["effective_scan_interval_sec"] = float(effective_scan_interval)
     meta["sample_step_frames"] = int(sample_step)
     meta["estimated_samples"] = int(total_frames // sample_step) + (1 if total_frames % sample_step else 0)
+    meta["estimated_samples_capped"] = int(effective_estimated_samples or meta["estimated_samples"])
+    meta["long_video_mode"] = bool(effective_scan_interval > (float(scan_interval_sec) + 0.001))
     available_providers = []
     try:
         available_providers = list(ort.get_available_providers())
@@ -309,7 +338,7 @@ def _ocr_segments_from_video(
             meta["skipped_similar_frame_count"] = int(meta["skipped_similar_frame_count"]) + 1
             consecutive_similar_skips += 1
             if segments:
-                extended_end = (idx / fps) + max(0.5, scan_interval_sec)
+                extended_end = (idx / fps) + max(0.5, effective_scan_interval)
                 segments[-1]["end_sec"] = max(float(segments[-1]["end_sec"]), float(extended_end))
                 meta["duplicate_extend_count"] = int(meta["duplicate_extend_count"]) + 1
             continue
@@ -351,13 +380,13 @@ def _ocr_segments_from_video(
             continue
         if text == last_text:
             if segments:
-                extended_end = (idx / fps) + max(0.5, scan_interval_sec)
+                extended_end = (idx / fps) + max(0.5, effective_scan_interval)
                 segments[-1]["end_sec"] = max(float(segments[-1]["end_sec"]), float(extended_end))
                 meta["duplicate_extend_count"] = int(meta["duplicate_extend_count"]) + 1
             continue
 
         start_sec = idx / fps
-        end_sec = start_sec + max(1.2, scan_interval_sec * 1.5)
+        end_sec = start_sec + max(1.2, effective_scan_interval * 1.5)
         last_text = text
         segments.append(
             {
@@ -856,11 +885,32 @@ def run_pipeline(
         db.commit()
 
         artifacts = prepare_job_artifacts(job)
+        requested_scan_interval = float(scan_interval_sec)
+        effective_scan_interval = requested_scan_interval
+        estimated_samples = 0
+        fps_probe = 0.0
+        frames_probe = 0
+        try:
+            if project.video_path:
+                import cv2  # type: ignore
+
+                cap_probe = cv2.VideoCapture(str(project.video_path))
+                fps_probe = float(cap_probe.get(cv2.CAP_PROP_FPS) or 0.0)
+                frames_probe = int(cap_probe.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                cap_probe.release()
+                effective_scan_interval, estimated_samples = _compute_effective_scan_interval(
+                    fps=fps_probe,
+                    total_frames=frames_probe,
+                    requested_interval_sec=requested_scan_interval,
+                )
+        except Exception:
+            effective_scan_interval = requested_scan_interval
+            estimated_samples = 0
         push_event(
             job,
             artifacts,
             "pipeline",
-            f"Bat dau pipeline, interval OCR={scan_interval_sec:.2f}s, voice_map={len(voice_map)}.",
+            f"Bat dau pipeline, interval OCR yeu cau={requested_scan_interval:.2f}s, hieu dung={effective_scan_interval:.2f}s, voice_map={len(voice_map)}.",
             1,
             logger_name="pipeline",
         )
@@ -871,7 +921,11 @@ def run_pipeline(
                 "project_id": project.id,
                 "source_lang": project.source_lang,
                 "target_lang": project.target_lang,
-                "scan_interval_sec": float(scan_interval_sec),
+                "scan_interval_sec": requested_scan_interval,
+                "effective_scan_interval_sec": effective_scan_interval,
+                "estimated_samples": estimated_samples,
+                "video_fps": fps_probe,
+                "video_frames": frames_probe,
                 "voice_map_size": len(voice_map),
                 "gemini_key_present": bool(primary_key),
                 "gemini_fallback_key_enabled": bool(backup_key),
@@ -944,26 +998,13 @@ def run_pipeline(
                 )
                 _update_job(db, job, JobStatus.running, progress, "ocr", artifacts=artifacts)
 
-        estimated_samples = 0
-        try:
-            if project.video_path:
-                import cv2  # type: ignore
-
-                cap_probe = cv2.VideoCapture(str(project.video_path))
-                fps_probe = float(cap_probe.get(cv2.CAP_PROP_FPS) or 0.0)
-                frames_probe = int(cap_probe.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-                cap_probe.release()
-                if fps_probe > 0 and frames_probe > 0:
-                    estimated_samples = max(1, int((frames_probe / fps_probe) / max(scan_interval_sec, 0.1)))
-        except Exception:
-            estimated_samples = 0
         variant_profile = (get_settings().ocr_profile or "balanced").strip().lower()
         if estimated_samples >= int(get_settings().ocr_long_video_threshold_samples):
             variant_profile = "fast"
 
         segments, ocr_meta = _ocr_segments_from_video(
             project,
-            scan_interval_sec=scan_interval_sec,
+            scan_interval_sec=effective_scan_interval,
             variant_profile=variant_profile,
             progress_hook=_on_ocr_progress,
         )
@@ -1002,7 +1043,7 @@ def run_pipeline(
             28,
             logger_name="pipeline",
         )
-        segments = _merge_adjacent_similar_segments(segments, max_gap_sec=max(0.8, scan_interval_sec * 1.5), ratio_threshold=0.9)
+        segments = _merge_adjacent_similar_segments(segments, max_gap_sec=max(0.8, effective_scan_interval * 1.5), ratio_threshold=0.9)
         set_stat(
             artifacts,
             "dedupe_ocr",
@@ -1094,7 +1135,7 @@ def run_pipeline(
         # MVP: bo qua merge nang cao, chi loai dong trung lien tiep.
         deduped = _merge_adjacent_similar_segments(
             normalized,
-            max_gap_sec=max(0.8, scan_interval_sec * 1.5),
+            max_gap_sec=max(0.8, effective_scan_interval * 1.5),
             ratio_threshold=0.92,
         )
         set_stat(

@@ -5,8 +5,10 @@ import shutil
 import threading
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -28,10 +30,17 @@ web_dist_dir = Path(__file__).resolve().parents[1] / "web_dist"
 web_index_file = web_dist_dir / "index.html"
 logger = logging.getLogger("nanbao.ocr.api")
 
-app = FastAPI(title=settings.app_name)
+app = FastAPI(
+    title=settings.app_name,
+    docs_url="/docs" if settings.enable_docs else None,
+    redoc_url="/redoc" if settings.enable_docs else None,
+    openapi_url="/openapi.json" if settings.enable_docs else None,
+)
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts_list or ["*"])
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.web_origin, "http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=list(dict.fromkeys([settings.web_origin, "http://localhost:5173", "http://127.0.0.1:5173"])),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -41,11 +50,19 @@ app.add_middleware(
 @app.middleware("http")
 async def enforce_api_auth(request, call_next):
     await require_api_auth(request)
-    return await call_next(request)
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Cache-Control", "no-store")
+    if settings.is_production:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
 
 
 @app.on_event("startup")
 def on_startup() -> None:
+    settings.validate_production_guard()
     Base.metadata.create_all(bind=engine)
     ensure_runtime_indexes()
     settings.storage_path.mkdir(parents=True, exist_ok=True)
@@ -53,7 +70,20 @@ def on_startup() -> None:
 
 @app.get("/health")
 def health():
-    return {"ok": True}
+    return {"ok": True, "environment": settings.environment}
+
+
+def _enforce_upload_constraints(file: UploadFile, request_headers: dict[str, str] | None = None) -> None:
+    max_bytes = max(1, int(settings.max_upload_size_mb or 512)) * 1024 * 1024
+    headers = request_headers or {}
+    content_length = headers.get("content-length") or headers.get("Content-Length") or ""
+    if content_length.isdigit() and int(content_length) > max_bytes:
+        raise HTTPException(status_code=413, detail="file_too_large")
+
+    ext = (Path(file.filename or "").suffix or "").lower()
+    allowed_exts = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
+    if ext and ext not in allowed_exts:
+        raise HTTPException(status_code=400, detail="unsupported_video_format")
 
 
 def _enqueue_pipeline_job(job_id: str, payload: schemas.PipelineStartRequest) -> None:
@@ -220,16 +250,28 @@ def update_project(project_id: str, payload: schemas.ProjectUpdate, db: Session 
 
 
 @app.post("/projects/{project_id}/upload", response_model=schemas.ProjectRead)
-def upload_video(project_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+def upload_video(project_id: str, request: Request, file: UploadFile = File(...), db: Session = Depends(get_db)):
     project = crud.get_project(db, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="project_not_found")
+    _enforce_upload_constraints(file, dict(request.headers))
     project_dir = settings.storage_path / project_id
     project_dir.mkdir(parents=True, exist_ok=True)
     ext = Path(file.filename or "video.mp4").suffix or ".mp4"
     target = project_dir / f"source{ext}"
+    max_bytes = max(1, int(settings.max_upload_size_mb or 512)) * 1024 * 1024
+    written = 0
     with target.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
+        while True:
+            chunk = file.file.read(1024 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > max_bytes:
+                f.close()
+                target.unlink(missing_ok=True)
+                raise HTTPException(status_code=413, detail="file_too_large")
+            f.write(chunk)
     _cleanup_project_generated_files(project_dir, keep_source=target)
     project = crud.attach_video(db, project, target)
     return _to_project_read(project)

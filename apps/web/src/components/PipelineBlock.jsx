@@ -1,5 +1,7 @@
 export function PipelineBlock({
   wizardStep,
+  selectedProjectId,
+  hasSavedRoi,
   pipelineForm,
   setPipelineForm,
   translationPreset,
@@ -124,7 +126,10 @@ export function PipelineBlock({
           }
         />
       </label>
-      <button disabled={loading} onClick={startPipeline}>
+      <button
+        disabled={loading || !selectedProjectId || !hasSavedRoi}
+        onClick={startPipeline}
+      >
         Chạy quy trình
       </button>
       {latestPipelineJob ? (

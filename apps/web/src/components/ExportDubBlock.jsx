@@ -54,7 +54,7 @@ export function ExportDubBlock({
         </select>
       </label>
       <button
-        disabled={exporting || editableSegments.length === 0}
+        disabled={exporting || !selectedProjectId || editableSegments.length === 0}
         onClick={exportSubtitle}
       >
         {exporting ? "Đang xuất phụ đề..." : "Xuất phụ đề"}
@@ -124,11 +124,24 @@ export function ExportDubBlock({
         Khớp tổng thời lượng video gốc
       </label>
       <button
-        disabled={dubbing || editableSegments.length === 0}
+        disabled={dubbing || !selectedProjectId || !dubForm.srt_key?.trim()}
         onClick={startDubAudio}
       >
         {dubbing ? "Đang dựng âm thanh..." : "Tạo âm thanh lồng tiếng"}
       </button>
+      {latestDubJob ? (
+        <div className="info">
+          <p>
+            <strong>Job dub:</strong> {latestDubJob.step || latestDubJob.status || "-"}
+          </p>
+          <p>
+            <strong>Tiến độ:</strong> {latestDubJob.progress ?? 0}%
+          </p>
+          {latestDubJob.error_message ? (
+            <p className="error">{latestDubJob.error_message}</p>
+          ) : null}
+        </div>
+      ) : null}
       {lastExport ? (
         <a
           className="download-link"

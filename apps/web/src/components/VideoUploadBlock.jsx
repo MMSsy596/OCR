@@ -23,7 +23,10 @@ export function VideoUploadBlock({
           onChange={(e) => setVideoFile(e.target.files?.[0] || null)}
         />
       </label>
-      <button disabled={loading} onClick={uploadVideo}>
+      <button
+        disabled={loading || !selectedProjectId || !videoFile}
+        onClick={uploadVideo}
+      >
         Tải video lên
       </button>
       <label>

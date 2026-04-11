@@ -11,15 +11,14 @@ import { useProjectWizard } from "./hooks/useProjectWizard";
 import { useRoiEditor } from "./hooks/useRoiEditor";
 import { useSubtitleActions } from "./hooks/useSubtitleActions";
 import { useSubtitleEditor } from "./hooks/useSubtitleEditor";
-import { appendApiToken, withApiAuth } from "./lib/api";
+import { appendApiToken, readApiErrorMessage, withApiAuth } from "./lib/api";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
 async function jsonFetch(url, options = {}) {
   const res = await fetch(url, withApiAuth(options));
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `HTTP ${res.status}`);
+    throw new Error(await readApiErrorMessage(res, `HTTP ${res.status}`));
   }
   return res.json();
 }
@@ -284,6 +283,7 @@ export function App() {
     canGoNext,
     wizardSteps,
     statusLabel,
+    hasSavedRoi,
     goToStep,
   } = useProjectWizard({
     selectedProject,
@@ -312,6 +312,14 @@ export function App() {
   useEffect(() => {
     loadProjectsSafe();
   }, []);
+
+  useEffect(() => {
+    setJobs([]);
+    setEditableSegments([]);
+    setLastExport(null);
+    setSrtUploadFile(null);
+    setCurrentVideoTime(0);
+  }, [selectedProjectId, setCurrentVideoTime]);
 
   const composeCurrentPrompt = () =>
     composePromptFromPreset(
@@ -539,6 +547,8 @@ export function App() {
 
           <PipelineBlock
             wizardStep={wizardStep}
+            selectedProjectId={selectedProjectId}
+            hasSavedRoi={hasSavedRoi}
             pipelineForm={pipelineForm}
             setPipelineForm={setPipelineForm}
             translationPreset={translationPreset}
@@ -588,7 +598,7 @@ export function App() {
               </button>
               <button
                 disabled={retranslating || editableSegments.length === 0}
-                onClick={retranslateOnly}
+                onClick={() => retranslateOnly(autoApplyPromptPreset)}
               >
                 {retranslating ? "Đang dịch lại..." : "Dịch lại"}
               </button>

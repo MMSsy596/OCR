@@ -87,17 +87,29 @@ class RetranslateResponse(BaseModel):
 
 
 class PipelineStartRequest(BaseModel):
+    input_mode: str = "video_ocr"  # video_ocr|audio_asr
     gemini_api_key: str | None = None
     voice_map: dict[str, str] = Field(default_factory=dict)
     scan_interval_sec: float = Field(default=1.5, ge=0.1, le=10.0)
+    audio_provider: str = "whisper_cli"
+    audio_asr_model: str = "base"
+    audio_asr_language: str = "zh"
+    audio_chunk_sec: int = Field(default=600, ge=60, le=3600)
+    audio_chunk_overlap_sec: int = Field(default=4, ge=0, le=30)
 
 
 class UrlIngestStartRequest(BaseModel):
     source_url: str
     auto_start_pipeline: bool = True
+    input_mode: str = "video_ocr"
     gemini_api_key: str | None = None
     voice_map: dict[str, str] = Field(default_factory=dict)
     scan_interval_sec: float = Field(default=1.5, ge=0.1, le=10.0)
+    audio_provider: str = "whisper_cli"
+    audio_asr_model: str = "base"
+    audio_asr_language: str = "zh"
+    audio_chunk_sec: int = Field(default=600, ge=60, le=3600)
+    audio_chunk_overlap_sec: int = Field(default=4, ge=0, le=30)
 
 
 class DubStartRequest(BaseModel):

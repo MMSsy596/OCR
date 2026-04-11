@@ -91,9 +91,15 @@ def _enqueue_pipeline_job(job_id: str, payload: schemas.PipelineStartRequest) ->
     q.enqueue(
         "app.pipeline.run_pipeline",
         job_id,
+        input_mode=payload.input_mode,
         gemini_api_key=payload.gemini_api_key,
         voice_map=payload.voice_map,
         scan_interval_sec=payload.scan_interval_sec,
+        audio_provider=payload.audio_provider,
+        audio_asr_model=payload.audio_asr_model,
+        audio_asr_language=payload.audio_asr_language,
+        audio_chunk_sec=payload.audio_chunk_sec,
+        audio_chunk_overlap_sec=payload.audio_chunk_overlap_sec,
         job_id=job_id,
     )
 
@@ -180,9 +186,15 @@ def _enqueue_url_ingest_job(job_id: str, payload: schemas.UrlIngestStartRequest)
         job_id,
         source_url=payload.source_url,
         auto_start_pipeline=payload.auto_start_pipeline,
+        input_mode=payload.input_mode,
         gemini_api_key=payload.gemini_api_key,
         voice_map=payload.voice_map,
         scan_interval_sec=payload.scan_interval_sec,
+        audio_provider=payload.audio_provider,
+        audio_asr_model=payload.audio_asr_model,
+        audio_asr_language=payload.audio_asr_language,
+        audio_chunk_sec=payload.audio_chunk_sec,
+        audio_chunk_overlap_sec=payload.audio_chunk_overlap_sec,
         job_id=job_id,
         job_timeout=14400,
     )
@@ -372,9 +384,15 @@ def start_pipeline(project_id: str, payload: schemas.PipelineStartRequest, db: S
             f"pipeline-{job.id}",
             run_pipeline,
             job.id,
+            input_mode=payload.input_mode,
             gemini_api_key=payload.gemini_api_key,
             voice_map=payload.voice_map,
             scan_interval_sec=payload.scan_interval_sec,
+            audio_provider=payload.audio_provider,
+            audio_asr_model=payload.audio_asr_model,
+            audio_asr_language=payload.audio_asr_language,
+            audio_chunk_sec=payload.audio_chunk_sec,
+            audio_chunk_overlap_sec=payload.audio_chunk_overlap_sec,
         )
     return job
 
@@ -571,9 +589,15 @@ def retry_stuck_jobs(project_id: str, db: Session = Depends(get_db)):
             else:
                 run_pipeline(
                     new_job.id,
+                    input_mode=payload.input_mode,  # type: ignore[attr-defined]
                     gemini_api_key=payload.gemini_api_key,  # type: ignore[attr-defined]
                     voice_map=payload.voice_map,  # type: ignore[attr-defined]
                     scan_interval_sec=payload.scan_interval_sec,  # type: ignore[attr-defined]
+                    audio_provider=payload.audio_provider,  # type: ignore[attr-defined]
+                    audio_asr_model=payload.audio_asr_model,  # type: ignore[attr-defined]
+                    audio_asr_language=payload.audio_asr_language,  # type: ignore[attr-defined]
+                    audio_chunk_sec=payload.audio_chunk_sec,  # type: ignore[attr-defined]
+                    audio_chunk_overlap_sec=payload.audio_chunk_overlap_sec,  # type: ignore[attr-defined]
                 )
 
         retried_from.append(old_job.id)

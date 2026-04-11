@@ -8,6 +8,7 @@ export function useProjectWizard({
   editableSegments,
   jobs,
   hasValidRoi,
+  pipelineInputMode,
   setMessage,
 }) {
   const [wizardStep, setWizardStep] = useState(1);
@@ -17,6 +18,7 @@ export function useProjectWizard({
     () => hasVideo && hasValidRoi(selectedProject?.roi),
     [hasVideo, selectedProject?.roi, hasValidRoi],
   );
+  const requiresRoi = pipelineInputMode !== "audio_asr";
   const hasOcrProgress = useMemo(() => {
     if ((latestPipelineJob?.progress || 0) > 0) return true;
     if (latestJobEvents.length > 0) return true;
@@ -38,15 +40,15 @@ export function useProjectWizard({
   );
   const maxUnlockedStep = useMemo(() => {
     if (!hasVideo) return 1;
-    if (!hasSavedRoi) return 2;
+    if (requiresRoi && !hasSavedRoi) return 2;
     if (!hasOcrProgress && !hasDubActivity) return 3;
     return 4;
-  }, [hasVideo, hasSavedRoi, hasOcrProgress, hasDubActivity]);
+  }, [hasVideo, requiresRoi, hasSavedRoi, hasOcrProgress, hasDubActivity]);
   const canGoNext = wizardStep < maxUnlockedStep;
   const wizardSteps = [
     { id: 1, title: "Video" },
-    { id: 2, title: "ROI" },
-    { id: 3, title: "OCR Log" },
+    { id: 2, title: requiresRoi ? "ROI" : "Nguồn vào" },
+    { id: 3, title: "Xử lý log" },
     { id: 4, title: "SRT/TTS" },
   ];
 
@@ -68,7 +70,11 @@ export function useProjectWizard({
       return;
     }
     if (stepId === 3) {
-      setMessage("Cần có video và lưu ROI trước khi sang bước OCR Log.");
+      setMessage(
+        requiresRoi
+          ? "Cần có video và lưu ROI trước khi sang bước xử lý log."
+          : "Cần có video trước khi sang bước xử lý log.",
+      );
       return;
     }
     if (stepId === 4) {
@@ -85,6 +91,7 @@ export function useProjectWizard({
     setWizardStep,
     hasVideo,
     hasSavedRoi,
+    requiresRoi,
     hasOcrProgress,
     hasDubActivity,
     maxUnlockedStep,

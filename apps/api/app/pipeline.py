@@ -2,8 +2,11 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
 import threading
 import time
+import wave
 from queue import Empty, Queue
 from pathlib import Path
 from typing import Any, Callable
@@ -159,6 +162,286 @@ def _extract_best_ocr_text(ocr_result: Any) -> tuple[str, float]:
     text = " ".join(text.split())
     avg_score = sum(scores) / len(scores) if scores else 0.0
     return text, avg_score
+
+
+def _parse_subtitle_timestamp(value: str) -> float:
+    cleaned = (value or "").strip().replace(",", ".")
+    match = re.match(r"(?:(\d+):)?(\d{2}):(\d{2})(?:\.(\d{1,3}))?$", cleaned)
+    if not match:
+        raise ValueError(f"invalid_subtitle_timestamp:{value}")
+    hours = int(match.group(1) or 0)
+    minutes = int(match.group(2) or 0)
+    seconds = int(match.group(3) or 0)
+    millis_raw = (match.group(4) or "0").ljust(3, "0")[:3]
+    return (hours * 3600) + (minutes * 60) + seconds + (int(millis_raw) / 1000.0)
+
+
+def _parse_srt_segments(
+    srt_text: str,
+    *,
+    start_offset_sec: float = 0.0,
+    default_voice: str = "narrator-neutral",
+) -> list[dict[str, Any]]:
+    segments: list[dict[str, Any]] = []
+    blocks = re.split(r"\r?\n\r?\n+", (srt_text or "").strip())
+    for block in blocks:
+        lines = [line.strip("\ufeff ").rstrip() for line in block.splitlines() if line.strip()]
+        if not lines:
+            continue
+        if len(lines) >= 2 and re.fullmatch(r"\d+", lines[0]):
+            lines = lines[1:]
+        if not lines or "-->" not in lines[0]:
+            continue
+        timeline = lines[0]
+        text_lines = [line.strip() for line in lines[1:] if line.strip()]
+        if not text_lines:
+            continue
+        start_text, end_text = [part.strip() for part in timeline.split("-->", 1)]
+        start_sec = _parse_subtitle_timestamp(start_text) + float(start_offset_sec)
+        end_sec = _parse_subtitle_timestamp(end_text) + float(start_offset_sec)
+        if end_sec <= start_sec:
+            end_sec = start_sec + 0.8
+        text = " ".join(text_lines)
+        text = " ".join(text.split())
+        if not text:
+            continue
+        segments.append(
+            {
+                "start_sec": round(start_sec, 3),
+                "end_sec": round(end_sec, 3),
+                "raw_text": text,
+                "translated_text": "",
+                "speaker": "narrator",
+                "voice": default_voice,
+                "confidence": 0.92,
+            }
+        )
+    return segments
+
+
+def _plan_audio_chunks(duration_sec: float, chunk_sec: int, overlap_sec: int) -> list[dict[str, float]]:
+    safe_duration = max(0.0, float(duration_sec or 0.0))
+    safe_chunk = max(60, int(chunk_sec or 600))
+    safe_overlap = max(0, min(int(overlap_sec or 0), max(0, safe_chunk - 5)))
+    if safe_duration <= 0:
+        return [{"index": 0, "start_sec": 0.0, "duration_sec": 0.0, "end_sec": 0.0}]
+    if safe_duration <= safe_chunk:
+        return [{"index": 0, "start_sec": 0.0, "duration_sec": safe_duration, "end_sec": safe_duration}]
+
+    chunks: list[dict[str, float]] = []
+    cursor = 0.0
+    index = 0
+    while cursor < safe_duration:
+        end_sec = min(safe_duration, cursor + safe_chunk)
+        chunks.append(
+            {
+                "index": index,
+                "start_sec": round(cursor, 3),
+                "duration_sec": round(end_sec - cursor, 3),
+                "end_sec": round(end_sec, 3),
+            }
+        )
+        if end_sec >= safe_duration:
+            break
+        cursor = max(0.0, end_sec - safe_overlap)
+        index += 1
+    return chunks
+
+
+def _probe_media_duration(media_path: Path) -> float | None:
+    ffprobe_bin = shutil.which("ffprobe")
+    if not ffprobe_bin:
+        if media_path.suffix.lower() == ".wav":
+            try:
+                with wave.open(str(media_path), "rb") as wav_file:
+                    rate = wav_file.getframerate() or 0
+                    frames = wav_file.getnframes() or 0
+                    if rate > 0:
+                        return frames / rate
+            except Exception:
+                return None
+        return None
+    cmd = [
+        ffprobe_bin,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(media_path),
+    ]
+    try:
+        out = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        duration = float((out.stdout or "").strip())
+        return duration if duration > 0 else None
+    except Exception:
+        return None
+
+
+def _run_cmd_checked(cmd: list[str]) -> None:
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+
+def _extract_audio_chunk(
+    *,
+    source_video: Path,
+    output_wav: Path,
+    start_sec: float = 0.0,
+    duration_sec: float = 0.0,
+) -> None:
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        raise RuntimeError("audio_asr_requires_ffmpeg")
+    cmd = [ffmpeg_bin, "-y"]
+    if start_sec > 0:
+        cmd += ["-ss", f"{float(start_sec):.3f}"]
+    cmd += ["-i", str(source_video)]
+    if duration_sec > 0:
+        cmd += ["-t", f"{float(duration_sec):.3f}"]
+    cmd += [
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "pcm_s16le",
+        str(output_wav),
+    ]
+    _run_cmd_checked(cmd)
+
+
+def _run_whisper_cli(
+    *,
+    audio_path: Path,
+    output_dir: Path,
+    model: str,
+    language: str,
+) -> Path:
+    whisper_bin = shutil.which("whisper")
+    if not whisper_bin:
+        raise RuntimeError("audio_asr_requires_whisper_cli")
+    cmd = [
+        whisper_bin,
+        str(audio_path),
+        "--task",
+        "transcribe",
+        "--model",
+        (model or "base").strip() or "base",
+        "--output_format",
+        "srt",
+        "--output_dir",
+        str(output_dir),
+        "--verbose",
+        "False",
+        "--fp16",
+        "False",
+    ]
+    if (language or "").strip():
+        cmd += ["--language", language.strip()]
+    _run_cmd_checked(cmd)
+    output_srt = output_dir / f"{audio_path.stem}.srt"
+    if not output_srt.exists():
+        raise RuntimeError("audio_asr_srt_not_generated")
+    return output_srt
+
+
+def _segments_from_audio_asr(
+    project: Project,
+    *,
+    voice_map: dict[str, str],
+    provider: str,
+    model: str,
+    language: str,
+    chunk_sec: int,
+    overlap_sec: int,
+    progress_hook: Callable[[dict[str, Any]], None] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    meta: dict[str, Any] = {
+        "engine": "audio_asr",
+        "provider": provider or "whisper_cli",
+        "model": model or "base",
+        "language": language or "",
+        "video_path": str(project.video_path or ""),
+        "audio_chunk_sec": int(chunk_sec or 600),
+        "audio_chunk_overlap_sec": int(overlap_sec or 0),
+        "chunks_total": 0,
+        "chunks_done": 0,
+        "segments_raw": 0,
+    }
+    if not project.video_path:
+        meta["engine"] = "missing_video"
+        return [], meta
+    video_path = Path(project.video_path)
+    if not video_path.exists():
+        meta["engine"] = "missing_video_file"
+        return [], meta
+    provider_key = (provider or "whisper_cli").strip().lower()
+    if provider_key != "whisper_cli":
+        raise RuntimeError(f"audio_asr_provider_not_supported:{provider_key}")
+
+    project_dir = video_path.parent
+    tmp_root = project_dir / "_asr_tmp"
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    run_dir = tmp_root / f"job_{int(time.time() * 1000)}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    default_voice = voice_map.get("narrator", "narrator-neutral")
+
+    duration_sec = _probe_media_duration(video_path) or 0.0
+    meta["video_duration_sec"] = round(duration_sec, 3)
+    chunks = _plan_audio_chunks(duration_sec, chunk_sec, overlap_sec)
+    meta["chunks_total"] = len(chunks)
+    meta["chunk_plan"] = chunks[:8]
+    all_segments: list[dict[str, Any]] = []
+
+    try:
+        for chunk in chunks:
+            chunk_idx = int(chunk["index"])
+            chunk_dir = run_dir / f"chunk_{chunk_idx:03d}"
+            chunk_dir.mkdir(parents=True, exist_ok=True)
+            audio_path = chunk_dir / f"audio_{chunk_idx:03d}.wav"
+            _extract_audio_chunk(
+                source_video=video_path,
+                output_wav=audio_path,
+                start_sec=float(chunk["start_sec"]),
+                duration_sec=float(chunk["duration_sec"]),
+            )
+            srt_path = _run_whisper_cli(
+                audio_path=audio_path,
+                output_dir=chunk_dir,
+                model=model,
+                language=language,
+            )
+            parsed = _parse_srt_segments(
+                srt_path.read_text(encoding="utf-8", errors="ignore"),
+                start_offset_sec=float(chunk["start_sec"]),
+                default_voice=default_voice,
+            )
+            all_segments.extend(parsed)
+            meta["chunks_done"] = chunk_idx + 1
+            meta["segments_raw"] = len(all_segments)
+            if progress_hook:
+                progress_hook(
+                    {
+                        "chunks_done": meta["chunks_done"],
+                        "chunks_total": meta["chunks_total"],
+                        "segments_raw": meta["segments_raw"],
+                        "duration_sec": duration_sec,
+                    }
+                )
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+        meta["tmp_dir_cleaned"] = True
+
+    deduped = _merge_adjacent_similar_segments(
+        all_segments,
+        max_gap_sec=max(0.8, float(overlap_sec) + 0.8),
+        ratio_threshold=0.93,
+    )
+    meta["segments_after_merge"] = len(deduped)
+    meta["long_audio_mode"] = bool(duration_sec > max(0, chunk_sec))
+    return deduped, meta
 
 
 def _ocr_segments_from_video(
@@ -864,9 +1147,15 @@ def retranslate_project_segments(project_id: str, gemini_api_key: str | None = N
 
 def run_pipeline(
     job_id: str,
+    input_mode: str = "video_ocr",
     gemini_api_key: str | None = None,
     voice_map: dict[str, str] | None = None,
     scan_interval_sec: float = 1.5,
+    audio_provider: str = "whisper_cli",
+    audio_asr_model: str = "base",
+    audio_asr_language: str = "zh",
+    audio_chunk_sec: int = 600,
+    audio_chunk_overlap_sec: int = 4,
 ) -> dict[str, Any]:
     db = SessionLocal()
     voice_map = voice_map or {}
@@ -885,6 +1174,7 @@ def run_pipeline(
         db.commit()
 
         artifacts = prepare_job_artifacts(job)
+        pipeline_input_mode = (input_mode or "video_ocr").strip().lower()
         requested_scan_interval = float(scan_interval_sec)
         effective_scan_interval = requested_scan_interval
         estimated_samples = 0
@@ -910,7 +1200,10 @@ def run_pipeline(
             job,
             artifacts,
             "pipeline",
-            f"Bat dau pipeline, interval OCR yeu cau={requested_scan_interval:.2f}s, hieu dung={effective_scan_interval:.2f}s, voice_map={len(voice_map)}.",
+            (
+                f"Bat dau pipeline mode={pipeline_input_mode}, interval OCR yeu cau={requested_scan_interval:.2f}s, "
+                f"hieu dung={effective_scan_interval:.2f}s, voice_map={len(voice_map)}."
+            ),
             1,
             logger_name="pipeline",
         )
@@ -921,6 +1214,7 @@ def run_pipeline(
                 "project_id": project.id,
                 "source_lang": project.source_lang,
                 "target_lang": project.target_lang,
+                "input_mode": pipeline_input_mode,
                 "scan_interval_sec": requested_scan_interval,
                 "effective_scan_interval_sec": effective_scan_interval,
                 "estimated_samples": estimated_samples,
@@ -929,130 +1223,204 @@ def run_pipeline(
                 "voice_map_size": len(voice_map),
                 "gemini_key_present": bool(primary_key),
                 "gemini_fallback_key_enabled": bool(backup_key),
+                "audio_provider": audio_provider,
+                "audio_asr_model": audio_asr_model,
+                "audio_asr_language": audio_asr_language,
+                "audio_chunk_sec": int(audio_chunk_sec or 600),
+                "audio_chunk_overlap_sec": int(audio_chunk_overlap_sec or 0),
             },
         )
         _update_job(db, job, JobStatus.running, 1, "init", artifacts=artifacts)
+        if pipeline_input_mode == "audio_asr":
+            push_event(job, artifacts, "audio", "Dang tach audio va nhan dien giong noi...", 5, logger_name="pipeline")
+            _update_job(db, job, JobStatus.running, 5, "audio_asr", artifacts=artifacts)
+            last_audio_progress = 5
 
-        push_event(job, artifacts, "ocr", "Dang tach video thanh frame va OCR...", 5, logger_name="pipeline")
-        _update_job(db, job, JobStatus.running, 5, "ocr", artifacts=artifacts)
-        last_ocr_progress = 5
-        last_ocr_event_sample = 0
+            def _on_audio_progress(live_meta: dict[str, Any]) -> None:
+                nonlocal last_audio_progress, artifacts
+                total = int(live_meta.get("chunks_total", 0) or 0)
+                done = int(live_meta.get("chunks_done", 0) or 0)
+                segments_raw = int(live_meta.get("segments_raw", 0) or 0)
+                if total > 0:
+                    ratio = done / max(1, total)
+                    progress = min(30, max(5, 5 + int(ratio * 25)))
+                    progress_pct = round(ratio * 100.0, 2)
+                else:
+                    progress = min(30, max(6, 5 + done))
+                    progress_pct = 0.0
+                set_stat(
+                    artifacts,
+                    "audio_live",
+                    {
+                        "chunks_done": done,
+                        "chunks_total": total,
+                        "progress_pct": progress_pct,
+                        "segments_raw": segments_raw,
+                        "duration_sec": float(live_meta.get("duration_sec", 0) or 0),
+                    },
+                )
+                if progress > last_audio_progress or (done > 0 and done == total):
+                    last_audio_progress = max(last_audio_progress, progress)
+                    push_event(
+                        job,
+                        artifacts,
+                        "audio",
+                        f"ASR dang chay: da xu ly {done}/{total or '?'} chunk, thu duoc {segments_raw} doan.",
+                        progress,
+                        logger_name="pipeline",
+                    )
+                    _update_job(db, job, JobStatus.running, progress, "audio_asr", artifacts=artifacts)
 
-        def _on_ocr_progress(live_meta: dict[str, Any]) -> None:
-            nonlocal last_ocr_progress, artifacts, last_ocr_event_sample
-            sampled = int(live_meta.get("frames_sampled", 0) or 0)
-            estimated = int(live_meta.get("estimated_samples", 0) or 0)
-            if estimated > 0:
-                ratio = sampled / max(1, estimated)
-                progress = min(30, max(5, 5 + int(ratio * 25)))
-                progress_pct = min(100.0, max(0.0, ratio * 100.0))
-            else:
-                # Some codecs/container metadata report 0 total frames.
-                # Keep progress/event moving to avoid UI stuck at 5%.
-                ratio = 0.0
-                progress = min(30, max(6, 5 + min(25, sampled // 2)))
-                progress_pct = 0.0
-            ocr_hit_frames = int(live_meta.get("ocr_hit_frames", 0) or 0)
-            duplicate_extend_count = int(live_meta.get("duplicate_extend_count", 0) or 0)
-            skipped_similar_frame_count = int(live_meta.get("skipped_similar_frame_count", 0) or 0)
-
+            segments, input_meta = _segments_from_audio_asr(
+                project,
+                voice_map=voice_map,
+                provider=audio_provider,
+                model=audio_asr_model,
+                language=audio_asr_language or project.source_lang,
+                chunk_sec=int(audio_chunk_sec or 600),
+                overlap_sec=int(audio_chunk_overlap_sec or 0),
+                progress_hook=_on_audio_progress,
+            )
             set_stat(
                 artifacts,
-                "ocr_live",
+                "audio_asr",
                 {
-                    "frames_sampled": sampled,
-                    "estimated_samples": estimated,
-                    "estimated_samples_known": bool(estimated > 0),
-                    "progress_pct": round(progress_pct, 2),
-                    "ocr_hit_frames": ocr_hit_frames,
-                    "duplicate_extend_count": duplicate_extend_count,
-                    "skipped_similar_frame_count": skipped_similar_frame_count,
+                    **input_meta,
+                    "source": "audio_asr",
                 },
             )
-            if progress > last_ocr_progress:
-                last_ocr_progress = progress
-                _update_job(db, job, JobStatus.running, progress, "ocr", artifacts=artifacts)
+            push_event(
+                job,
+                artifacts,
+                "audio",
+                f"ASR xong: {len(segments)} doan text tu audio.",
+                34,
+                logger_name="pipeline",
+            )
+        else:
+            push_event(job, artifacts, "ocr", "Dang tach video thanh frame va OCR...", 5, logger_name="pipeline")
+            _update_job(db, job, JobStatus.running, 5, "ocr", artifacts=artifacts)
+            last_ocr_progress = 5
+            last_ocr_event_sample = 0
 
-            min_sample_step = max(5, estimated // 20) if estimated > 0 else 10
-            if sampled - last_ocr_event_sample >= min_sample_step or (estimated > 0 and sampled >= estimated):
-                last_ocr_event_sample = sampled
+            def _on_ocr_progress(live_meta: dict[str, Any]) -> None:
+                nonlocal last_ocr_progress, artifacts, last_ocr_event_sample
+                sampled = int(live_meta.get("frames_sampled", 0) or 0)
+                estimated = int(live_meta.get("estimated_samples", 0) or 0)
                 if estimated > 0:
-                    msg = (
-                        f"OCR dang chay: da tach {sampled}/{estimated} frame "
-                        f"({progress_pct:.1f}%), frame co text={ocr_hit_frames}, "
-                        f"bo qua tuong tu={skipped_similar_frame_count}, noi doan={duplicate_extend_count}."
-                    )
+                    ratio = sampled / max(1, estimated)
+                    progress = min(30, max(5, 5 + int(ratio * 25)))
+                    progress_pct = min(100.0, max(0.0, ratio * 100.0))
                 else:
-                    msg = (
-                        f"OCR dang chay: da xu ly {sampled} frame "
-                        f"(chua uoc luong duoc tong so frame), frame co text={ocr_hit_frames}, "
-                        f"bo qua tuong tu={skipped_similar_frame_count}, noi doan={duplicate_extend_count}."
+                    progress = min(30, max(6, 5 + min(25, sampled // 2)))
+                    progress_pct = 0.0
+                ocr_hit_frames = int(live_meta.get("ocr_hit_frames", 0) or 0)
+                duplicate_extend_count = int(live_meta.get("duplicate_extend_count", 0) or 0)
+                skipped_similar_frame_count = int(live_meta.get("skipped_similar_frame_count", 0) or 0)
+
+                set_stat(
+                    artifacts,
+                    "ocr_live",
+                    {
+                        "frames_sampled": sampled,
+                        "estimated_samples": estimated,
+                        "estimated_samples_known": bool(estimated > 0),
+                        "progress_pct": round(progress_pct, 2),
+                        "ocr_hit_frames": ocr_hit_frames,
+                        "duplicate_extend_count": duplicate_extend_count,
+                        "skipped_similar_frame_count": skipped_similar_frame_count,
+                    },
+                )
+                if progress > last_ocr_progress:
+                    last_ocr_progress = progress
+                    _update_job(db, job, JobStatus.running, progress, "ocr", artifacts=artifacts)
+
+                min_sample_step = max(5, estimated // 20) if estimated > 0 else 10
+                if sampled - last_ocr_event_sample >= min_sample_step or (estimated > 0 and sampled >= estimated):
+                    last_ocr_event_sample = sampled
+                    if estimated > 0:
+                        msg = (
+                            f"OCR dang chay: da tach {sampled}/{estimated} frame "
+                            f"({progress_pct:.1f}%), frame co text={ocr_hit_frames}, "
+                            f"bo qua tuong tu={skipped_similar_frame_count}, noi doan={duplicate_extend_count}."
+                        )
+                    else:
+                        msg = (
+                            f"OCR dang chay: da xu ly {sampled} frame "
+                            f"(chua uoc luong duoc tong so frame), frame co text={ocr_hit_frames}, "
+                            f"bo qua tuong tu={skipped_similar_frame_count}, noi doan={duplicate_extend_count}."
+                        )
+                    push_event(
+                        job,
+                        artifacts,
+                        "ocr",
+                        msg,
+                        progress,
+                        logger_name="pipeline",
                     )
+                    _update_job(db, job, JobStatus.running, progress, "ocr", artifacts=artifacts)
+
+            variant_profile = (get_settings().ocr_profile or "balanced").strip().lower()
+            if estimated_samples >= int(get_settings().ocr_long_video_threshold_samples):
+                variant_profile = "fast"
+
+            segments, ocr_meta = _ocr_segments_from_video(
+                project,
+                scan_interval_sec=effective_scan_interval,
+                variant_profile=variant_profile,
+                progress_hook=_on_ocr_progress,
+            )
+            ocr_source = "rapidocr"
+            if not segments:
                 push_event(
                     job,
                     artifacts,
                     "ocr",
-                    msg,
-                    progress,
+                    "OCR that khong co ket qua, fallback sang mau subtitle gia lap.",
+                    12,
+                    level="warning",
                     logger_name="pipeline",
                 )
-                _update_job(db, job, JobStatus.running, progress, "ocr", artifacts=artifacts)
-
-        variant_profile = (get_settings().ocr_profile or "balanced").strip().lower()
-        if estimated_samples >= int(get_settings().ocr_long_video_threshold_samples):
-            variant_profile = "fast"
-
-        segments, ocr_meta = _ocr_segments_from_video(
-            project,
-            scan_interval_sec=effective_scan_interval,
-            variant_profile=variant_profile,
-            progress_hook=_on_ocr_progress,
-        )
-        ocr_source = "rapidocr"
-        if not segments:
+                segments = _fake_ocr_segments(project)
+                ocr_source = "fake_fallback"
+                ocr_meta = {
+                    **ocr_meta,
+                    "engine": "fake_fallback",
+                    "segments_before_merge": len(segments),
+                }
+            set_stat(
+                artifacts,
+                "ocr",
+                {
+                    **ocr_meta,
+                    "source": ocr_source,
+                    "segments_raw": len(segments),
+                },
+            )
             push_event(
                 job,
                 artifacts,
                 "ocr",
-                "OCR that khong co ket qua, fallback sang mau subtitle gia lap.",
-                12,
-                level="warning",
+                f"OCR xong: {len(segments)} doan text (source={ocr_source}).",
+                28,
                 logger_name="pipeline",
             )
-            segments = _fake_ocr_segments(project)
-            ocr_source = "fake_fallback"
-            ocr_meta = {
-                **ocr_meta,
-                "engine": "fake_fallback",
-                "segments_before_merge": len(segments),
-            }
-        set_stat(
-            artifacts,
-            "ocr",
-            {
-                **ocr_meta,
-                "source": ocr_source,
-                "segments_raw": len(segments),
-            },
-        )
-        push_event(
-            job,
-            artifacts,
-            "ocr",
-            f"OCR xong: {len(segments)} doan text (source={ocr_source}).",
-            28,
-            logger_name="pipeline",
-        )
-        segments = _merge_adjacent_similar_segments(segments, max_gap_sec=max(0.8, effective_scan_interval * 1.5), ratio_threshold=0.9)
-        set_stat(
-            artifacts,
-            "dedupe_ocr",
-            {
-                "before": int(ocr_meta.get("segments_before_merge", len(segments))),
-                "after": len(segments),
-            },
-        )
-        push_event(job, artifacts, "ocr", f"Sau merge OCR: {len(segments)} doan.", 34, logger_name="pipeline")
+            segments = _merge_adjacent_similar_segments(
+                segments,
+                max_gap_sec=max(0.8, effective_scan_interval * 1.5),
+                ratio_threshold=0.9,
+            )
+            set_stat(
+                artifacts,
+                "dedupe_ocr",
+                {
+                    "before": int(ocr_meta.get("segments_before_merge", len(segments))),
+                    "after": len(segments),
+                },
+            )
+            push_event(job, artifacts, "ocr", f"Sau merge OCR: {len(segments)} doan.", 34, logger_name="pipeline")
+
+        replace_segments(db, project.id, segments)
 
         push_event(
             job,
@@ -1135,7 +1503,10 @@ def run_pipeline(
         # MVP: bo qua merge nang cao, chi loai dong trung lien tiep.
         deduped = _merge_adjacent_similar_segments(
             normalized,
-            max_gap_sec=max(0.8, effective_scan_interval * 1.5),
+            max_gap_sec=max(
+                0.8,
+                effective_scan_interval * 1.5 if pipeline_input_mode != "audio_asr" else max(1.2, float(audio_chunk_overlap_sec) + 0.8),
+            ),
             ratio_threshold=0.92,
         )
         set_stat(
@@ -1197,6 +1568,7 @@ def run_pipeline(
             "srt": str(srt_path),
             "json": str(json_path),
             "tts_script": str(tts_script),
+            "input_mode": pipeline_input_mode,
             "translation_stats": translation_stats,
             "translation_error_hint": first_translation_error,
         }

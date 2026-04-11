@@ -170,9 +170,15 @@ export function useProjectActions(deps) {
         body: JSON.stringify({
           source_url: sourceUrl.trim(),
           auto_start_pipeline: autoStartAfterIngest,
+          input_mode: pipelineForm.input_mode || "video_ocr",
           gemini_api_key: pipelineForm.gemini_api_key || null,
           voice_map: parseVoiceMap(pipelineForm.voiceMapText),
           scan_interval_sec: Number(pipelineForm.scan_interval_sec) || 1.5,
+          audio_provider: pipelineForm.audio_provider || "whisper_cli",
+          audio_asr_model: pipelineForm.audio_asr_model || "base",
+          audio_asr_language: pipelineForm.audio_asr_language || projectForm.source_lang || "zh",
+          audio_chunk_sec: Number(pipelineForm.audio_chunk_sec) || 600,
+          audio_chunk_overlap_sec: Number(pipelineForm.audio_chunk_overlap_sec) || 4,
         }),
       });
       await loadProjectData(selectedProjectId);

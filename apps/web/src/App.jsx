@@ -169,10 +169,16 @@ export function App() {
   const [autoStartAfterIngest, setAutoStartAfterIngest] = useState(true);
   const [srtUploadFile, setSrtUploadFile] = useState(null);
   const [pipelineForm, setPipelineForm] = useState({
+    input_mode: "video_ocr",
     gemini_api_key: "",
     voiceMapText:
       "character_a=male-deep\ncharacter_b=female-bright\nnarrator=narrator-neutral",
     scan_interval_sec: 1.5,
+    audio_provider: "whisper_cli",
+    audio_asr_model: "base",
+    audio_asr_language: "zh",
+    audio_chunk_sec: 600,
+    audio_chunk_overlap_sec: 4,
   });
   const [exportForm, setExportForm] = useState({
     export_format: "srt",
@@ -345,6 +351,9 @@ export function App() {
     }
   }
 
+  const pipelineInputMode = pipelineForm.input_mode || "video_ocr";
+  const requiresRoiForPipeline = pipelineInputMode !== "audio_asr";
+
   const {
     wizardStep,
     setWizardStep,
@@ -362,6 +371,7 @@ export function App() {
     editableSegments,
     jobs,
     hasValidRoi,
+    pipelineInputMode,
     setMessage,
   });
 
@@ -418,14 +428,20 @@ export function App() {
     }
     if (latestPipelineJob && (latestPipelineJob.status === "queued" || latestPipelineJob.status === "running")) {
       const latestEvent = latestJobEvents[0] || null;
+      const latestInputMode =
+        latestPipelineJob?.artifacts?.input_mode ||
+        latestPipelineJob?.artifacts?.request_payload?.input_mode ||
+        "video_ocr";
       return {
         tone: latestPipelineJob.status === "queued" ? "warning" : "info",
-        title: "Đang chạy OCR / dịch",
+        title: latestInputMode === "audio_asr" ? "Đang chạy nhận diện âm thanh" : "Đang chạy OCR / dịch",
         step: latestPipelineJob.step || "pipeline",
         progress: latestPipelineJob.progress ?? 0,
         message:
           latestEvent?.message ||
-          "Pipeline đang xử lý video, OCR và dịch subtitle.",
+          (latestInputMode === "audio_asr"
+            ? "Pipeline đang tách audio, nhận diện lời nói và dịch subtitle."
+            : "Pipeline đang xử lý video, OCR và dịch subtitle."),
       };
     }
     return null;
@@ -579,9 +595,15 @@ export function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          input_mode: pipelineInputMode,
           gemini_api_key: pipelineForm.gemini_api_key || null,
           voice_map: parseVoiceMap(pipelineForm.voiceMapText),
           scan_interval_sec: Number(pipelineForm.scan_interval_sec) || 1.0,
+          audio_provider: pipelineForm.audio_provider || "whisper_cli",
+          audio_asr_model: pipelineForm.audio_asr_model || "base",
+          audio_asr_language: pipelineForm.audio_asr_language || projectForm.source_lang || "zh",
+          audio_chunk_sec: Number(pipelineForm.audio_chunk_sec) || 600,
+          audio_chunk_overlap_sec: Number(pipelineForm.audio_chunk_overlap_sec) || 4,
         }),
       });
       setIsEditingSegments(false);
@@ -671,6 +693,11 @@ export function App() {
             <BusyBanner
               items={savingRoi ? [{ id: "roi-saving", label: "Đang lưu ROI và cập nhật dự án..." }] : []}
             />
+            {!requiresRoiForPipeline ? (
+              <p className="hint">
+                Chế độ âm thanh đang bật, nên ROI chỉ còn là bước tùy chọn. Bạn có thể bỏ qua ROI và sang bước xử lý bằng âm thanh.
+              </p>
+            ) : null}
             <button type="button" onClick={toggleRoiEditMode}>
               {roiEditMode ? "Tắt chỉnh ROI" : "Bật chỉnh ROI"}
             </button>
@@ -691,6 +718,7 @@ export function App() {
             wizardStep={wizardStep}
             selectedProjectId={selectedProjectId}
             hasSavedRoi={hasSavedRoi}
+            requiresRoi={requiresRoiForPipeline}
             pipelineForm={pipelineForm}
             setPipelineForm={setPipelineForm}
             translationPreset={translationPreset}

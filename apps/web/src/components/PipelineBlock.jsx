@@ -5,6 +5,7 @@ export function PipelineBlock({
   selectedProjectId,
   hasSavedRoi,
   requiresRoi,
+  runtimeCapabilities,
   pipelineForm,
   setPipelineForm,
   translationPreset,
@@ -31,6 +32,10 @@ export function PipelineBlock({
 }) {
   const inputMode = pipelineForm.input_mode || "video_ocr";
   const isAudioMode = inputMode === "audio_asr";
+  const audioRuntimeReady = Boolean(
+    runtimeCapabilities?.input_modes?.audio_asr?.available,
+  );
+  const capabilityTools = runtimeCapabilities?.tools || {};
 
   return (
     <section className={`block ${wizardStep === 3 ? "" : "hidden-step"}`}>
@@ -66,12 +71,19 @@ export function PipelineBlock({
               onChange={(e) =>
                 setPipelineForm((prev) => ({
                   ...prev,
-                  input_mode: e.target.value,
+                  input_mode:
+                    e.target.value === "audio_asr" && !audioRuntimeReady
+                      ? "video_ocr"
+                      : e.target.value,
                 }))
               }
             >
               <option value="video_ocr">OCR từ khung hình video</option>
-              <option value="audio_asr">Nhận diện từ âm thanh</option>
+              <option value="audio_asr">
+                {audioRuntimeReady
+                  ? "Nhận diện từ âm thanh"
+                  : "Nhận diện từ âm thanh (thiếu runtime)"}
+              </option>
             </select>
           </label>
           <label>
@@ -96,6 +108,20 @@ export function PipelineBlock({
               Chế độ này bỏ qua ROI, tách audio từ video rồi nhận diện lời nói thành subtitle.
               Máy cần có `ffmpeg` và `whisper` CLI cài sẵn.
             </p>
+            {!audioRuntimeReady ? (
+              <p className="error">
+                Runtime âm thanh chưa sẵn sàng:
+                {capabilityTools.ffmpeg?.available ? "" : " thiếu ffmpeg;"}
+                {capabilityTools.ffprobe?.available ? "" : " thiếu ffprobe;"}
+                {capabilityTools.whisper?.available ? "" : " thiếu whisper CLI."}
+              </p>
+            ) : (
+              <p className="hint">
+                Runtime âm thanh đã sẵn sàng.
+                {" "}
+                {runtimeCapabilities?.recommendations?.audio_asr_hint || ""}
+              </p>
+            )}
             <div className="inline-two">
               <label>
                 Model ASR
@@ -267,11 +293,25 @@ export function PipelineBlock({
         </p>
       ) : null}
       <button
-        disabled={loading || !selectedProjectId || (requiresRoi && !hasSavedRoi)}
+        disabled={
+          loading ||
+          !selectedProjectId ||
+          (requiresRoi && !hasSavedRoi) ||
+          (isAudioMode && !audioRuntimeReady)
+        }
         onClick={startPipeline}
       >
         Chạy quy trình
       </button>
+      {isAudioMode ? (
+        <p className="hint">
+          Gợi ý cấu hình cho video dài:
+          {" "}
+          <code>30-60 phút: chunk 480-600s</code>
+          {"; "}
+          <code>1-2 giờ: chunk 600-900s, overlap 4-6s</code>.
+        </p>
+      ) : null}
       {latestPipelineJob ? (
         <div className="info">
           <p>

@@ -73,6 +73,40 @@ def health():
     return {"ok": True, "environment": settings.environment}
 
 
+@app.get("/runtime/capabilities")
+def runtime_capabilities():
+    ffmpeg_path = shutil.which("ffmpeg")
+    ffprobe_path = shutil.which("ffprobe")
+    whisper_path = shutil.which("whisper")
+    audio_ready = bool(ffmpeg_path and whisper_path)
+    return {
+        "input_modes": {
+            "video_ocr": {
+                "available": True,
+                "label": "OCR từ khung hình video",
+            },
+            "audio_asr": {
+                "available": audio_ready,
+                "label": "Nhận diện từ âm thanh",
+                "requires": ["ffmpeg", "whisper"],
+            },
+        },
+        "tools": {
+            "ffmpeg": {"available": bool(ffmpeg_path), "path": ffmpeg_path or ""},
+            "ffprobe": {"available": bool(ffprobe_path), "path": ffprobe_path or ""},
+            "whisper": {"available": bool(whisper_path), "path": whisper_path or ""},
+        },
+        "recommendations": {
+            "audio_asr_ready": audio_ready,
+            "audio_asr_hint": (
+                "Có thể dùng mode âm thanh ngay."
+                if audio_ready
+                else "Cần cài ffmpeg và whisper CLI để dùng mode âm thanh."
+            ),
+        },
+    }
+
+
 def _enforce_upload_constraints(file: UploadFile, request_headers: dict[str, str] | None = None) -> None:
     max_bytes = max(1, int(settings.max_upload_size_mb or 512)) * 1024 * 1024
     headers = request_headers or {}

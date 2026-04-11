@@ -195,6 +195,7 @@ export function App() {
   });
   const [notices, setNotices] = useState([]);
   const [apiStatus, setApiStatus] = useState("checking");
+  const [runtimeCapabilities, setRuntimeCapabilities] = useState(null);
 
   function dismissNotice(id) {
     startTransition(() => {
@@ -319,8 +320,12 @@ export function App() {
 
   async function loadProjectsSafe() {
     try {
-      const data = await jsonFetch(`${API_BASE}/projects`);
+      const [data, capabilities] = await Promise.all([
+        jsonFetch(`${API_BASE}/projects`),
+        jsonFetch(`${API_BASE}/runtime/capabilities`).catch(() => null),
+      ]);
       setProjects(data);
+      setRuntimeCapabilities(capabilities);
       setApiStatus("online");
       if (!selectedProjectId && data.length) {
         setSelectedProjectId(data[0].id);
@@ -353,6 +358,9 @@ export function App() {
 
   const pipelineInputMode = pipelineForm.input_mode || "video_ocr";
   const requiresRoiForPipeline = pipelineInputMode !== "audio_asr";
+  const audioRuntimeReady = Boolean(
+    runtimeCapabilities?.input_modes?.audio_asr?.available,
+  );
 
   const {
     wizardStep,
@@ -587,6 +595,10 @@ export function App() {
       setMessage("Chọn dự án trước.");
       return;
     }
+    if (pipelineInputMode === "audio_asr" && !audioRuntimeReady) {
+      setMessage("Mode âm thanh chưa sẵn sàng. Hãy cài ffmpeg và whisper CLI trước khi chạy.");
+      return;
+    }
     setPipelineLoading(true);
     setMessage("");
     try {
@@ -719,6 +731,7 @@ export function App() {
             selectedProjectId={selectedProjectId}
             hasSavedRoi={hasSavedRoi}
             requiresRoi={requiresRoiForPipeline}
+            runtimeCapabilities={runtimeCapabilities}
             pipelineForm={pipelineForm}
             setPipelineForm={setPipelineForm}
             translationPreset={translationPreset}

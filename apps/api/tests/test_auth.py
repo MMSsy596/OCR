@@ -22,3 +22,15 @@ def test_security_headers_are_set(client):
     assert response.headers["Referrer-Policy"] == "no-referrer"
     assert response.headers["X-Frame-Options"] == "DENY"
     assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_runtime_capabilities_requires_token(client, auth_headers):
+    unauthorized = client.get("/runtime/capabilities")
+    assert unauthorized.status_code == 401
+
+    response = client.get("/runtime/capabilities", headers=auth_headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "tools" in payload
+    assert "input_modes" in payload
+    assert "audio_asr" in payload["input_modes"]

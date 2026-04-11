@@ -1,42 +1,32 @@
-export function WizardNav({
-  wizardSteps,
-  wizardStep,
-  canGoNext,
-  maxUnlockedStep,
-  goToStep,
-  setWizardStep,
-}) {
+export function WizardNav({ steps, currentStep, maxUnlockedStep, onGoTo }) {
   return (
-    <section className="wizard-nav card">
-      <div className="wizard-steps">
-        {wizardSteps.map((step) => (
+    <div className="wizard-track card">
+      {(steps || []).map((step, i) => {
+        const idx      = i + 1;
+        const isDone   = idx < currentStep;
+        const isActive = idx === currentStep;
+        // Cho phép đến step tiếp theo của step đang ở (maxUnlockedStep+1)
+        const isLocked = idx > (maxUnlockedStep ?? 0) + 1;
+
+        const cls = ["wizard-step", isDone ? "done" : "", isActive ? "active" : "", isLocked ? "locked" : ""]
+          .filter(Boolean).join(" ");
+
+        return (
           <button
-            key={step.id}
-            type="button"
-            className={`wizard-step ${wizardStep === step.id ? "active" : ""}`}
-            onClick={() => goToStep(step.id)}
+            key={idx}
+            className={cls}
+            style={{ background: "transparent", border: "none", color: "inherit" }}
+            onClick={() => !isLocked && onGoTo(idx)}
+            disabled={isLocked}
+            title={step.label}
           >
-            <span>{step.id}</span>
-            <strong>{step.title}</strong>
+            <span className="wizard-step-num">
+              {isDone ? "✓" : idx}
+            </span>
+            <span className="wizard-step-label">{step.label}</span>
           </button>
-        ))}
-      </div>
-      <div className="wizard-actions">
-        <button
-          type="button"
-          disabled={wizardStep <= 1}
-          onClick={() => setWizardStep((s) => Math.max(1, s - 1))}
-        >
-          Bước trước
-        </button>
-        <button
-          type="button"
-          disabled={!canGoNext}
-          onClick={() => setWizardStep((s) => Math.min(maxUnlockedStep, s + 1))}
-        >
-          Bước tiếp
-        </button>
-      </div>
-    </section>
+        );
+      })}
+    </div>
   );
 }

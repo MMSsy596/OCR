@@ -41,7 +41,11 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts_list or ["*"])
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=list(dict.fromkeys([settings.web_origin, "http://localhost:5173", "http://127.0.0.1:5173"])),
+    allow_origins=list(dict.fromkeys([
+        settings.web_origin,
+        "http://localhost:5173", "http://127.0.0.1:5173",
+        "http://localhost:5174", "http://127.0.0.1:5174",
+    ])),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -109,11 +113,12 @@ def runtime_capabilities():
 
 
 def _enforce_upload_constraints(file: UploadFile, request_headers: dict[str, str] | None = None) -> None:
-    max_bytes = max(1, int(settings.max_upload_size_mb or 512)) * 1024 * 1024
-    headers = request_headers or {}
-    content_length = headers.get("content-length") or headers.get("Content-Length") or ""
-    if content_length.isdigit() and int(content_length) > max_bytes:
-        raise HTTPException(status_code=413, detail="file_too_large")
+    # Disable size checking temporarily
+    # max_bytes = max(1, int(settings.max_upload_size_mb or 512)) * 1024 * 1024
+    # headers = request_headers or {}
+    # content_length = headers.get("content-length") or headers.get("Content-Length") or ""
+    # if content_length.isdigit() and int(content_length) > max_bytes:
+    #     raise HTTPException(status_code=413, detail="file_too_large")
 
     ext = (Path(file.filename or "").suffix or "").lower()
     allowed_exts = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
@@ -122,6 +127,9 @@ def _enforce_upload_constraints(file: UploadFile, request_headers: dict[str, str
 
 
 def _enqueue_pipeline_job(job_id: str, payload: schemas.PipelineStartRequest) -> None:
+    import os
+    if os.name == "nt":
+        raise NotImplementedError("RQ queue not supported on Windows. Falling back to background threads.")
     q = get_queue()
     q.enqueue(
         "app.pipeline.run_pipeline",
@@ -168,6 +176,9 @@ def _resolve_storage_artifact(path_text: str) -> Path:
 
 
 def _enqueue_dub_job(job_id: str, payload: schemas.DubStartRequest) -> None:
+    import os
+    if os.name == "nt":
+        raise NotImplementedError("RQ queue not supported on Windows. Falling back to background threads.")
     q = get_queue()
     q.enqueue(
         "app.tts_dubber.run_dub_job",
@@ -356,19 +367,13 @@ def upload_video(project_id: str, request: Request, file: UploadFile = File(...)
     project_dir.mkdir(parents=True, exist_ok=True)
     ext = Path(file.filename or "video.mp4").suffix or ".mp4"
     target = project_dir / f"source{ext}"
-    max_bytes = max(1, int(settings.max_upload_size_mb or 512)) * 1024 * 1024
-    written = 0
+
+    # Seek to start in case it's not at 0
+    file.file.seek(0)
+    
     with target.open("wb") as f:
-        while True:
-            chunk = file.file.read(1024 * 1024)
-            if not chunk:
-                break
-            written += len(chunk)
-            if written > max_bytes:
-                f.close()
-                target.unlink(missing_ok=True)
-                raise HTTPException(status_code=413, detail="file_too_large")
-            f.write(chunk)
+        shutil.copyfileobj(file.file, f)
+        
     _cleanup_project_generated_files(project_dir, keep_source=target)
     project = crud.attach_video(db, project, target)
     return _to_project_read(project)

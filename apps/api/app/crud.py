@@ -102,7 +102,14 @@ def list_segments(db: Session, project_id: str) -> list[SubtitleSegment]:
 def update_segments(db: Session, project_id: str, updates: list[dict]) -> list[SubtitleSegment]:
     existing_rows = list(db.scalars(select(SubtitleSegment).where(SubtitleSegment.project_id == project_id)).all())
     existing = {seg.id: seg for seg in existing_rows}
-    keep_ids = {int(item["id"]) for item in updates if item.get("id") is not None}
+
+    def _safe_int(val) -> int | None:
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            return None
+
+    keep_ids = {_safe_int(item["id"]) for item in updates if item.get("id") is not None} - {None}
 
     # Remove segments that are no longer present in editor payload (important for merge actions).
     for seg in existing_rows:
@@ -110,8 +117,8 @@ def update_segments(db: Session, project_id: str, updates: list[dict]) -> list[S
             db.delete(seg)
 
     for item in updates:
-        seg_id = int(item["id"])
-        seg = existing.get(seg_id)
+        seg_id = _safe_int(item.get("id"))
+        seg = existing.get(seg_id) if seg_id is not None else None
         if seg is None:
             seg = SubtitleSegment(
                 project_id=project_id,
@@ -153,14 +160,23 @@ def list_jobs(db: Session, project_id: str) -> list[PipelineJob]:
 
 
 def clear_sessions(db: Session, include_processing: bool = False) -> tuple[list[str], int]:
-    projects = list(db.scalars(select(Project)).all())
-    deleted_ids: list[str] = []
+    all_projects = list(db.scalars(select(Project.id, Project.status)).all())
+
+    # Bóc tách dạng tuple (id, status)
+    to_delete: list[str] = []
     skipped_processing = 0
-    for project in projects:
-        if project.status == ProjectStatus.processing and not include_processing:
+    for row in all_projects:
+        pid, status = row[0], row[1]
+        if status == ProjectStatus.processing and not include_processing:
             skipped_processing += 1
             continue
-        deleted_ids.append(project.id)
-        db.delete(project)
-    db.commit()
-    return deleted_ids, skipped_processing
+        to_delete.append(pid)
+
+    if to_delete:
+        # Bulk delete — 3 câu SQL thay vì N câu
+        db.execute(delete(SubtitleSegment).where(SubtitleSegment.project_id.in_(to_delete)))
+        db.execute(delete(PipelineJob).where(PipelineJob.project_id.in_(to_delete)))
+        db.execute(delete(Project).where(Project.id.in_(to_delete)))
+        db.commit()
+
+    return to_delete, skipped_processing

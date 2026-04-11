@@ -13,12 +13,14 @@ export function useProjectWizard({
 }) {
   const [wizardStep, setWizardStep] = useState(1);
 
-  const hasVideo = Boolean(selectedProject?.video_path);
+  const hasProject  = Boolean(selectedProject);
+  const hasVideo    = Boolean(selectedProject?.video_path);
   const hasSavedRoi = useMemo(
     () => hasVideo && hasValidRoi(selectedProject?.roi),
     [hasVideo, selectedProject?.roi, hasValidRoi],
   );
   const requiresRoi = pipelineInputMode !== "audio_asr";
+
   const hasOcrProgress = useMemo(() => {
     if ((latestPipelineJob?.progress || 0) > 0) return true;
     if (latestJobEvents.length > 0) return true;
@@ -26,6 +28,7 @@ export function useProjectWizard({
     if (editableSegments.length > 0) return true;
     return false;
   }, [latestPipelineJob, latestJobEvents, latestJobStats, editableSegments]);
+
   const hasDubActivity = useMemo(
     () =>
       jobs.some(
@@ -38,52 +41,66 @@ export function useProjectWizard({
       ),
     [jobs],
   );
+
+  /**
+   * Mức step đã hoàn thành — dùng để lock/unlock wizard:
+   *  0 = chưa chọn dự án  → step 1 accessible (via +1 rule)
+   *  1 = có dự án          → step 2 accessible
+   *  2 = có video          → step 3 accessible
+   *  3 = có ROI (hoặc audio mode) → step 4 accessible
+   *  4 = có tiến trình OCR/dub   → step 5 accessible
+   */
   const maxUnlockedStep = useMemo(() => {
-    if (!hasVideo) return 1;
+    if (!hasProject) return 0;
+    if (!hasVideo)   return 1;
     if (requiresRoi && !hasSavedRoi) return 2;
     if (!hasOcrProgress && !hasDubActivity) return 3;
-    return 4;
-  }, [hasVideo, requiresRoi, hasSavedRoi, hasOcrProgress, hasDubActivity]);
-  const canGoNext = wizardStep < maxUnlockedStep;
+    if (hasDubActivity) return 6;   // dub done / running → unlock step 7
+    return 4;  // has OCR progress → unlock step 5
+  }, [hasProject, hasVideo, requiresRoi, hasSavedRoi, hasOcrProgress, hasDubActivity]);
+
+  const canGoNext = wizardStep < maxUnlockedStep + 1;
+
   const wizardSteps = [
-    { id: 1, title: "Video" },
-    { id: 2, title: requiresRoi ? "ROI" : "Nguồn vào" },
-    { id: 3, title: "Xử lý log" },
-    { id: 4, title: "SRT/TTS" },
+    { id: 1, label: "Dự án" },
+    { id: 2, label: "Video" },
+    { id: 3, label: requiresRoi ? "Vùng OCR" : "Nguồn vào" },
+    { id: 4, label: "Xử lý" },
+    { id: 5, label: "Xuất SRT" },
+    { id: 6, label: "Âm thanh" },
+    { id: 7, label: "Kết quả" },
   ];
 
   function statusLabel(status) {
-    if (status === "draft") return "nháp";
+    if (status === "draft")      return "nháp";
     if (status === "processing") return "đang xử lý";
-    if (status === "ready") return "sẵn sàng";
-    if (status === "failed") return "lỗi";
+    if (status === "ready")      return "sẵn sàng";
+    if (status === "failed")     return "lỗi";
     return status || "";
   }
 
   function goToStep(stepId) {
-    if (stepId <= maxUnlockedStep) {
+    // Cho phép đến bất kỳ step từ 1 → maxUnlockedStep+1
+    if (stepId >= 1 && stepId <= maxUnlockedStep + 1) {
       setWizardStep(stepId);
       return;
     }
-    if (stepId === 2) {
-      setMessage("Cần tải video trước khi sang bước ROI.");
-      return;
-    }
-    if (stepId === 3) {
-      setMessage(
-        requiresRoi
-          ? "Cần có video và lưu ROI trước khi sang bước xử lý log."
-          : "Cần có video trước khi sang bước xử lý log.",
-      );
-      return;
-    }
-    if (stepId === 4) {
-      setMessage("Cần chạy OCR để có tiến trình trước khi sang bước SRT/TTS.");
-    }
+    const msgs = {
+      2: "Cần chọn dự án trước khi tải video.",
+      3: "Cần tải video lên trước.",
+      4: requiresRoi
+        ? "Cần có video và lưu vùng OCR trước."
+        : "Cần tải video lên trước.",
+      5: "Cần chạy xử lý OCR trước khi xuất phụ đề.",
+      6: "Cần xuất phụ đề trước khi tạo âm thanh.",
+      7: "Cần hoàn thành xử lý trước khi xem kết quả.",
+    };
+    if (msgs[stepId]) setMessage(msgs[stepId]);
   }
 
+  // Đảm bảo stepState không vượt quá giới hạn khi dữ liệu thay đổi
   useEffect(() => {
-    setWizardStep((current) => Math.min(current, maxUnlockedStep));
+    setWizardStep((cur) => Math.min(cur, maxUnlockedStep + 1));
   }, [maxUnlockedStep]);
 
   return {

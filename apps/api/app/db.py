@@ -5,7 +5,18 @@ from .settings import get_settings
 
 settings = get_settings()
 
-engine = create_engine(settings.resolved_database_url, pool_pre_ping=True)
+_db_url = settings.resolved_database_url
+_is_sqlite = _db_url.startswith("sqlite")
+
+engine = create_engine(
+    _db_url,
+    pool_pre_ping=True,
+    # SQLite dùng StaticPool (single-file, không hỗ trợ pool thật)
+    # Postgres/MySQL: pool_size + overflow mới có hiệu quả
+    **({} if _is_sqlite else {"pool_size": 10, "max_overflow": 20, "pool_recycle": 1800}),
+    connect_args={"check_same_thread": False} if _is_sqlite else {},
+)
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
 

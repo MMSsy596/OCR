@@ -18,6 +18,7 @@ export function ExportDubBlock({
   startDubAudio,
   lastExport,
   latestDubJob,
+  latestDubAudioJob,
   latestDubAudioUrl,
   downloadDubAudio,
 }) {
@@ -176,14 +177,14 @@ export function ExportDubBlock({
           Tải phụ đề: {lastExport.output_key}
         </a>
       ) : null}
-      {latestDubJob?.artifacts?.dub_output_key ? (
+      {latestDubAudioJob?.artifacts?.dub_output_key ? (
         <a
           className="download-link"
           href={safeDubAudioUrl}
           target="_blank"
           rel="noreferrer"
         >
-          Tải âm thanh: {latestDubJob.artifacts.dub_output_key}
+          Tải âm thanh: {latestDubAudioJob.artifacts.dub_output_key}
         </a>
       ) : null}
       {latestDubJob?.status === "done" && !latestDubJob?.artifacts?.dubbed_audio ? (

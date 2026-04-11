@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     ocr_long_video_threshold_samples: int = 1200
     ocr_max_samples_per_video: int = 1600
     tts_max_parallel_workers: int = 3
+    queue_stale_timeout_sec: int = 180
 
     @property
     def is_production(self) -> bool:

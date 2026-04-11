@@ -3,6 +3,7 @@ import json
 import logging
 import shutil
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
@@ -232,6 +233,56 @@ def _enqueue_url_ingest_job(job_id: str, payload: schemas.UrlIngestStartRequest)
         job_id=job_id,
         job_timeout=14400,
     )
+
+
+def _is_job_queue_stale(job: models.PipelineJob, timeout_sec: int, now_utc: datetime | None = None) -> bool:
+    if job.status != JobStatus.queued:
+        return False
+    if timeout_sec <= 0:
+        return False
+    base_time = job.updated_at or job.created_at
+    if base_time is None:
+        return False
+    if base_time.tzinfo is None:
+        base_time = base_time.replace(tzinfo=timezone.utc)
+    now_ref = now_utc or datetime.now(timezone.utc)
+    return (now_ref - base_time).total_seconds() >= float(timeout_sec)
+
+
+def _mark_stale_queued_jobs(db: Session, jobs: list[models.PipelineJob]) -> bool:
+    timeout_sec = max(30, int(settings.queue_stale_timeout_sec or 180))
+    now_utc = datetime.now(timezone.utc)
+    changed = False
+    for job in jobs:
+        if not _is_job_queue_stale(job, timeout_sec=timeout_sec, now_utc=now_utc):
+            continue
+        artifacts = dict(job.artifacts) if isinstance(job.artifacts, dict) else {}
+        stale_meta = artifacts.get("stale_queue", {}) if isinstance(artifacts.get("stale_queue"), dict) else {}
+        stale_meta.update(
+            {
+                "marked_at": now_utc.isoformat(),
+                "timeout_sec": timeout_sec,
+                "queued_created_at": str(job.created_at or ""),
+                "queued_updated_at": str(job.updated_at or ""),
+            }
+        )
+        artifacts["stale_queue"] = stale_meta
+        artifacts["last_event"] = {
+            "time": now_utc.isoformat(),
+            "phase": "queue",
+            "level": "warning",
+            "progress": int(job.progress or 0),
+            "message": f"Job queued qua han {timeout_sec}s, danh dau stale_queue_timeout.",
+        }
+        job.artifacts = artifacts
+        job.status = JobStatus.failed
+        job.step = "stale_queue_timeout"
+        job.error_message = "stale_queue_timeout"
+        db.add(job)
+        changed = True
+    if changed:
+        db.commit()
+    return changed
 
 
 @app.post("/projects", response_model=schemas.ProjectRead)
@@ -552,7 +603,10 @@ def list_project_jobs(project_id: str, db: Session = Depends(get_db)):
     project = crud.get_project(db, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="project_not_found")
-    return crud.list_jobs(db, project_id)
+    jobs = crud.list_jobs(db, project_id)
+    if _mark_stale_queued_jobs(db, jobs):
+        jobs = crud.list_jobs(db, project_id)
+    return jobs
 
 
 @app.post("/projects/{project_id}/jobs/retry-stuck", response_model=schemas.RetryJobsResponse)
@@ -564,6 +618,8 @@ def retry_stuck_jobs(project_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="video_required")
 
     jobs = crud.list_jobs(db, project_id)
+    if _mark_stale_queued_jobs(db, jobs):
+        jobs = crud.list_jobs(db, project_id)
     stuck = [
         job
         for job in jobs
@@ -650,6 +706,8 @@ def get_job(job_id: str, db: Session = Depends(get_db)):
     job = crud.get_job(db, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="job_not_found")
+    _mark_stale_queued_jobs(db, [job])
+    db.refresh(job)
     return job
 
 
@@ -694,6 +752,8 @@ def _build_project_snapshot(project_id: str) -> dict:
         if not project:
             return {"type": "project_missing", "project_id": project_id}
         jobs = crud.list_jobs(db, project_id)
+        if _mark_stale_queued_jobs(db, jobs):
+            jobs = crud.list_jobs(db, project_id)
         return {
             "type": "snapshot",
             "project": _to_project_read(project).model_dump(),

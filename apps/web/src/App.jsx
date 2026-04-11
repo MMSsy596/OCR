@@ -63,6 +63,82 @@ function eventTimeValue(event) {
   return Number.isNaN(raw) ? 0 : raw;
 }
 
+const QUEUED_ACTIVITY_WINDOW_MS = 120000;
+
+function jobTimeValue(job) {
+  const candidates = [
+    job?.updated_at,
+    job?.created_at,
+    job?.artifacts?.last_event?.time,
+  ];
+  for (const item of candidates) {
+    const parsed = item ? Date.parse(item) : Number.NaN;
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function isFreshQueuedJob(job, nowMs = Date.now()) {
+  if (!job || job.status !== "queued") return false;
+  const ts = jobTimeValue(job);
+  if (!ts) return false;
+  return nowMs - ts <= QUEUED_ACTIVITY_WINDOW_MS;
+}
+
+function isStaleQueueJob(job) {
+  if (!job) return false;
+  if (job.status !== "failed") return false;
+  const err = String(job.error_message || "").toLowerCase();
+  if (err.includes("stale_queue_timeout")) return true;
+  return Boolean(job?.artifacts?.stale_queue?.marked_at);
+}
+
+function staleQueueTimelineEvent(job) {
+  const markedAt =
+    job?.artifacts?.stale_queue?.marked_at ||
+    job?.updated_at ||
+    job?.created_at ||
+    "";
+  const kind = job?.artifacts?.job_kind || "pipeline";
+  const kindLabel = kind === "dub" ? "Job lồng tiếng" : "Pipeline";
+  return {
+    id: `stale-${job.id}`,
+    time: markedAt,
+    phase: "queue",
+    level: "warning",
+    progress: job?.progress ?? 0,
+    message: `${kindLabel} quá hạn hàng đợi, đã đánh dấu stale_queue_timeout.`,
+    source: "stale",
+    sourceLabel: "stale queue",
+  };
+}
+
+function pickLatestJobByKind(incomingJobs, kind) {
+  const pool = (incomingJobs || []).filter((job) => {
+    const jobKind = job?.artifacts?.job_kind || "pipeline";
+    return jobKind === kind;
+  });
+  if (!pool.length) return null;
+  const running = pool.find((job) => job?.status === "running");
+  if (running) return running;
+  const nowMs = Date.now();
+  const queuedFresh = pool.find((job) => isFreshQueuedJob(job, nowMs));
+  if (queuedFresh) return queuedFresh;
+  const completed = pool.find((job) => job?.status === "done" || job?.status === "failed");
+  if (completed) return completed;
+  return pool[0] || null;
+}
+
+function pickLatestDubAudioJob(incomingJobs) {
+  const pool = (incomingJobs || []).filter((job) => job?.artifacts?.job_kind === "dub");
+  if (!pool.length) return null;
+  return (
+    pool.find((job) => Boolean(job?.artifacts?.dubbed_audio)) ||
+    pool.find((job) => job?.status === "done" && Boolean(job?.artifacts?.dub_output_key)) ||
+    null
+  );
+}
+
 function inferNoticeTone(text) {
   const raw = String(text || "").trim().toLowerCase();
   if (!raw) return "info";
@@ -267,25 +343,27 @@ export function App() {
   });
 
   const latestPipelineJob = useMemo(
-    () =>
-      jobs.find((job) => (job?.artifacts?.job_kind || "pipeline") === "pipeline") ||
-      null,
+    () => pickLatestJobByKind(jobs, "pipeline"),
     [jobs],
   );
   const latestDubJob = useMemo(
-    () => jobs.find((job) => job?.artifacts?.job_kind === "dub") || null,
+    () => pickLatestJobByKind(jobs, "dub"),
+    [jobs],
+  );
+  const latestDubAudioJob = useMemo(
+    () => pickLatestDubAudioJob(jobs),
     [jobs],
   );
   const latestDubAudioUrl = useMemo(
     () =>
-      latestDubJob?.artifacts?.dubbed_audio
-        ? `${API_BASE}/jobs/${latestDubJob.id}/artifact/dubbed_audio`
+      latestDubAudioJob?.artifacts?.dubbed_audio
+        ? `${API_BASE}/jobs/${latestDubAudioJob.id}/artifact/dubbed_audio`
         : "",
-    [latestDubJob],
+    [latestDubAudioJob],
   );
   const latestDubAudioName = useMemo(
-    () => latestDubJob?.artifacts?.dub_output_key || "dub-output.wav",
-    [latestDubJob],
+    () => latestDubAudioJob?.artifacts?.dub_output_key || "dub-output.wav",
+    [latestDubAudioJob],
   );
   const latestDubEvents = useMemo(
     () => [...(latestDubJob?.artifacts?.events || [])].slice(-20).reverse(),
@@ -308,11 +386,15 @@ export function App() {
       source: "dub",
       sourceLabel: "Lồng tiếng",
     }));
+    const staleQueueEvents = (jobs || [])
+      .filter((job) => isStaleQueueJob(job))
+      .slice(0, 12)
+      .map((job) => staleQueueTimelineEvent(job));
 
-    return [...pipelineEvents, ...dubEvents]
+    return [...pipelineEvents, ...dubEvents, ...staleQueueEvents]
       .sort((left, right) => eventTimeValue(right) - eventTimeValue(left))
       .slice(0, 40);
-  }, [latestDubJob, latestPipelineJob]);
+  }, [jobs, latestDubJob, latestPipelineJob]);
   const latestJobStats = useMemo(
     () => latestPipelineJob?.artifacts?.stats || {},
     [latestPipelineJob],
@@ -386,6 +468,7 @@ export function App() {
   const { streamState, streamErrorCount } = useProjectRealtime({
     apiBase: API_BASE,
     selectedProjectId,
+    latestDubAudioJob,
     latestDubJob,
     jobs,
     isEditingSegments,
@@ -422,10 +505,10 @@ export function App() {
   }, [selectedProjectId, setCurrentVideoTime]);
 
   const liveActivity = useMemo(() => {
-    if (latestDubJob && (latestDubJob.status === "queued" || latestDubJob.status === "running")) {
+    if (latestDubJob && latestDubJob.status === "running") {
       const latestEvent = latestDubEvents[0] || null;
       return {
-        tone: latestDubJob.status === "queued" ? "warning" : "info",
+        tone: "info",
         title: "Đang dựng lồng tiếng",
         step: latestDubJob.step || "dub",
         progress: latestDubJob.progress ?? 0,
@@ -434,14 +517,14 @@ export function App() {
           `Đang xử lý file âm thanh ${latestDubJob.artifacts?.dub_output_key || ""}`.trim(),
       };
     }
-    if (latestPipelineJob && (latestPipelineJob.status === "queued" || latestPipelineJob.status === "running")) {
+    if (latestPipelineJob && latestPipelineJob.status === "running") {
       const latestEvent = latestJobEvents[0] || null;
       const latestInputMode =
         latestPipelineJob?.artifacts?.input_mode ||
         latestPipelineJob?.artifacts?.request_payload?.input_mode ||
         "video_ocr";
       return {
-        tone: latestPipelineJob.status === "queued" ? "warning" : "info",
+        tone: "info",
         title: latestInputMode === "audio_asr" ? "Đang chạy nhận diện âm thanh" : "Đang chạy OCR / dịch",
         step: latestPipelineJob.step || "pipeline",
         progress: latestPipelineJob.progress ?? 0,
@@ -450,6 +533,26 @@ export function App() {
           (latestInputMode === "audio_asr"
             ? "Pipeline đang tách audio, nhận diện lời nói và dịch subtitle."
             : "Pipeline đang xử lý video, OCR và dịch subtitle."),
+      };
+    }
+    if (latestDubJob && isFreshQueuedJob(latestDubJob)) {
+      const latestEvent = latestDubEvents[0] || null;
+      return {
+        tone: "warning",
+        title: "Đang chờ worker lồng tiếng",
+        step: latestDubJob.step || "queued",
+        progress: latestDubJob.progress ?? 0,
+        message: latestEvent?.message || "Job lồng tiếng đang chờ worker nhận xử lý.",
+      };
+    }
+    if (latestPipelineJob && isFreshQueuedJob(latestPipelineJob)) {
+      const latestEvent = latestJobEvents[0] || null;
+      return {
+        tone: "warning",
+        title: "Đang chờ worker pipeline",
+        step: latestPipelineJob.step || "queued",
+        progress: latestPipelineJob.progress ?? 0,
+        message: latestEvent?.message || "Pipeline đang chờ worker nhận xử lý.",
       };
     }
     return null;
@@ -567,9 +670,9 @@ export function App() {
     if (uploadingSrt) items.push({ id: "upload-srt", label: "Đang tải tệp SRT ngoài..." });
     if (dubbing) items.push({ id: "dubbing-request", label: "Đang gửi yêu cầu lồng tiếng..." });
     if (retryingStuckJobs) items.push({ id: "retry-jobs", label: "Đang thử lại các job bị kẹt..." });
-    if (latestPipelineJob?.status === "queued") items.push({ id: "pipeline-queued", label: "Pipeline đang chờ worker nhận..." });
+    if (isFreshQueuedJob(latestPipelineJob)) items.push({ id: "pipeline-queued", label: "Pipeline đang chờ worker nhận..." });
     if (latestPipelineJob?.status === "running") items.push({ id: "pipeline-running", label: `Pipeline đang chạy ${latestPipelineJob.progress ?? 0}%...` });
-    if (latestDubJob?.status === "queued") items.push({ id: "dub-queued", label: "Job lồng tiếng đang chờ xử lý..." });
+    if (isFreshQueuedJob(latestDubJob)) items.push({ id: "dub-queued", label: "Job lồng tiếng đang chờ xử lý..." });
     if (latestDubJob?.status === "running") items.push({ id: "dub-running", label: `Đang dựng âm thanh ${latestDubJob.progress ?? 0}%...` });
     return items;
   }, [
@@ -812,6 +915,7 @@ export function App() {
             startDubAudio={startDubAudio}
             lastExport={lastExport}
             latestDubJob={latestDubJob}
+            latestDubAudioJob={latestDubAudioJob}
             latestDubAudioUrl={latestDubAudioUrl}
             downloadDubAudio={downloadDubAudio}
           />

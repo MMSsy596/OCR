@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -155,5 +156,7 @@ class JobRead(BaseModel):
     step: str
     error_message: str
     artifacts: Any
+    created_at: datetime
+    updated_at: datetime
 
     model_config = {"from_attributes": True}

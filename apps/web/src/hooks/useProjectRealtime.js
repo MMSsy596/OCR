@@ -1,10 +1,32 @@
 import { useEffect, useRef, useState } from "react";
 import { useProjectEventStream } from "./useProjectEventStream";
 
+const QUEUED_ACTIVITY_WINDOW_MS = 120000;
+
+function jobTimeValue(job) {
+  const candidates = [
+    job?.updated_at,
+    job?.created_at,
+    job?.artifacts?.last_event?.time,
+  ];
+  for (const value of candidates) {
+    const parsed = value ? Date.parse(value) : Number.NaN;
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function isQueueLikelyActive(job, nowMs = Date.now()) {
+  if (!job || job?.status !== "queued") return false;
+  const ts = jobTimeValue(job);
+  if (!ts) return false;
+  return nowMs - ts <= QUEUED_ACTIVITY_WINDOW_MS;
+}
+
 export function useProjectRealtime({
   apiBase,
   selectedProjectId,
-  latestDubJob,
+  latestDubAudioJob,
   jobs,
   isEditingSegments,
   loadProjectData,
@@ -37,11 +59,12 @@ export function useProjectRealtime({
 
       const project = payload?.project || null;
       const incomingJobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+      const nowMs = Date.now();
       const hadRunningBefore = (jobsRef.current || []).some(
-        (job) => job?.status === "queued" || job?.status === "running",
+        (job) => job?.status === "running" || isQueueLikelyActive(job, nowMs),
       );
       const hasRunningNow = incomingJobs.some(
-        (job) => job?.status === "queued" || job?.status === "running",
+        (job) => job?.status === "running" || isQueueLikelyActive(job, nowMs),
       );
 
       if (project) {
@@ -94,24 +117,20 @@ export function useProjectRealtime({
         return;
       }
       pollTickRef.current += 1;
+      const nowMs = Date.now();
       const hasLiveJob = (jobsRef.current || []).some(
-        (job) => job?.status === "queued" || job?.status === "running",
+        (job) => job?.status === "running" || isQueueLikelyActive(job, nowMs),
       );
       let includeSegments = false;
       if (hasLiveJob) {
         hadActiveJobRef.current = true;
       } else if (!isEditingSegmentsRef.current) {
-        includeSegments =
-          hadActiveJobRef.current || pollTickRef.current % 6 === 0;
+        includeSegments = hadActiveJobRef.current || pollTickRef.current % 6 === 0;
         hadActiveJobRef.current = false;
       }
       await loadProjectDataRef.current(selectedProjectId, { includeSegments });
 
-      const nextDelay = document.hidden
-        ? 20000
-        : hasLiveJob
-          ? 5000
-          : 15000;
+      const nextDelay = document.hidden ? 20000 : hasLiveJob ? 5000 : 15000;
       scheduleNext(nextDelay);
     };
 
@@ -123,14 +142,14 @@ export function useProjectRealtime({
   }, [selectedProjectId, streamState]);
 
   useEffect(() => {
-    if (!latestDubJob?.artifacts?.dubbed_audio) return;
-    if (lastDubDoneRef.current === latestDubJob.id) return;
-    lastDubDoneRef.current = latestDubJob.id;
+    if (!latestDubAudioJob?.artifacts?.dubbed_audio) return;
+    if (lastDubDoneRef.current === latestDubAudioJob.id) return;
+    lastDubDoneRef.current = latestDubAudioJob.id;
     setWizardStep(4);
     setMessage(
-      `Đã tạo xong âm thanh: ${latestDubJob.artifacts.dub_output_key || "dub-output.wav"}`,
+      `Đã tạo xong âm thanh: ${latestDubAudioJob.artifacts.dub_output_key || "dub-output.wav"}`,
     );
-  }, [latestDubJob, setMessage, setWizardStep]);
+  }, [latestDubAudioJob, setMessage, setWizardStep]);
 
   return {
     streamState,

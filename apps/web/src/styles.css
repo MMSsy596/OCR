@@ -491,6 +491,11 @@ button:disabled {
   color: #047857;
 }
 
+.job-source-badge.stale {
+  background: rgba(217, 119, 6, 0.16);
+  color: #92400e;
+}
+
 .job-timeline-item.warning {
   border-color: rgba(217, 119, 6, 0.24);
 }
@@ -503,6 +508,12 @@ button:disabled {
 
 .job-timeline-item.success {
   border-color: rgba(5, 150, 105, 0.24);
+}
+
+.job-timeline-item.stale {
+  border-color: rgba(217, 119, 6, 0.32);
+  background:
+    linear-gradient(180deg, rgba(255, 251, 235, 0.96), rgba(254, 243, 199, 0.92));
 }
 
 .table-wrap {

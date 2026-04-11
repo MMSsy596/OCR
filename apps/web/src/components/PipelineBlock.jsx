@@ -1,5 +1,27 @@
 import { BusyInline } from "./BusyState";
 
+const QUEUED_ACTIVITY_WINDOW_MS = 120000;
+
+function jobTimeValue(job) {
+  const candidates = [
+    job?.updated_at,
+    job?.created_at,
+    job?.artifacts?.last_event?.time,
+  ];
+  for (const value of candidates) {
+    const parsed = value ? Date.parse(value) : Number.NaN;
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function isFreshQueuedJob(job) {
+  if (!job || job.status !== "queued") return false;
+  const ts = jobTimeValue(job);
+  if (!ts) return false;
+  return Date.now() - ts <= QUEUED_ACTIVITY_WINDOW_MS;
+}
+
 export function PipelineBlock({
   wizardStep,
   selectedProjectId,
@@ -32,6 +54,7 @@ export function PipelineBlock({
 }) {
   const inputMode = pipelineForm.input_mode || "video_ocr";
   const isAudioMode = inputMode === "audio_asr";
+  const queueActive = isFreshQueuedJob(latestPipelineJob);
   const audioRuntimeReady = Boolean(
     runtimeCapabilities?.input_modes?.audio_asr?.available,
   );
@@ -44,7 +67,7 @@ export function PipelineBlock({
         active={
           loading ||
           retryingStuckJobs ||
-          latestPipelineJob?.status === "queued" ||
+          queueActive ||
           latestPipelineJob?.status === "running"
         }
         label={
@@ -52,7 +75,7 @@ export function PipelineBlock({
             ? "Đang thử lại các job bị kẹt..."
             : loading
               ? "Đang gửi yêu cầu pipeline lên backend..."
-              : latestPipelineJob?.status === "queued"
+              : queueActive
                 ? "Pipeline đang chờ worker nhận..."
                 : latestPipelineJob?.status === "running"
                   ? isAudioMode

@@ -26,7 +26,7 @@ describe("useProjectRealtime", () => {
       useProjectRealtime({
         apiBase: "http://localhost:8000",
         selectedProjectId: "p1",
-        latestDubJob: null,
+        latestDubAudioJob: null,
         jobs: [],
         isEditingSegments: false,
         loadProjectData,
@@ -49,7 +49,7 @@ describe("useProjectRealtime", () => {
       useProjectRealtime({
         apiBase: "http://localhost:8000",
         selectedProjectId: "p1",
-        latestDubJob: {
+        latestDubAudioJob: {
           id: "job-1",
           artifacts: {
             dubbed_audio: "/audio.wav",
@@ -81,7 +81,7 @@ describe("useProjectRealtime", () => {
       useProjectRealtime({
         apiBase: "http://localhost:8000",
         selectedProjectId: "p1",
-        latestDubJob: null,
+        latestDubAudioJob: null,
         jobs: [],
         isEditingSegments: false,
         loadProjectData: vi.fn(),

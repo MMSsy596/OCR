@@ -1,3 +1,5 @@
+import { BusyInline } from "./BusyState";
+
 export function VideoUploadBlock({
   wizardStep,
   videoFile,
@@ -15,6 +17,16 @@ export function VideoUploadBlock({
   return (
     <section className={`block ${wizardStep === 1 ? "" : "hidden-step"}`}>
       <h2>Bước 1: Video</h2>
+      <BusyInline
+        active={loading || ingestingUrl}
+        label={
+          ingestingUrl
+            ? "Đang tải video từ link, vui lòng chờ app xử lý..."
+            : loading
+              ? "Đang tải video lên server..."
+              : ""
+        }
+      />
       <label>
         Tệp video
         <input

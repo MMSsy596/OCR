@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { startTransition, useEffect, useMemo, useState } from "react";
+import { BusyBanner } from "./components/BusyState";
 import { ExportDubBlock } from "./components/ExportDubBlock";
+import { NotificationIsland } from "./components/NotificationIsland";
 import { PipelineBlock } from "./components/PipelineBlock";
 import { ProjectManagerBlock } from "./components/ProjectManagerBlock";
 import { SubtitleEditorTable } from "./components/SubtitleEditorTable";
@@ -54,6 +56,29 @@ function formatValue(value) {
   if (value === null || value === undefined) return "-";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+
+function eventTimeValue(event) {
+  const raw = event?.time ? Date.parse(event.time) : Number.NaN;
+  return Number.isNaN(raw) ? 0 : raw;
+}
+
+function inferNoticeTone(text) {
+  const raw = String(text || "").trim().toLowerCase();
+  if (!raw) return "info";
+  if (raw.startsWith("lỗi") || raw.includes(" thất bại") || raw.includes("không ")) return "error";
+  if (raw.startsWith("chọn ") || raw.startsWith("cần ") || raw.startsWith("chưa ")) return "warning";
+  if (raw.startsWith("đã ") || raw.includes("thành công") || raw.includes("hoàn tất")) return "success";
+  return "info";
+}
+
+function inferNoticeTitle(text, tone) {
+  if (tone === "error") return "Có lỗi";
+  if (tone === "warning") return "Cần chú ý";
+  if (tone === "success") return "Hoàn tất";
+  const raw = String(text || "").trim();
+  if (raw.startsWith("Đang ") || raw.startsWith("Đã nhận ")) return "Đang xử lý";
+  return "Thông báo";
 }
 
 const PROMPT_PRESETS = {
@@ -162,8 +187,30 @@ export function App() {
     pitch: "+0Hz",
     match_video_duration: true,
   });
-  const [message, setMessage] = useState("");
+  const [notices, setNotices] = useState([]);
   const [apiStatus, setApiStatus] = useState("checking");
+
+  function dismissNotice(id) {
+    startTransition(() => {
+      setNotices((prev) => prev.filter((item) => item.id !== id));
+    });
+  }
+
+  function setMessage(input) {
+    const messageText = String(input || "").trim();
+    if (!messageText) return;
+    const tone = inferNoticeTone(messageText);
+    const notice = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      tone,
+      title: inferNoticeTitle(messageText, tone),
+      message: messageText,
+      createdAt: Date.now(),
+    };
+    startTransition(() => {
+      setNotices((prev) => [notice, ...prev].slice(0, 4));
+    });
+  }
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId) || null,
@@ -233,10 +280,32 @@ export function App() {
     () => latestDubJob?.artifacts?.dub_output_key || "dub-output.wav",
     [latestDubJob],
   );
+  const latestDubEvents = useMemo(
+    () => [...(latestDubJob?.artifacts?.events || [])].slice(-20).reverse(),
+    [latestDubJob],
+  );
   const latestJobEvents = useMemo(
     () => [...(latestPipelineJob?.artifacts?.events || [])].slice(-30).reverse(),
     [latestPipelineJob],
   );
+  const unifiedTimelineEvents = useMemo(() => {
+    const pipelineEvents = (latestPipelineJob?.artifacts?.events || []).map((event, index) => ({
+      ...event,
+      id: `pipeline-${event.time || index}-${index}`,
+      source: "ocr",
+      sourceLabel: "OCR / dịch",
+    }));
+    const dubEvents = (latestDubJob?.artifacts?.events || []).map((event, index) => ({
+      ...event,
+      id: `dub-${event.time || index}-${index}`,
+      source: "dub",
+      sourceLabel: "Lồng tiếng",
+    }));
+
+    return [...pipelineEvents, ...dubEvents]
+      .sort((left, right) => eventTimeValue(right) - eventTimeValue(left))
+      .slice(0, 40);
+  }, [latestDubJob, latestPipelineJob]);
   const latestJobStats = useMemo(
     () => latestPipelineJob?.artifacts?.stats || {},
     [latestPipelineJob],
@@ -314,12 +383,53 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!notices.length) return undefined;
+    const timers = notices.map((notice) => {
+      const timeoutMs = notice.tone === "error" ? 7200 : notice.tone === "warning" ? 5400 : 3800;
+      return window.setTimeout(() => {
+        dismissNotice(notice.id);
+      }, timeoutMs);
+    });
+    return () => {
+      timers.forEach((timerId) => window.clearTimeout(timerId));
+    };
+  }, [notices]);
+
+  useEffect(() => {
     setJobs([]);
     setEditableSegments([]);
     setLastExport(null);
     setSrtUploadFile(null);
     setCurrentVideoTime(0);
   }, [selectedProjectId, setCurrentVideoTime]);
+
+  const liveActivity = useMemo(() => {
+    if (latestDubJob && (latestDubJob.status === "queued" || latestDubJob.status === "running")) {
+      const latestEvent = latestDubEvents[0] || null;
+      return {
+        tone: latestDubJob.status === "queued" ? "warning" : "info",
+        title: "Đang dựng lồng tiếng",
+        step: latestDubJob.step || "dub",
+        progress: latestDubJob.progress ?? 0,
+        message:
+          latestEvent?.message ||
+          `Đang xử lý file âm thanh ${latestDubJob.artifacts?.dub_output_key || ""}`.trim(),
+      };
+    }
+    if (latestPipelineJob && (latestPipelineJob.status === "queued" || latestPipelineJob.status === "running")) {
+      const latestEvent = latestJobEvents[0] || null;
+      return {
+        tone: latestPipelineJob.status === "queued" ? "warning" : "info",
+        title: "Đang chạy OCR / dịch",
+        step: latestPipelineJob.step || "pipeline",
+        progress: latestPipelineJob.progress ?? 0,
+        message:
+          latestEvent?.message ||
+          "Pipeline đang xử lý video, OCR và dịch subtitle.",
+      };
+    }
+    return null;
+  }, [latestDubEvents, latestDubJob, latestJobEvents, latestPipelineJob]);
 
   const composeCurrentPrompt = () =>
     composePromptFromPreset(
@@ -418,6 +528,43 @@ export function App() {
   });
 
   const loading = pipelineLoading || projectLoading;
+  const pendingTasks = useMemo(() => {
+    const items = [];
+    if (creating) items.push({ id: "creating", label: "Đang tạo dự án mới..." });
+    if (clearingSessions) items.push({ id: "clear-sessions", label: "Đang dọn các phiên cũ..." });
+    if (forceClearingSessions) items.push({ id: "force-clear", label: "Đang xóa cưỡng bức tất cả phiên..." });
+    if (projectLoading) items.push({ id: "project-loading", label: "Đang tải video hoặc xử lý yêu cầu nhập video..." });
+    if (savingRoi) items.push({ id: "save-roi", label: "Đang lưu vùng OCR..." });
+    if (ingestingUrl) items.push({ id: "ingest-url", label: "Đang tải video từ liên kết..." });
+    if (pipelineLoading) items.push({ id: "start-pipeline", label: "Đang khởi tạo pipeline..." });
+    if (savingSegments) items.push({ id: "save-segments", label: "Đang lưu subtitle..." });
+    if (retranslating) items.push({ id: "retranslate", label: "Đang dịch lại subtitle..." });
+    if (exporting) items.push({ id: "export", label: "Đang xuất file subtitle..." });
+    if (uploadingSrt) items.push({ id: "upload-srt", label: "Đang tải tệp SRT ngoài..." });
+    if (dubbing) items.push({ id: "dubbing-request", label: "Đang gửi yêu cầu lồng tiếng..." });
+    if (retryingStuckJobs) items.push({ id: "retry-jobs", label: "Đang thử lại các job bị kẹt..." });
+    if (latestPipelineJob?.status === "queued") items.push({ id: "pipeline-queued", label: "Pipeline đang chờ worker nhận..." });
+    if (latestPipelineJob?.status === "running") items.push({ id: "pipeline-running", label: `Pipeline đang chạy ${latestPipelineJob.progress ?? 0}%...` });
+    if (latestDubJob?.status === "queued") items.push({ id: "dub-queued", label: "Job lồng tiếng đang chờ xử lý..." });
+    if (latestDubJob?.status === "running") items.push({ id: "dub-running", label: `Đang dựng âm thanh ${latestDubJob.progress ?? 0}%...` });
+    return items;
+  }, [
+    creating,
+    clearingSessions,
+    forceClearingSessions,
+    projectLoading,
+    savingRoi,
+    ingestingUrl,
+    pipelineLoading,
+    savingSegments,
+    retranslating,
+    exporting,
+    uploadingSrt,
+    dubbing,
+    retryingStuckJobs,
+    latestPipelineJob,
+    latestDubJob,
+  ]);
 
   async function startPipeline() {
     if (!selectedProjectId) {
@@ -473,19 +620,11 @@ export function App() {
         setWizardStep={setWizardStep}
       />
 
-      {latestDubJob?.artifacts?.dubbed_audio ? (
-        <section className="card" style={{ padding: 10, marginBottom: 12 }}>
-          <strong>Âm thanh mới nhất:</strong>{" "}
-          <a
-            className="download-link"
-            href={appendApiToken(`${API_BASE}/jobs/${latestDubJob.id}/artifact/dubbed_audio`)}
-            target="_blank"
-            rel="noreferrer"
-          >
-            {latestDubJob.artifacts.dub_output_key || "Tải file âm thanh"}
-          </a>
-        </section>
-      ) : null}
+      <NotificationIsland
+        liveActivity={liveActivity}
+        notices={notices}
+        onDismiss={dismissNotice}
+      />
 
       <main className="workspace">
         <aside className="sidebar card">
@@ -529,6 +668,9 @@ export function App() {
 
           <section className={`block ${wizardStep === 2 ? "" : "hidden-step"}`}>
             <h2>Bước 2: ROI</h2>
+            <BusyBanner
+              items={savingRoi ? [{ id: "roi-saving", label: "Đang lưu ROI và cập nhật dự án..." }] : []}
+            />
             <button type="button" onClick={toggleRoiEditMode}>
               {roiEditMode ? "Tắt chỉnh ROI" : "Bật chỉnh ROI"}
             </button>
@@ -576,6 +718,12 @@ export function App() {
 
           <section className={`block ${wizardStep === 4 ? "" : "hidden-step"}`}>
             <h2>Bước 4: Chỉnh subtitle</h2>
+            <BusyBanner
+              items={[
+                savingSegments ? { id: "segments-saving", label: "Đang lưu subtitle đã chỉnh sửa..." } : null,
+                retranslating ? { id: "segments-retranslate", label: "Đang dịch lại subtitle, vui lòng chờ..." } : null,
+              ]}
+            />
             <details>
               <summary>Công cụ chỉnh sửa thủ công</summary>
               <button
@@ -629,6 +777,7 @@ export function App() {
         </aside>
 
         <section className="content">
+          <BusyBanner items={pendingTasks} />
           <section className={`card preview-card ${wizardStep === 1 ? "" : "hidden-step"}`}>
             <div className="row-head">
               <h2>Bước 1: Chuẩn bị video</h2>
@@ -734,23 +883,36 @@ export function App() {
 
           <section className={`card preview-card ${wizardStep === 3 ? "" : "hidden-step"}`}>
             <div className="row-head">
-              <h2>Log OCR thời gian thực</h2>
+              <h2>Timeline xử lý thống nhất</h2>
               <span>
-                {latestPipelineJob ? `${latestPipelineJob.progress}%` : "chưa có tác vụ"}
+                {unifiedTimelineEvents.length > 0
+                  ? `${unifiedTimelineEvents.length} mốc mới nhất`
+                  : "chưa có tác vụ"}
               </span>
             </div>
-            {latestJobEvents.length > 0 ? (
-              <div className="timeline-card" style={{ maxHeight: 260, overflow: "auto" }}>
-                {latestJobEvents.map((event, idx) => (
-                  <p key={`${event.time || idx}-${idx}`}>
-                    [{formatEventTime(event.time)}] [{event.phase}] [{event.level || "info"}]
-                    {" "}({event.progress ?? "-"}%): {event.message}
-                  </p>
+            <p className="hint">
+              Một dòng thời gian chung cho OCR, dịch và lồng tiếng để dễ theo dõi app còn đang chạy.
+            </p>
+            {unifiedTimelineEvents.length > 0 ? (
+              <div className="timeline-card job-timeline" style={{ maxHeight: 340, overflow: "auto" }}>
+                {unifiedTimelineEvents.map((event) => (
+                  <article
+                    key={event.id}
+                    className={`job-timeline-item ${event.source} ${event.level || "info"}`}
+                  >
+                    <div className="job-timeline-meta">
+                      <span className={`job-source-badge ${event.source}`}>{event.sourceLabel}</span>
+                      <span>{formatEventTime(event.time)}</span>
+                      <span>{event.phase || event.step || "đang xử lý"}</span>
+                      <span>{event.progress ?? "-"}%</span>
+                    </div>
+                    <p>{event.message}</p>
+                  </article>
                 ))}
               </div>
             ) : (
               <p className="hint">
-                Chưa có log OCR. Hãy chạy pipeline để theo dõi tiến trình tách khung hình.
+                Chưa có timeline xử lý. Hãy chạy pipeline hoặc lồng tiếng để theo dõi tiến trình.
               </p>
             )}
           </section>
@@ -771,8 +933,6 @@ export function App() {
           </section>
         </section>
       </main>
-
-      {message ? <footer className="toast">{message}</footer> : null}
     </div>
   );
 }

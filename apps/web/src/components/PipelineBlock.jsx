@@ -1,3 +1,5 @@
+import { BusyInline } from "./BusyState";
+
 export function PipelineBlock({
   wizardStep,
   selectedProjectId,
@@ -29,6 +31,20 @@ export function PipelineBlock({
   return (
     <section className={`block ${wizardStep === 3 ? "" : "hidden-step"}`}>
       <h2>Bước 3: OCR và log</h2>
+      <BusyInline
+        active={loading || retryingStuckJobs || latestPipelineJob?.status === "queued" || latestPipelineJob?.status === "running"}
+        label={
+          retryingStuckJobs
+            ? "Đang thử lại các job bị kẹt..."
+            : loading
+              ? "Đang gửi yêu cầu pipeline lên backend..."
+              : latestPipelineJob?.status === "queued"
+                ? "Pipeline đang chờ worker nhận..."
+                : latestPipelineJob?.status === "running"
+                  ? "Pipeline đang OCR, dịch và xuất subtitle..."
+                  : ""
+        }
+      />
       <details>
         <summary>Tùy chọn OCR nâng cao</summary>
         <label>

@@ -1,3 +1,5 @@
+import { BusyInline } from "./BusyState";
+
 export function ProjectManagerBlock({
   projects,
   selectedProjectId,
@@ -39,6 +41,16 @@ export function ProjectManagerBlock({
       </label>
       <details>
         <summary>Quản lý dự án nâng cao</summary>
+        <BusyInline
+          active={clearingSessions || forceClearingSessions}
+          label={
+            forceClearingSessions
+              ? "Đang xóa toàn bộ phiên và dọn storage..."
+              : clearingSessions
+                ? "Đang dọn các phiên cũ..."
+                : ""
+          }
+        />
         <button disabled={clearingSessions} onClick={clearOldSessions}>
           {clearingSessions ? "Đang dọn phiên..." : "Dọn phiên cũ"}
         </button>
@@ -53,6 +65,7 @@ export function ProjectManagerBlock({
       </details>
       <details>
         <summary>Tạo dự án mới</summary>
+        <BusyInline active={creating} label="Đang tạo dự án mới và đồng bộ danh sách..." />
         <label>
           Tên dự án
           <input

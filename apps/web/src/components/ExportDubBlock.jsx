@@ -1,3 +1,5 @@
+import { BusyInline } from "./BusyState";
+
 export function ExportDubBlock({
   wizardStep,
   exportForm,
@@ -25,6 +27,28 @@ export function ExportDubBlock({
   return (
     <section className={`block ${wizardStep === 4 ? "" : "hidden-step"}`}>
       <h2>Bước 4: Xuất SRT và TTS</h2>
+      <BusyInline
+        active={
+          exporting ||
+          uploadingSrt ||
+          dubbing ||
+          latestDubJob?.status === "queued" ||
+          latestDubJob?.status === "running"
+        }
+        label={
+          exporting
+            ? "Đang xuất subtitle..."
+            : uploadingSrt
+              ? "Đang tải SRT ngoài vào dự án..."
+              : dubbing
+                ? "Đang tạo job lồng tiếng..."
+                : latestDubJob?.status === "queued"
+                  ? "Job dub đang chờ được xử lý..."
+                  : latestDubJob?.status === "running"
+                    ? "Đang tổng hợp giọng đọc và ghép timeline audio..."
+                    : ""
+        }
+      />
       <label>
         Chế độ nội dung
         <select

@@ -22,16 +22,18 @@ export function ProjectManagerBlock({
   creating,
   createProject,
 }) {
+  const deletingNow = clearingSessions || forceClearingSessions;
+
   return (
     <section className="block">
-      <h2>Dự án hiện tại</h2>
+      <h2>Dự án</h2>
       <label>
-        Chọn dự án
+        Chọn dự án đang làm
         <select
           value={selectedProjectId}
           onChange={(e) => setSelectedProjectId(e.target.value)}
         >
-          <option value="">-- Chọn --</option>
+          <option value="">-- Chọn dự án --</option>
           {projects.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name} ({statusLabel(p.status)})
@@ -39,62 +41,74 @@ export function ProjectManagerBlock({
           ))}
         </select>
       </label>
-      <details>
-        <summary>Quản lý dự án nâng cao</summary>
-        <BusyInline
-          active={clearingSessions || forceClearingSessions}
-          label={
-            forceClearingSessions
-              ? "Đang xóa toàn bộ phiên và dọn storage..."
-              : clearingSessions
-                ? "Đang dọn các phiên cũ..."
-                : ""
-          }
-        />
-        <button disabled={clearingSessions} onClick={clearOldSessions}>
-          {clearingSessions ? "Đang dọn phiên..." : "Dọn phiên cũ"}
+
+      <BusyInline
+        active={deletingNow}
+        label={
+          forceClearingSessions
+            ? "Đang xóa tất cả phiên và dọn storage..."
+            : clearingSessions
+              ? "Đang xóa phiên cũ..."
+              : ""
+        }
+      />
+      <div className="inline-two">
+        <button
+          type="button"
+          disabled={deletingNow}
+          onClick={clearOldSessions}
+        >
+          {clearingSessions ? "Đang xóa..." : "Xóa phiên cũ ngay"}
         </button>
         <button
-          disabled={forceClearingSessions}
+          type="button"
+          disabled={deletingNow}
           onClick={forceClearAllSessions}
         >
-          {forceClearingSessions
-            ? "Đang xóa cưỡng bức..."
-            : "Xóa cưỡng bức tất cả (kể cả đang xử lý)"}
+          {forceClearingSessions ? "Đang xóa..." : "Xóa tất cả ngay"}
         </button>
-      </details>
-      <details>
-        <summary>Tạo dự án mới</summary>
-        <BusyInline active={creating} label="Đang tạo dự án mới và đồng bộ danh sách..." />
+      </div>
+      <p className="hint">
+        Thao tác xóa chạy ngay lập tức, không hiện hộp xác nhận.
+      </p>
+
+      <BusyInline active={creating} label="Đang tạo dự án mới..." />
+      <label>
+        Tên dự án
+        <input
+          value={projectForm.name}
+          onChange={(e) =>
+            setProjectForm((f) => ({ ...f, name: e.target.value }))
+          }
+          placeholder="Ví dụ: Dự án NanBao"
+        />
+      </label>
+      <div className="inline-two">
         <label>
-          Tên dự án
+          Ngôn ngữ nguồn
           <input
-            value={projectForm.name}
+            value={projectForm.source_lang}
             onChange={(e) =>
-              setProjectForm((f) => ({ ...f, name: e.target.value }))
+              setProjectForm((f) => ({ ...f, source_lang: e.target.value }))
             }
           />
         </label>
-        <div className="inline-two">
-          <label>
-            Ngôn ngữ nguồn
-            <input
-              value={projectForm.source_lang}
-              onChange={(e) =>
-                setProjectForm((f) => ({ ...f, source_lang: e.target.value }))
-              }
-            />
-          </label>
-          <label>
-            Ngôn ngữ đích
-            <input
-              value={projectForm.target_lang}
-              onChange={(e) =>
-                setProjectForm((f) => ({ ...f, target_lang: e.target.value }))
-              }
-            />
-          </label>
-        </div>
+        <label>
+          Ngôn ngữ đích
+          <input
+            value={projectForm.target_lang}
+            onChange={(e) =>
+              setProjectForm((f) => ({ ...f, target_lang: e.target.value }))
+            }
+          />
+        </label>
+      </div>
+      <button type="button" disabled={creating || !projectForm.name?.trim()} onClick={createProject}>
+        {creating ? "Đang tạo..." : "Tạo dự án mới"}
+      </button>
+
+      <details>
+        <summary>Tùy chọn dịch nâng cao</summary>
         <label>
           Lời nhắc
           <textarea
@@ -154,9 +168,6 @@ export function ProjectManagerBlock({
             }
           />
         </label>
-        <button disabled={creating} onClick={createProject}>
-          {creating ? "Đang tạo..." : "Tạo dự án"}
-        </button>
       </details>
     </section>
   );

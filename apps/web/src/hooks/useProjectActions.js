@@ -62,11 +62,8 @@ export function useProjectActions(deps) {
   }
 
   async function clearOldSessions() {
-    if (!window.confirm("Bạn có chắc muốn xóa toàn bộ phiên cũ (không ở trạng thái đang xử lý)?")) {
-      return;
-    }
     setClearingSessions(true);
-    setMessage("");
+    setMessage("Đang xóa ngay các phiên cũ...");
     try {
       const out = await jsonFetch(`${apiBase}/projects/clear-sessions`, {
         method: "POST",
@@ -93,20 +90,8 @@ export function useProjectActions(deps) {
   }
 
   async function forceClearAllSessions() {
-    const step1 = window.confirm(
-      "CẢNH BÁO: thao tác này sẽ xóa TẤT CẢ phiên, kể cả phiên đang xử lý. Bạn tiếp tục?",
-    );
-    if (!step1) return;
-    const token = window.prompt(
-      "Bước 2/2: Nhập CHÍNH XÁC 'FORCE CLEAR ALL' để xác nhận:",
-      "",
-    );
-    if (token !== "FORCE CLEAR ALL") {
-      setMessage("Đã hủy thao tác xóa cưỡng bức do xác nhận không hợp lệ.");
-      return;
-    }
     setForceClearingSessions(true);
-    setMessage("");
+    setMessage("Đang xóa ngay tất cả phiên (kể cả đang xử lý)...");
     try {
       const out = await jsonFetch(`${apiBase}/projects/clear-sessions`, {
         method: "POST",

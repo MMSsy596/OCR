@@ -133,7 +133,6 @@ Ensure-WebEnv
 
 $pythonExe = Join-Path $apiDir ".venv\Scripts\python.exe"
 $nodeExe = Get-NodeExe
-$redisExe = Get-RedisExe
 
 Write-Info "Dọn cổng cũ 5173 và 8000"
 Stop-ListeningPort -Port 5173
@@ -141,13 +140,22 @@ Stop-ListeningPort -Port 8000
 
 $redisPort = Get-NetTCPConnection -LocalPort 6379 -State Listen -ErrorAction SilentlyContinue
 if ($null -eq $redisPort) {
-  Write-Info "Khởi động Redis"
-  $redisInfo = Start-BackgroundProcess `
-    -Name "redis" `
-    -FilePath $redisExe `
-    -Arguments "--port 6379 --save \"\"" `
-    -WorkingDirectory $root `
-    -PidFile (Join-Path $logDir "redis.pid")
+  Write-Info "Khởi động Docker containers (postgres, redis, minio)"
+  & docker compose up -d | Out-Host
+  Start-Sleep -Seconds 3
+  $redisPort = Get-NetTCPConnection -LocalPort 6379 -State Listen -ErrorAction SilentlyContinue
+  if ($null -eq $redisPort) {
+    $redisExe = Get-RedisExe
+    Write-Info "Khởi động Redis (local)"
+    $redisInfo = Start-BackgroundProcess `
+      -Name "redis" `
+      -FilePath $redisExe `
+      -Arguments "--port 6379 --save \"\"" `
+      -WorkingDirectory $root `
+      -PidFile (Join-Path $logDir "redis.pid")
+  } else {
+    Write-Info "Redis Docker đã sẵn sàng trên cổng 6379"
+  }
 } else {
   Write-Info "Redis đã chạy sẵn trên cổng 6379"
 }

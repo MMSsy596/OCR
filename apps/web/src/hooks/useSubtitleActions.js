@@ -48,11 +48,11 @@ export function useSubtitleActions(deps) {
 
   async function saveSegments() {
     if (!selectedProjectId) {
-      setMessage("Chọn dự án trước.");
+      setMessage("⚠️ Chọn dự án trước.");
       return;
     }
     setSavingSegments(true);
-    setMessage("");
+    setMessage("⏳ Đang lưu chỉnh sửa phụ đề...");
     try {
       const updated = await jsonFetch(`${apiBase}/projects/${selectedProjectId}/segments`, {
         method: "PUT",
@@ -63,9 +63,9 @@ export function useSubtitleActions(deps) {
       setUndoStack([]);
       setRedoStack([]);
       setIsEditingSegments(false);
-      setMessage("Đã lưu phụ đề đã chỉnh sửa.");
+      setMessage("✅ Đã lưu phụ đề đã chỉnh sửa.");
     } catch (err) {
-      setMessage(`Lỗi lưu phụ đề: ${await normalizeApiError(err, "save_segments_failed")}`);
+      setMessage(`❌ Lỗi lưu phụ đề: ${await normalizeApiError(err, "save_segments_failed")}`);
     } finally {
       setSavingSegments(false);
     }
@@ -73,11 +73,11 @@ export function useSubtitleActions(deps) {
 
   async function retranslateOnly(autoApplyPromptPreset) {
     if (!selectedProjectId) {
-      setMessage("Chọn dự án trước.");
+      setMessage("⚠️ Chọn dự án trước.");
       return;
     }
     setRetranslating(true);
-    setMessage("");
+    setMessage("⏳ Đang xử lý dịch lại phụ đề bằng AI, vui lòng chờ...");
     try {
       await syncPromptPresetForCurrentProjectIfEnabled(autoApplyPromptPreset);
       await jsonFetch(`${apiBase}/projects/${selectedProjectId}/segments`, {
@@ -96,9 +96,9 @@ export function useSubtitleActions(deps) {
       setUndoStack([]);
       setRedoStack([]);
       setIsEditingSegments(false);
-      setMessage(`Đã dịch lại. Thống kê: ${JSON.stringify(out.translation_stats || {})}`);
+      setMessage(`✅ Đã dịch lại. Thống kê: ${JSON.stringify(out.translation_stats || {})}`);
     } catch (err) {
-      setMessage(`Lỗi dịch lại: ${await normalizeApiError(err, "retranslate_failed")}`);
+      setMessage(`❌ Lỗi dịch lại: ${await normalizeApiError(err, "retranslate_failed")}`);
     } finally {
       setRetranslating(false);
     }
@@ -106,11 +106,11 @@ export function useSubtitleActions(deps) {
 
   async function exportSubtitle() {
     if (!selectedProjectId) {
-      setMessage("Chọn dự án trước.");
+      setMessage("⚠️ Chọn dự án trước.");
       return;
     }
     setExporting(true);
-    setMessage("");
+    setMessage("⏳ Đang xuất file phụ đề...");
     try {
       const out = await jsonFetch(`${apiBase}/projects/${selectedProjectId}/export`, {
         method: "POST",
@@ -118,9 +118,9 @@ export function useSubtitleActions(deps) {
         body: JSON.stringify(exportForm),
       });
       setLastExport({ ...out, url: appendApiToken(`${apiBase}${out.download_url}`) });
-      setMessage(`Đã xuất ${exportForm.export_format.toUpperCase()} (${exportForm.content_mode}).`);
+      setMessage(`✅ Đã xuất ${exportForm.export_format.toUpperCase()} (${exportForm.content_mode}).`);
     } catch (err) {
-      setMessage(`Lỗi xuất tệp: ${await normalizeApiError(err, "export_failed")}`);
+      setMessage(`❌ Lỗi xuất tệp: ${await normalizeApiError(err, "export_failed")}`);
     } finally {
       setExporting(false);
     }
@@ -128,20 +128,20 @@ export function useSubtitleActions(deps) {
 
   async function startDubAudio() {
     if (!selectedProjectId) {
-      setMessage("Chọn dự án trước.");
+      setMessage("⚠️ Chọn dự án trước.");
       return;
     }
     setDubbing(true);
-    setMessage("");
+    setMessage("⏳ Đang gửi yêu cầu tạo lồng tiếng...");
     try {
       await jsonFetch(`${apiBase}/projects/${selectedProjectId}/dub/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(dubForm),
       });
-      setMessage(`Đã bắt đầu dựng âm thanh (${dubForm.output_format.toUpperCase()}).`);
+      setMessage(`✅ Đã bắt đầu dựng âm thanh (${dubForm.output_format.toUpperCase()}).`);
     } catch (err) {
-      setMessage(`Lỗi dựng âm thanh: ${await normalizeApiError(err, "dub_failed")}`);
+      setMessage(`❌ Lỗi dựng âm thanh: ${await normalizeApiError(err, "dub_failed")}`);
     } finally {
       setDubbing(false);
     }
@@ -149,11 +149,11 @@ export function useSubtitleActions(deps) {
 
   async function uploadExternalSrt(srtUploadFile, setDubForm) {
     if (!selectedProjectId || !srtUploadFile) {
-      setMessage("Chọn dự án và tệp SRT trước.");
+      setMessage("⚠️ Chọn dự án và tệp SRT trước.");
       return;
     }
     setUploadingSrt(true);
-    setMessage("");
+    setMessage("⏳ Đang tải tệp SRT lên...");
     try {
       const form = new FormData();
       form.append("file", srtUploadFile);
@@ -164,9 +164,9 @@ export function useSubtitleActions(deps) {
       if (!res.ok) throw new Error(await readApiErrorMessage(res, "srt_upload_failed"));
       const out = await res.json();
       setDubForm((prev) => ({ ...prev, srt_key: out.output_key }));
-      setMessage(`Đã tải lên SRT: ${out.output_key}`);
+      setMessage(`✅ Đã tải lên SRT: ${out.output_key}`);
     } catch (err) {
-      setMessage(`Lỗi tải lên SRT: ${await normalizeApiError(err, "srt_upload_failed")}`);
+      setMessage(`❌ Lỗi tải lên SRT: ${await normalizeApiError(err, "srt_upload_failed")}`);
     } finally {
       setUploadingSrt(false);
     }

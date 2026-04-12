@@ -41,7 +41,7 @@ export function useProjectActions(deps) {
 
   async function createProject() {
     setCreating(true);
-    setMessage("");
+    setMessage("⏳ Đang khởi tạo dự án mới...");
     try {
       const created = await jsonFetch(`${apiBase}/projects`, {
         method: "POST",
@@ -53,9 +53,9 @@ export function useProjectActions(deps) {
       });
       await loadProjectsSafe();
       setSelectedProjectId(created.id);
-      setMessage(`Đã tạo dự án: ${created.name}`);
+      setMessage(`✅ Đã tạo dự án: ${created.name}`);
     } catch (err) {
-      setMessage(`Lỗi tạo dự án: ${await normalizeApiError(err, "create_project_failed")}`);
+      setMessage(`❌ Lỗi tạo dự án: ${await normalizeApiError(err, "create_project_failed")}`);
     } finally {
       setCreating(false);
     }
@@ -63,7 +63,7 @@ export function useProjectActions(deps) {
 
   async function clearOldSessions() {
     setClearingSessions(true);
-    setMessage("Đang xóa ngay các phiên cũ...");
+    setMessage("⏳ Đang xóa các phiên cũ...");
     try {
       const out = await jsonFetch(`${apiBase}/projects/clear-sessions`, {
         method: "POST",
@@ -80,10 +80,10 @@ export function useProjectActions(deps) {
         setJobs([]);
       }
       setMessage(
-        `Đã xóa ${out.deleted_projects} phiên cũ, bỏ qua ${out.skipped_processing_projects} phiên đang chạy.`,
+        `✅ Đã xóa ${out.deleted_projects} phiên cũ, bỏ qua ${out.skipped_processing_projects} phiên đang chạy.`,
       );
     } catch (err) {
-      setMessage(`Lỗi dọn phiên: ${await normalizeApiError(err, "clear_sessions_failed")}`);
+      setMessage(`❌ Lỗi dọn phiên: ${await normalizeApiError(err, "clear_sessions_failed")}`);
     } finally {
       setClearingSessions(false);
     }
@@ -91,7 +91,7 @@ export function useProjectActions(deps) {
 
   async function forceClearAllSessions() {
     setForceClearingSessions(true);
-    setMessage("Đang xóa ngay tất cả phiên (kể cả đang xử lý)...");
+    setMessage("⏳ Đang xóa ngay tất cả phiên (kể cả đang xử lý)...");
     try {
       const out = await jsonFetch(`${apiBase}/projects/clear-sessions`, {
         method: "POST",
@@ -106,10 +106,10 @@ export function useProjectActions(deps) {
       setEditableSegments([]);
       setJobs([]);
       setMessage(
-        `Đã xóa cưỡng bức: ${out.deleted_projects} phiên; dọn ${out.removed_storage_dirs} thư mục.`,
+        `✅ Đã xóa cưỡng bức: ${out.deleted_projects} phiên; dọn ${out.removed_storage_dirs} thư mục.`,
       );
     } catch (err) {
-      setMessage(`Lỗi xóa cưỡng bức phiên: ${await normalizeApiError(err, "force_clear_failed")}`);
+      setMessage(`❌ Lỗi xóa cưỡng bức phiên: ${await normalizeApiError(err, "force_clear_failed")}`);
     } finally {
       setForceClearingSessions(false);
     }
@@ -117,11 +117,11 @@ export function useProjectActions(deps) {
 
   async function uploadVideo() {
     if (!selectedProjectId || !videoFile) {
-      setMessage("Chọn dự án và tệp video trước.");
+      setMessage("⚠️ Chọn dự án và tệp video trước.");
       return;
     }
     setLoading(true);
-    setMessage("");
+    setMessage("⏳ Đang tải video lên máy chủ, vui lòng đợi...");
     try {
       const form = new FormData();
       form.append("file", videoFile);
@@ -132,10 +132,10 @@ export function useProjectActions(deps) {
       if (!res.ok) throw new Error(await readApiErrorMessage(res, "upload_video_failed"));
       await loadProjectsSafe();
       await loadProjectData(selectedProjectId);
-      setMessage("Tải video lên thành công.");
+      setMessage("✅ Tải video lên thành công.");
       setWizardStep(2);
     } catch (err) {
-      setMessage(`Lỗi tải lên: ${await normalizeApiError(err, "upload_video_failed")}`);
+      setMessage(`❌ Lỗi tải lên: ${await normalizeApiError(err, "upload_video_failed")}`);
     } finally {
       setLoading(false);
     }
@@ -143,11 +143,11 @@ export function useProjectActions(deps) {
 
   async function ingestVideoFromUrl() {
     if (!selectedProjectId || !sourceUrl.trim()) {
-      setMessage("Chọn dự án và dán link trước.");
+      setMessage("⚠️ Chọn dự án và dán link trước.");
       return;
     }
     setIngestingUrl(true);
-    setMessage("");
+    setMessage("⏳ Đang gửi yêu cầu tải video từ đường dẫn...");
     try {
       await jsonFetch(`${apiBase}/projects/${selectedProjectId}/ingest-url/start`, {
         method: "POST",
@@ -169,12 +169,12 @@ export function useProjectActions(deps) {
       await loadProjectData(selectedProjectId);
       setMessage(
         autoStartAfterIngest
-          ? "Đã nhận link, đang tải và sẽ tự chạy pipeline."
-          : "Đã nhận link, đang tự tải video vào dự án.",
+          ? "✅ Đã nhận link, đang tải và sẽ tự chạy pipeline."
+          : "✅ Đã nhận link, đang tự tải video vào dự án.",
       );
       setWizardStep(2);
     } catch (err) {
-      setMessage(`Lỗi nhận link: ${await normalizeApiError(err, "ingest_url_failed")}`);
+      setMessage(`❌ Lỗi nhận link: ${await normalizeApiError(err, "ingest_url_failed")}`);
     } finally {
       setIngestingUrl(false);
     }
@@ -182,11 +182,11 @@ export function useProjectActions(deps) {
 
   async function saveSelectedRoi() {
     if (!selectedProjectId) {
-      setMessage("Chọn dự án trước khi lưu ROI.");
+      setMessage("⚠️ Chọn dự án trước khi lưu ROI.");
       return;
     }
     setSavingRoi(true);
-    setMessage("");
+    setMessage("⏳ Đang lưu vùng chuẩn nhận diện (ROI)...");
     try {
       const updated = await jsonFetch(`${apiBase}/projects/${selectedProjectId}`, {
         method: "PATCH",
@@ -195,9 +195,10 @@ export function useProjectActions(deps) {
       });
       setProjects((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
       setRoiDraft(normalizeRoi(updated.roi));
-      setMessage("Đã lưu ROI cho dự án.");
+      setMessage("✅ Đã cấu hình Video và vùng quét ROI thành công.");
+      setWizardStep(3); // Auto advance to Next step (Run step is index 3)
     } catch (err) {
-      setMessage(`Lỗi lưu ROI: ${await normalizeApiError(err, "save_roi_failed")}`);
+      setMessage(`❌ Lỗi lưu ROI: ${await normalizeApiError(err, "save_roi_failed")}`);
     } finally {
       setSavingRoi(false);
     }

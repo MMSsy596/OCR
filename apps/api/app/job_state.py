@@ -8,7 +8,7 @@ from typing import Any
 
 from .settings import get_settings
 
-logger = logging.getLogger("nanbao.ocr.job_state")
+logger = logging.getLogger("solar.ocr.job_state")
 settings = get_settings()
 
 

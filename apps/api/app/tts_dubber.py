@@ -56,8 +56,8 @@ def _update_job(
     job.error_message = error_message
     if artifacts is not None:
         job.artifacts = artifacts
-    last_flush = float(getattr(job, "_nanbao_last_flush_at", 0.0))
-    last_progress = int(getattr(job, "_nanbao_last_flush_progress", prev_progress))
+    last_flush = float(getattr(job, "_solar_last_flush_at", 0.0))
+    last_progress = int(getattr(job, "_solar_last_flush_progress", prev_progress))
     if not force_flush and (now - last_flush) < 1.5 and abs(int(progress) - last_progress) < 3:
         return
     if artifacts is not None:
@@ -65,8 +65,8 @@ def _update_job(
     db.add(job)
     db.commit()
     db.refresh(job)
-    job._nanbao_last_flush_at = now
-    job._nanbao_last_flush_progress = int(progress)
+    job._solar_last_flush_at = now
+    job._solar_last_flush_progress = int(progress)
 
 
 def _parse_timestamp(ts: str) -> float:
@@ -527,7 +527,7 @@ def run_dub_job(
         render_done = 0
         unique_total = max(1, len(unique_keys))
 
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="nanbao-tts") as executor:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="solar-tts") as executor:
             future_map = {
                 executor.submit(
                     _render_tts_variant,

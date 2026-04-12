@@ -80,7 +80,7 @@ export function ProjectManagerBlock({
           onChange={(e) =>
             setProjectForm((f) => ({ ...f, name: e.target.value }))
           }
-          placeholder="Ví dụ: Dự án NanBao"
+          placeholder="Ví dụ: Dự án Solar"
         />
       </label>
       <div className="inline-two">

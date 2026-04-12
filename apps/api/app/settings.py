@@ -10,7 +10,7 @@ ROOT_ENV = Path(__file__).resolve().parents[3] / ".env"
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=str(ROOT_ENV), env_file_encoding="utf-8", extra="ignore")
 
-    app_name: str = "NanBao OCR Studio"
+    app_name: str = "Solar OCR Studio"
     environment: str = "development"
     web_origin: str = "http://localhost:5173"
     allowed_hosts: str = "localhost,127.0.0.1,testserver"

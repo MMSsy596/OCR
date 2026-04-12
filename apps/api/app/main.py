@@ -29,7 +29,7 @@ settings = get_settings()
 settings.storage_path.mkdir(parents=True, exist_ok=True)
 web_dist_dir = Path(__file__).resolve().parents[1] / "web_dist"
 web_index_file = web_dist_dir / "index.html"
-logger = logging.getLogger("nanbao.ocr.api")
+logger = logging.getLogger("solar.ocr.api")
 
 app = FastAPI(
     title=settings.app_name,
@@ -154,7 +154,7 @@ def _run_job_in_background(label: str, target, *args, **kwargs) -> None:
         except Exception:
             logger.exception("Background fallback job failed: %s", label)
 
-    threading.Thread(target=_runner, name=f"nanbao-{label}", daemon=True).start()
+    threading.Thread(target=_runner, name=f"solar-{label}", daemon=True).start()
 
 
 def _resolve_in_dir(base_dir: Path, relative_name: str) -> Path:

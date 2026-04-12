@@ -370,8 +370,10 @@ export function App() {
       {/* Header */}
       <header className="app-header">
         <div className="app-logo">
-          <div className="app-logo-icon">🎬</div>
-          <h1>NanBao OCR Studio</h1>
+          <div className="app-logo-icon" style={{ background: "none", boxShadow: "none", padding: 0, overflow: "hidden", borderRadius: "var(--radius-sm)" }}>
+            <img src="/favicon.png" alt="Solar OCR" style={{ width: 30, height: 30, objectFit: "cover", display: "block", borderRadius: "var(--radius-sm)" }} />
+          </div>
+          <h1>Solar OCR Studio</h1>
         </div>
         <div className={`status-pill ${apiStatus}`}>
           API {apiStatus === "online" ? "hoạt động" : apiStatus === "offline" ? "mất kết nối" : "đang kiểm tra…"}

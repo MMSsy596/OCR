@@ -111,9 +111,9 @@ export function Step7Result({
       const zip = new JSZip();
 
       // Build draft_content.json (CapCut draft format)
-      const projectName = selectedProject?.name || "NanBao OCR";
+      const projectName = selectedProject?.name || "Solar OCR";
       const now = Date.now();
-      const draftId = `nanbao_${now}`;
+      const draftId = `solar_${now}`;
 
       // CapCut draft_content.json minimal structure
       const draftContent = {
@@ -161,7 +161,7 @@ export function Step7Result({
 
       // README inside zip
       zip.file("README.txt",
-        `NanBao OCR Studio — CapCut Import Package\n` +
+        `Solar OCR Studio — CapCut Import Package\n` +
         `===========================================\n\n` +
         `Dự án: ${projectName}\n` +
         `Tổng phụ đề: ${segCount} dòng\n` +

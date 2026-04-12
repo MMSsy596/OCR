@@ -130,7 +130,7 @@ export function useRoiEditor({
   }
 
   function beginDraw(event) {
-    if (!roiEditMode || !selectedProject?.video_path || !event.shiftKey) return;
+    if (!roiEditMode || !selectedProject?.video_path) return;
     const start = eventToPoint(event);
     if (!start) return;
     setDragState({ mode: "draw", start, base: roiDraft, handle: null });

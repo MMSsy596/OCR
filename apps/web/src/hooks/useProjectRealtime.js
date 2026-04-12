@@ -145,7 +145,7 @@ export function useProjectRealtime({
     if (!latestDubAudioJob?.artifacts?.dubbed_audio) return;
     if (lastDubDoneRef.current === latestDubAudioJob.id) return;
     lastDubDoneRef.current = latestDubAudioJob.id;
-    setWizardStep(4);
+    setWizardStep(7);
     setMessage(
       `Đã tạo xong âm thanh: ${latestDubAudioJob.artifacts.dub_output_key || "dub-output.wav"}`,
     );

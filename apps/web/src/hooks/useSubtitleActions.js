@@ -140,7 +140,6 @@ export function useSubtitleActions(deps) {
         body: JSON.stringify(dubForm),
       });
       setMessage(`Đã bắt đầu dựng âm thanh (${dubForm.output_format.toUpperCase()}).`);
-      setWizardStep(4);
     } catch (err) {
       setMessage(`Lỗi dựng âm thanh: ${await normalizeApiError(err, "dub_failed")}`);
     } finally {

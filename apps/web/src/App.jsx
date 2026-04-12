@@ -344,7 +344,7 @@ export function App() {
     retranslateOnly, exportSubtitle, uploadExternalSrt,
     lastExport, undoSegments, redoSegments, updateEditableSegment,
     mergeAdjacentDuplicateSegments, currentVideoTime, activeSegment,
-    onNextStep: () => setWizardStep(6),
+    onNextStep: () => setWizardStep(5),
   };
   const step6Props = {
     editableSegments, dubbing, dubForm, setDubForm,

@@ -439,7 +439,7 @@ def upload_srt_file(project_id: str, file: UploadFile = File(...), db: Session =
 
 
 @app.get("/projects/{project_id}/video")
-def stream_video(project_id: str, db: Session = Depends(get_db)):
+def stream_video(project_id: str, request: Request, db: Session = Depends(get_db)):
     project = crud.get_project(db, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="project_not_found")
@@ -448,7 +448,53 @@ def stream_video(project_id: str, db: Session = Depends(get_db)):
     video_path = Path(project.video_path)
     if not video_path.exists():
         raise HTTPException(status_code=404, detail="video_missing")
-    return FileResponse(path=video_path)
+        
+    file_size = video_path.stat().st_size
+    range_header = request.headers.get("Range")
+    
+    if not range_header:
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+            "Content-Type": "video/mp4",
+        }
+        return FileResponse(path=video_path, headers=headers)
+        
+    try:
+        range_match = range_header.replace("bytes=", "").split("-")
+        start = int(range_match[0]) if range_match[0] else 0
+        end = int(range_match[1]) if len(range_match) > 1 and range_match[1] else file_size - 1
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid_range")
+
+    if start >= file_size or end >= file_size:
+        from fastapi import Response
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}"})
+        
+    chunk_size = end - start + 1
+    
+    def file_iterator(path, offset, bytes_to_read):
+        with open(path, "rb") as f:
+            f.seek(offset)
+            chunk = 1024 * 1024  # 1MB chunks
+            while bytes_to_read > 0:
+                data = f.read(min(chunk, bytes_to_read))
+                if not data:
+                    break
+                yield data
+                bytes_to_read -= len(data)
+
+    headers = {
+        "Content-Range": f"bytes {start}-{end}/{file_size}",
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(chunk_size),
+        "Content-Type": "video/mp4",
+    }
+    return StreamingResponse(
+        file_iterator(video_path, start, chunk_size),
+        headers=headers,
+        status_code=206
+    )
 
 
 @app.post("/projects/{project_id}/pipeline/start", response_model=schemas.JobRead)

@@ -13,11 +13,18 @@ export function useRoiEditor({
 
   const stageRef = useRef(null);
 
+  const roiRef = useRef(null);
+
   useEffect(() => {
     if (selectedProject?.roi) {
-      setRoiDraft(normalizeRoi(selectedProject.roi));
+      const currentObj = selectedProject.roi;
+      const prevObj = roiRef.current;
+      if (!prevObj || prevObj.x !== currentObj.x || prevObj.y !== currentObj.y || prevObj.w !== currentObj.w || prevObj.h !== currentObj.h) {
+        roiRef.current = currentObj;
+        setRoiDraft(normalizeRoi(currentObj));
+      }
     }
-  }, [normalizeRoi, selectedProject?.id, selectedProject?.roi]);
+  }, [normalizeRoi, selectedProject?.roi]);
 
   useEffect(() => {
     if (!dragState) return undefined;

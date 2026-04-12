@@ -141,11 +141,27 @@ export function useProjectRealtime({
     };
   }, [selectedProjectId, streamState]);
 
+  // Keep track of the initial loaded state
+  const isFirstLoadRef = useRef(true);
+  
+  useEffect(() => {
+    if (isFirstLoadRef.current && latestDubAudioJob) {
+        lastDubDoneRef.current = latestDubAudioJob.id;
+        isFirstLoadRef.current = false;
+    } else if (isFirstLoadRef.current && jobs.length > 0) {
+        // jobs loaded but no dub job
+        isFirstLoadRef.current = false;
+    }
+  }, [jobs, latestDubAudioJob]);
+
   useEffect(() => {
     if (!latestDubAudioJob?.artifacts?.dubbed_audio) return;
+    if (isFirstLoadRef.current) return; // Still loading/initializing
+    
     if (lastDubDoneRef.current === latestDubAudioJob.id) return;
+    
     lastDubDoneRef.current = latestDubAudioJob.id;
-    setWizardStep(7);
+    setWizardStep(6);
     setMessage(
       `Đã tạo xong âm thanh: ${latestDubAudioJob.artifacts.dub_output_key || "dub-output.wav"}`,
     );

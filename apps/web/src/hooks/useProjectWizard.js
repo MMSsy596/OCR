@@ -51,24 +51,22 @@ export function useProjectWizard({
    *  4 = có tiến trình OCR/dub   → step 5 accessible
    */
   const maxUnlockedStep = useMemo(() => {
-    if (!hasProject) return 0;
-    if (!hasVideo)   return 1;
-    if (requiresRoi && !hasSavedRoi) return 2;
-    if (!hasOcrProgress && !hasDubActivity) return 3;
-    if (hasDubActivity) return 6;   // dub done / running → unlock step 7
-    return 4;  // has OCR progress → unlock step 5
+    if (!hasProject || !hasVideo)   return 0;
+    if (requiresRoi && !hasSavedRoi) return 1;
+    if (!hasOcrProgress && !hasDubActivity) return 2;
+    if (hasDubActivity) return 5;
+    return 3;
   }, [hasProject, hasVideo, requiresRoi, hasSavedRoi, hasOcrProgress, hasDubActivity]);
 
   const canGoNext = wizardStep < maxUnlockedStep + 1;
 
   const wizardSteps = [
-    { id: 1, label: "Dự án" },
-    { id: 2, label: "Video" },
-    { id: 3, label: requiresRoi ? "Vùng OCR" : "Nguồn vào" },
-    { id: 4, label: "Xử lý" },
-    { id: 5, label: "Xuất SRT" },
-    { id: 6, label: "Âm thanh" },
-    { id: 7, label: "Kết quả" },
+    { id: 1, label: "Video" },
+    { id: 2, label: requiresRoi ? "Vùng OCR" : "Nguồn vào" },
+    { id: 3, label: "Xử lý" },
+    { id: 4, label: "Xuất SRT" },
+    { id: 5, label: "Âm thanh" },
+    { id: 6, label: "Kết quả" },
   ];
 
   function statusLabel(status) {
@@ -86,14 +84,13 @@ export function useProjectWizard({
       return;
     }
     const msgs = {
-      2: "Cần chọn dự án trước khi tải video.",
-      3: "Cần tải video lên trước.",
-      4: requiresRoi
+      2: "Cần tải video lên trước.",
+      3: requiresRoi
         ? "Cần có video và lưu vùng OCR trước."
         : "Cần tải video lên trước.",
-      5: "Cần chạy xử lý OCR trước khi xuất phụ đề.",
-      6: "Cần xuất phụ đề trước khi tạo âm thanh.",
-      7: "Cần hoàn thành xử lý trước khi xem kết quả.",
+      4: "Cần chạy xử lý OCR trước khi xuất phụ đề.",
+      5: "Cần xuất phụ đề trước khi tạo âm thanh.",
+      6: "Cần hoàn thành xử lý trước khi xem kết quả.",
     };
     if (msgs[stepId]) setMessage(msgs[stepId]);
   }

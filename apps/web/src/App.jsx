@@ -360,76 +360,79 @@ export function App() {
     onNewProject: () => { goToStep(1); },
   };
 
-  const STEPS = [step1Props, step2Props, step3Props, step4Props, step5Props, step6Props, step7Props];
-  const STEP_COMPONENTS = [Step1Project, Step2Upload, Step3Region, Step4Run, Step5Export, Step6Dub, Step7Result];
+  const STEPS = [step2Props, step3Props, step4Props, step5Props, step6Props, step7Props];
+  const STEP_COMPONENTS = [Step2Upload, Step3Region, Step4Run, Step5Export, Step6Dub, Step7Result];
   const StepComponent = STEP_COMPONENTS[wizardStep - 1];
   const stepProps = STEPS[wizardStep - 1];
 
   return (
     <div className="app-shell">
-      {/* Header */}
-      <header className="app-header">
-        <div className="app-logo">
-          <div className="app-logo-icon" style={{ background: "none", boxShadow: "none", padding: 0, overflow: "hidden", borderRadius: "var(--radius-sm)" }}>
-            <img src="/favicon.png" alt="Solar OCR" style={{ width: 30, height: 30, objectFit: "cover", display: "block", borderRadius: "var(--radius-sm)" }} />
-          </div>
-          <h1>Solar OCR Studio</h1>
-        </div>
-        <div className={`status-pill ${apiStatus}`}>
-          API {apiStatus === "online" ? "hoạt động" : apiStatus === "offline" ? "mất kết nối" : "đang kiểm tra…"}
-        </div>
-      </header>
-
       {/* Sidebar */}
       <aside className="sidebar">
-        <WizardNav
-          steps={wizardSteps}
-          currentStep={wizardStep}
-          maxUnlockedStep={maxUnlockedStep}
-          onGoTo={goToStep}
-        />
-
-        {/* Project mini list in sidebar */}
-        <div style={{ marginTop: 8 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", padding: "4px 0 8px" }}>
-            Dự án
+        <div className="sidebar-header">
+          <div className="app-logo-icon" style={{ background: "none", boxShadow: "none", padding: 0, overflow: "hidden", borderRadius: "var(--radius-sm)" }}>
+            <img src="/favicon.png" alt="Solar OCR" style={{ width: 26, height: 26, objectFit: "cover", display: "block", borderRadius: "var(--radius-sm)" }} />
           </div>
-          {projects.slice(0, 8).map((p) => (
-            <div
-              key={p.id}
-              className={`project-card${p.id === selectedProjectId ? " active" : ""}`}
-              style={{ marginBottom: 6 }}
-              onClick={() => { setSelectedProjectId(p.id); goToStep(1); }}
-            >
-              <div className="project-card-icon" style={{ width: 26, height: 26, fontSize: 13 }}>🎞️</div>
-              <div style={{ minWidth: 0 }}>
-                <div className="project-card-title" style={{ fontSize: 12 }}>{p.name}</div>
-              </div>
-            </div>
-          ))}
+          <h1 style={{fontSize: 15, fontWeight: 700}}>Solar OCR Studio</h1>
+        </div>
+
+        <div style={{ padding: "16px 14px", flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
           <button
-            className="btn btn-ghost btn-sm"
-            style={{ width: "100%", justifyContent: "flex-start" }}
-            onClick={() => goToStep(1)}
+            className="btn btn-primary"
+            style={{ width: "100%", justifyContent: "center" }}
+            onClick={() => setSelectedProjectId("")}
           >
             + Tạo dự án mới
           </button>
+          
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", padding: "8px 0" }}>
+              Gợi ý dự án
+            </div>
+            {projects.slice(0, 15).map((p) => (
+              <div
+                key={p.id}
+                className={`project-card${p.id === selectedProjectId ? " active" : ""}`}
+                style={{ marginBottom: 6 }}
+                onClick={() => { setSelectedProjectId(p.id); goToStep(1); }}
+              >
+                <div className="project-card-icon" style={{ width: 26, height: 26, fontSize: 13 }}>🎞️</div>
+                <div style={{ minWidth: 0 }}>
+                  <div className="project-card-title" style={{ fontSize: 12 }}>{p.name}</div>
+                  <div className="project-card-sub" style={{ fontSize: 10 }}>{p.source_lang} → {p.target_lang}</div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </aside>
 
-      {/* Main */}
-      <main className="main-content">
-        {/* Wizard nav bar */}
-        <WizardNav
-          steps={wizardSteps}
-          currentStep={wizardStep}
-          maxUnlockedStep={maxUnlockedStep}
-          onGoTo={goToStep}
-        />
+      {/* Main Area */}
+      <div className="main-wrapper">
+        <header className="app-header">
+          {selectedProjectId ? (
+            <WizardNav
+              steps={wizardSteps}
+              currentStep={wizardStep}
+              maxUnlockedStep={maxUnlockedStep}
+              onGoTo={goToStep}
+            />
+          ) : (
+            <div style={{ flex: 1 }}></div>
+          )}
+          <div className={`status-pill ${apiStatus}`}>
+            API {apiStatus === "online" ? "online" : apiStatus === "offline" ? "offline" : "..."}
+          </div>
+        </header>
 
-        {/* Step content */}
-        {StepComponent && <StepComponent {...stepProps} />}
-      </main>
+        <main className="main-content">
+          {!selectedProjectId ? (
+            <Step1Project {...step1Props} />
+          ) : (
+            StepComponent && <StepComponent {...stepProps} />
+          )}
+        </main>
+      </div>
 
       {/* Notifications */}
       <NotificationIsland

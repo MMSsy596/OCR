@@ -21,170 +21,111 @@ export function Step1Project({
   clearingSessions,
   translationPreset,
   setTranslationPreset,
-  statusLabel,
 }) {
-  const [showCreate, setShowCreate] = useState(!projects.length);
-
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, height: "100%" }}>
-      {/* Danh sách dự án */}
-      <div className="card" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <div className="card-header">
-          <h2>📂 Dự án của bạn</h2>
-          <div className="row-actions">
-            <button
-              className="btn btn-sm btn-secondary"
-              onClick={() => setShowCreate(true)}
-            >
-              + Tạo mới
-            </button>
-            <button
-              className="btn btn-sm btn-danger"
-              onClick={clearOldSessions}
-              disabled={clearingSessions}
-              title="Xoá toàn bộ phiên cũ"
-            >
-              {clearingSessions ? "Đang xoá…" : "🗑 Dọn dẹp"}
-            </button>
-          </div>
+    <div style={{ maxWidth: 720, margin: "0 auto", width: "100%", padding: "20px 0" }}>
+      <div className="card" style={{ boxShadow: "0 12px 48px rgba(0,0,0,0.5)", border: "1px solid rgba(251, 146, 60, 0.2)" }}>
+        <div className="card-header" style={{ padding: "24px 32px" }}>
+          <h2 style={{ fontSize: 20, display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 26 }}>🚀</span> Tạo dự án mới
+          </h2>
+          <button
+            className="btn btn-sm btn-ghost"
+            onClick={clearOldSessions}
+            disabled={clearingSessions}
+            title="Dọn dẹp phiên cũ"
+          >
+            {clearingSessions ? "Đang xoá…" : "🧹 Dọn dẹp Cache"}
+          </button>
         </div>
-        <div className="card-body" style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
-          {projects.length === 0 && (
-            <div style={{ textAlign: "center", padding: "32px 0", color: "var(--text-muted)" }}>
-              <div style={{ fontSize: 40, marginBottom: 10 }}>📭</div>
-              <div>Chưa có dự án nào</div>
-              <div className="text-sm mt-8">Tạo dự án mới để bắt đầu</div>
-            </div>
-          )}
-          {projects.map((p) => (
-            <div
-              key={p.id}
-              className={`project-card ${p.id === selectedProjectId ? "active" : ""}`}
-              onClick={() => setSelectedProjectId(p.id)}
-            >
-              <div className="project-card-icon">🎞️</div>
-              <div style={{ minWidth: 0 }}>
-                <div className="project-card-title">{p.name}</div>
-                <div className="project-card-sub">
-                  {p.source_lang} → {p.target_lang}
-                  {p.id === selectedProjectId && statusLabel
-                    ? ` · ${statusLabel(p.status)}`
-                    : ""}
-                </div>
-              </div>
-              {p.id === selectedProjectId && (
-                <span className="badge badge-purple" style={{ marginLeft: "auto", flexShrink: 0 }}>
-                  Đang chọn
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
 
-      {/* Form tạo mới */}
-      {showCreate && (
-        <div className="card">
-          <div className="card-header">
-            <h2>✨ Tạo dự án mới</h2>
-            {projects.length > 0 && (
-              <button className="btn btn-sm btn-ghost" onClick={() => setShowCreate(false)}>✕</button>
-            )}
+        <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 20, padding: "28px 32px" }}>
+          <div className="step-guide">
+            <span className="step-guide-icon">💡</span>
+            <div className="step-guide-text">
+              <h3 style={{color: "var(--accent)"}}>Thiết lập phiên làm việc</h3>
+              <p>Đặt tên cho dự án và chọn loại nội dung phù hợp. AI sẽ tự động tối ưu hóa từ vựng và phong cách dịch theo thể loại bạn chọn.</p>
+            </div>
           </div>
-          <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <div className="step-guide">
-              <span className="step-guide-icon">💡</span>
-              <div className="step-guide-text">
-                <h3>Bước 1: Tạo dự án</h3>
-                <p>Đặt tên và chọn thể loại phim. Hệ thống sẽ tự chọn cách dịch phù hợp.</p>
-              </div>
-            </div>
 
-            <div className="form-group">
-              <label>Tên dự án</label>
-              <input
-                value={projectForm.name}
-                onChange={(e) => setProjectForm((p) => ({ ...p, name: e.target.value }))}
-                placeholder="Ví dụ: Tiên Nghịch - Tập 01"
-              />
-            </div>
+          <div className="form-group">
+            <label>Tên dự án</label>
+            <input
+              style={{ fontSize: 16, padding: "14px 16px" }}
+              value={projectForm.name}
+              onChange={(e) => setProjectForm((p) => ({ ...p, name: e.target.value }))}
+              placeholder="VD: Tiên Nghịch - Tập 01, Hướng dẫn code React..."
+            />
+          </div>
 
-            <div className="form-group">
-              <label>Thể loại phim</label>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                {Object.entries(PROMPT_PRESETS_META).map(([key, meta]) => (
-                  <button
-                    key={key}
-                    className={`btn ${translationPreset === key ? "btn-primary" : "btn-secondary"}`}
-                    style={{ flexDirection: "column", gap: 4, padding: "10px 8px", fontSize: 12 }}
-                    onClick={() => setTranslationPreset(key)}
+          <div className="form-group">
+            <label>Thể loại & Phong cách dịch</label>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+              {Object.entries(PROMPT_PRESETS_META).map(([key, meta]) => (
+                <button
+                  key={key}
+                  className={`btn ${translationPreset === key ? "btn-primary" : "btn-secondary"}`}
+                  style={{ flexDirection: "column", gap: 6, padding: "16px 12px", border: translationPreset === key ? "1px solid var(--border-focus)" : "" }}
+                  onClick={() => setTranslationPreset(key)}
+                >
+                  <span style={{ fontSize: 24 }}>{meta.icon}</span>
+                  <span style={{ fontSize: 13 }}>{meta.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <details className="accordion">
+            <summary style={{ padding: "16px 20px" }}>⚙️ Thiết lập chuyên sâu (Tuỳ chọn)</summary>
+            <div className="accordion-body" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <div className="form-row">
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label>Ngôn ngữ nguồn</label>
+                  <select
+                    value={projectForm.source_lang}
+                    onChange={(e) => setProjectForm((p) => ({ ...p, source_lang: e.target.value }))}
                   >
-                    <span style={{ fontSize: 20 }}>{meta.icon}</span>
-                    {meta.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <details className="accordion">
-              <summary>⚙️ Tuỳ chọn nâng cao</summary>
-              <div className="accordion-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                <div className="form-row">
-                  <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label>Ngôn ngữ gốc</label>
-                    <select
-                      value={projectForm.source_lang}
-                      onChange={(e) => setProjectForm((p) => ({ ...p, source_lang: e.target.value }))}
-                    >
-                      <option value="zh">Tiếng Trung (zh)</option>
-                      <option value="en">Tiếng Anh (en)</option>
-                      <option value="ja">Tiếng Nhật (ja)</option>
-                      <option value="ko">Tiếng Hàn (ko)</option>
-                    </select>
-                  </div>
-                  <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label>Dịch sang</label>
-                    <select
-                      value={projectForm.target_lang}
-                      onChange={(e) => setProjectForm((p) => ({ ...p, target_lang: e.target.value }))}
-                    >
-                      <option value="vi">Tiếng Việt (vi)</option>
-                      <option value="en">Tiếng Anh (en)</option>
-                    </select>
-                  </div>
+                    <option value="zh">Tiếng Trung (zh)</option>
+                    <option value="en">Tiếng Anh (en)</option>
+                    <option value="ja">Tiếng Nhật (ja)</option>
+                    <option value="ko">Tiếng Hàn (ko)</option>
+                  </select>
                 </div>
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label>Glossary (từ điển riêng)</label>
-                  <textarea
-                    rows={3}
-                    value={projectForm.glossary}
-                    onChange={(e) => setProjectForm((p) => ({ ...p, glossary: e.target.value }))}
-                    placeholder="Đạo huynh=Sư huynh&#10;Tiên tôn=Tiên Tôn"
-                  />
-                  <div className="hint-text">Mỗi dòng một từ, định dạng: Gốc=Dịch</div>
+                  <label>Dịch sang</label>
+                  <select
+                    value={projectForm.target_lang}
+                    onChange={(e) => setProjectForm((p) => ({ ...p, target_lang: e.target.value }))}
+                  >
+                    <option value="vi">Tiếng Việt (vi)</option>
+                    <option value="en">Tiếng Anh (en)</option>
+                  </select>
                 </div>
               </div>
-            </details>
+              
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label>Glossary (Từ điển dịch thuật riêng)</label>
+                <textarea
+                  rows={4}
+                  value={projectForm.glossary}
+                  onChange={(e) => setProjectForm((p) => ({ ...p, glossary: e.target.value }))}
+                  placeholder="Đạo huynh=Sư huynh&#10;Tiên tôn=Tiên Tôn&#10;React=Thư viện web"
+                />
+                <div className="hint-text">Cấu trúc 1 từ mỗi dòng: Gốc=Dịch. Giúp ép ChatGPT dịch đúng tên riêng/thuật ngữ.</div>
+              </div>
+            </div>
+          </details>
 
-            <button
-              className="btn btn-primary btn-lg"
-              onClick={createProject}
-              disabled={creating || !projectForm.name.trim()}
-              style={{ width: "100%", marginTop: 4 }}
-            >
-              {creating ? "⏳ Đang tạo…" : "✨ Tạo dự án"}
-            </button>
-          </div>
+          <button
+            className="btn btn-primary btn-lg"
+            onClick={createProject}
+            disabled={creating || !projectForm.name.trim()}
+            style={{ width: "100%", marginTop: 12, padding: "16px" }}
+          >
+            {creating ? "⏳ Đang tạo..." : "✨ Khởi tạo dự án"}
+          </button>
         </div>
-      )}
-
-      {!showCreate && (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, color: "var(--text-muted)" }}>
-          <div style={{ fontSize: 48 }}>👈</div>
-          <div style={{ fontSize: 14, textAlign: "center" }}>Chọn một dự án bên trái để tiếp tục<br/>hoặc tạo dự án mới</div>
-          <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ Tạo dự án mới</button>
-        </div>
-      )}
+      </div>
     </div>
   );
 }

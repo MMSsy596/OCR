@@ -1,17 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 
-/* ─── palette per tone ─── */
+/* ─── palette per tone (HyperOS / iOS style) ─── */
 const TONE_CONFIG = {
-  info:    { accent: "#6366f1", bg: "rgba(99,102,241,0.12)",  border: "rgba(99,102,241,0.35)",  glow: "0 0 14px rgba(99,102,241,0.55)",  label: "Đang xử lý",  orb: "radial-gradient(circle at 35% 35%, #fff, #818cf8 40%, #6366f1)" },
-  success: { accent: "#22c55e", bg: "rgba(34,197,94,0.12)",   border: "rgba(34,197,94,0.35)",   glow: "0 0 14px rgba(34,197,94,0.55)",   label: "Hoàn tất",     orb: "radial-gradient(circle at 35% 35%, #fff, #4ade80 40%, #16a34a)" },
-  warning: { accent: "#f59e0b", bg: "rgba(245,158,11,0.12)",  border: "rgba(245,158,11,0.35)",  glow: "0 0 14px rgba(245,158,11,0.55)",  label: "Lưu ý",        orb: "radial-gradient(circle at 35% 35%, #fff, #fcd34d 40%, #d97706)" },
-  error:   { accent: "#ef4444", bg: "rgba(239,68,68,0.12)",   border: "rgba(239,68,68,0.35)",   glow: "0 0 14px rgba(239,68,68,0.55)",   label: "Lỗi",          orb: "radial-gradient(circle at 35% 35%, #fff, #f87171 40%, #dc2626)" },
+  info:    { accent: "#0A84FF", bg: "rgba(0, 0, 0, 1)", border: "rgba(255,255,255,0.1)", label: "Information", orb: "#0A84FF" },
+  success: { accent: "#32D74B", bg: "rgba(0, 0, 0, 1)", border: "rgba(255,255,255,0.1)", label: "Success",     orb: "#32D74B" },
+  warning: { accent: "#FFD60A", bg: "rgba(0, 0, 0, 1)", border: "rgba(255,255,255,0.1)", label: "Warning",     orb: "#FFD60A" },
+  error:   { accent: "#FF453A", bg: "rgba(0, 0, 0, 1)", border: "rgba(255,255,255,0.1)", label: "Error",       orb: "#FF453A" },
 };
 
 function clampPct(v) { return Math.max(0, Math.min(100, Number(v) || 0)); }
 
-/* ── Animated progress bar: smooth fill tracking real progress ── */
-function ProgressBar({ progress, accent }) {
+/* ── Dynamic Island Smooth Progress Bar ── */
+function IslandProgressBar({ progress, accent }) {
   const [display, setDisplay] = useState(clampPct(progress));
   const animRef = useRef(null);
   const currentRef = useRef(clampPct(progress));
@@ -36,16 +36,16 @@ function ProgressBar({ progress, accent }) {
 
   return (
     <div style={{
-      height: 3, borderRadius: 999,
-      background: "rgba(255,255,255,0.1)",
-      overflow: "hidden", marginTop: 8,
+      height: 6, borderRadius: 999,
+      background: "rgba(255,255,255,0.15)",
+      overflow: "hidden", marginTop: 12,
+      boxShadow: "inset 0 1px 2px rgba(0,0,0,0.5)"
     }}>
       <div style={{
         height: "100%", borderRadius: "inherit",
-        background: `linear-gradient(90deg, ${accent}cc, ${accent})`,
-        boxShadow: `0 0 8px ${accent}88`,
+        background: accent,
         width: `${display}%`,
-        transition: "width 0.08s linear",
+        transition: "width 0.1s linear",
       }} />
     </div>
   );
@@ -62,102 +62,81 @@ function LivePill({ act, onClickExpand }) {
       role="button"
       tabIndex={0}
       aria-expanded={false}
-      title="Click để xem chi tiết"
       onClick={onClickExpand}
       onKeyDown={(e) => e.key === "Enter" && onClickExpand()}
       style={{
-        display: "flex", alignItems: "center", gap: 10,
-        padding: "6px 14px 6px 10px",
+        display: "flex", alignItems: "center", gap: 12,
+        padding: "8px 16px 8px 12px",
         borderRadius: 999,
-        background: cfg.bg,
-        border: `1px solid ${cfg.border}`,
-        backdropFilter: "blur(16px)",
+        background: "#000",
+        border: `1px solid rgba(255,255,255,0.08)`,
+        boxShadow: "0 10px 30px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.1)",
         cursor: "pointer",
         userSelect: "none",
-        maxWidth: 320,
+        maxWidth: 340,
+        height: 40,
+        transition: "all 0.4s cubic-bezier(0.32, 0.72, 0, 1)",
       }}
     >
-      {/* orb */}
+      {/* Waveform / Orb */}
       <div style={{
-        width: 9, height: 9, borderRadius: "50%", flexShrink: 0,
-        background: cfg.orb,
-        boxShadow: cfg.glow,
-        animation: "islandOrbPulse 1.8s ease-in-out infinite",
-      }} />
+        width: 16, height: 16, flexShrink: 0,
+        display: "flex", alignItems: "center", justifyContent: "center", gap: 2
+      }}>
+        <div style={{ width: 3, height: "60%", background: cfg.accent, borderRadius: 2, animation: "wave 1.2s ease-in-out infinite" }} />
+        <div style={{ width: 3, height: "100%", background: cfg.accent, borderRadius: 2, animation: "wave 1.2s ease-in-out infinite 0.2s" }} />
+        <div style={{ width: 3, height: "80%", background: cfg.accent, borderRadius: 2, animation: "wave 1.2s ease-in-out infinite 0.4s" }} />
+      </div>
+      
       {/* text */}
-      <span style={{ fontSize: 12, fontWeight: 600, color: "#f1f5f9", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 200 }}>
+      <span style={{ fontSize: 13, fontWeight: 500, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", letterSpacing: "-0.01em" }}>
         {act.title}
-        {pct !== null ? <span style={{ marginLeft: 6, opacity: 0.65 }}>{pct}%</span> : null}
+        {pct !== null ? <span style={{ marginLeft: 8, opacity: 0.5 }}>{pct}%</span> : null}
       </span>
-      {/* mini progress arc */}
-      {pct !== null && (
-        <svg width="18" height="18" style={{ flexShrink: 0 }} viewBox="0 0 18 18">
-          <circle cx="9" cy="9" r="7" fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="2.5" />
-          <circle
-            cx="9" cy="9" r="7" fill="none"
-            stroke={cfg.accent} strokeWidth="2.5"
-            strokeDasharray={`${(pct / 100) * 43.98} 43.98`}
-            strokeLinecap="round"
-            transform="rotate(-90 9 9)"
-            style={{ transition: "stroke-dasharray 0.4s ease" }}
-          />
-        </svg>
-      )}
     </div>
   );
 }
 
-/* ── Expanded card ── */
+/* ── Expanded Action Card (Dynamic Island Expanded) ── */
 function LiveCard({ act, onClose }) {
   const cfg = TONE_CONFIG[act.tone] || TONE_CONFIG.info;
   const hasProgress = act.progress !== undefined && act.progress !== null;
 
   return (
     <div style={{
-      padding: "14px 16px",
-      background: "rgba(13,15,24,0.95)",
-      border: `1px solid ${cfg.border}`,
-      borderRadius: 16,
-      backdropFilter: "blur(20px)",
-      boxShadow: `0 8px 40px rgba(0,0,0,0.55), ${cfg.glow}`,
-      minWidth: 260, maxWidth: 380,
+      padding: "20px 24px",
+      background: "#000",
+      border: `1px solid rgba(255,255,255,0.08)`,
+      borderRadius: 36,
+      boxShadow: "0 20px 50px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.1)",
+      minWidth: 340, maxWidth: 420,
+      transition: "all 0.5s cubic-bezier(0.32, 0.72, 0, 1)",
+      overflow: "hidden"
     }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-        <div style={{
-          width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
-          background: cfg.orb,
-          boxShadow: cfg.glow,
-          animation: "islandOrbPulse 1.8s ease-in-out infinite",
-        }} />
-        <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>{act.title}</span>
-        {hasProgress && (
-          <span style={{ fontSize: 12, fontWeight: 600, color: cfg.accent }}>{clampPct(act.progress)}%</span>
-        )}
-        <button
-          onClick={onClose}
-          style={{
-            width: 22, height: 22, borderRadius: "50%",
-            border: "1px solid rgba(255,255,255,0.1)",
-            background: "rgba(255,255,255,0.06)",
-            color: "#94a3b8", cursor: "pointer",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 13, lineHeight: 1, flexShrink: 0,
-          }}
-        >×</button>
-      </div>
-      <p style={{ margin: "0 0 0 20px", fontSize: 12, color: "#94a3b8", lineHeight: 1.55 }}>
-        {act.message}
-      </p>
-      {hasProgress && (
-        <div style={{ marginLeft: 20 }}>
-          <ProgressBar progress={act.progress} accent={cfg.accent} />
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{
+            width: 40, height: 40, borderRadius: "50%", flexShrink: 0,
+            background: `rgba(${parseInt(cfg.accent.slice(1,3),16)}, ${parseInt(cfg.accent.slice(3,5),16)}, ${parseInt(cfg.accent.slice(5,7),16)}, 0.15)`,
+            display: "flex", alignItems: "center", justifyContent: "center"
+          }}>
+             <div style={{ width: 14, height: 14, borderRadius: "50%", background: cfg.accent, boxShadow: `0 0 12px ${cfg.accent}` }} />
+          </div>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: "#fff", letterSpacing: "-0.01em" }}>{act.title}</div>
+            <div style={{ fontSize: 13, color: "rgba(235, 235, 245, 0.6)", marginTop: 2 }}>{act.message}</div>
+          </div>
         </div>
+      </div>
+
+      {hasProgress && (
+        <IslandProgressBar progress={act.progress} accent={cfg.accent} />
       )}
     </div>
   );
 }
 
-/* ── Notice item (toast) ── */
+/* ── Notice item (toast wrapper) ── */
 function NoticeItem({ notice, onDismiss }) {
   const cfg = TONE_CONFIG[notice.tone] || TONE_CONFIG.info;
   const [out, setOut] = useState(false);
@@ -170,40 +149,36 @@ function NoticeItem({ notice, onDismiss }) {
   return (
     <div
       style={{
-        padding: "10px 14px",
-        background: "rgba(13,15,24,0.94)",
-        border: `1px solid ${cfg.border}`,
-        borderLeft: `3px solid ${cfg.accent}`,
-        borderRadius: 12,
-        backdropFilter: "blur(20px)",
-        display: "flex", alignItems: "flex-start", gap: 10,
-        maxWidth: 380,
-        animation: out ? "islandOut 0.28s ease forwards" : "islandIn 0.22s cubic-bezier(0.34,1.56,0.64,1) forwards",
+        padding: "14px 18px",
+        background: "rgba(28, 28, 30, 0.75)",
+        border: "1px solid rgba(255,255,255,0.08)",
+        borderRadius: 20,
+        backdropFilter: "blur(24px) saturate(200%)",
+        display: "flex", alignItems: "center", gap: 14,
+        width: 340,
+        boxShadow: "0 10px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1)",
+        animation: out ? "islandOut 0.3s cubic-bezier(0.32, 0.72, 0, 1) forwards" : "islandIn 0.5s cubic-bezier(0.32, 0.72, 0, 1) forwards",
+        cursor: "pointer"
       }}
+      onClick={dismiss}
     >
       <div style={{
-        width: 8, height: 8, borderRadius: "50%", marginTop: 4, flexShrink: 0,
-        background: cfg.accent, boxShadow: cfg.glow,
-      }} />
+        width: 36, height: 36, borderRadius: "50%", flexShrink: 0,
+        background: `rgba(${parseInt(cfg.accent.slice(1,3),16)}, ${parseInt(cfg.accent.slice(3,5),16)}, ${parseInt(cfg.accent.slice(5,7),16)}, 0.15)`,
+        display: "flex", alignItems: "center", justifyContent: "center"
+      }}>
+         <div style={{ width: 12, height: 12, borderRadius: "50%", background: cfg.accent }} />
+      </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: "#f1f5f9", marginBottom: 2 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "#fff", marginBottom: 2, letterSpacing: "-0.01em" }}>
           {notice.title || cfg.label}
         </div>
-        <div style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.5, wordBreak: "break-word" }}>
-          {notice.message}
-        </div>
+        {notice.message && (
+          <div style={{ fontSize: 13, color: "rgba(235, 235, 245, 0.6)", lineHeight: 1.4, wordBreak: "break-word" }}>
+            {notice.message}
+          </div>
+        )}
       </div>
-      <button
-        onClick={dismiss}
-        style={{
-          width: 20, height: 20, borderRadius: "50%",
-          border: "1px solid rgba(255,255,255,0.1)",
-          background: "rgba(255,255,255,0.06)",
-          color: "#64748b", cursor: "pointer",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: 13, lineHeight: 1, flexShrink: 0,
-        }}
-      >×</button>
     </div>
   );
 }
@@ -214,29 +189,23 @@ export function NotificationIsland({ liveActivity, notices, onDismiss }) {
   const [visible, setVisible] = useState(false);
   const [animOut, setAnimOut] = useState(false);
   const prevLive = useRef(null);
-  const collapseTimer = useRef(null);
   const overlayRef = useRef(null);
 
-  const visibleNotices = (notices || []).slice(0, 4);
+  const visibleNotices = (notices || []).slice(0, 3);
 
-  // Appear / disappear when liveActivity changes
   useEffect(() => {
     if (liveActivity) {
       setAnimOut(false);
       setVisible(true);
-      // Auto-collapse pill after 4s if not expanded
       if (expanded) return;
-      if (collapseTimer.current) clearTimeout(collapseTimer.current);
     } else if (prevLive.current) {
-      // liveActivity just disappeared → animate out
       setAnimOut(true);
-      const t = setTimeout(() => { setVisible(false); setExpanded(false); setAnimOut(false); }, 320);
+      const t = setTimeout(() => { setVisible(false); setExpanded(false); setAnimOut(false); }, 400);
       return () => clearTimeout(t);
     }
     prevLive.current = liveActivity;
-  }, [liveActivity]); // eslint-disable-line
+  }, [liveActivity, expanded]);
 
-  // Click outside to collapse
   useEffect(() => {
     if (!expanded) return;
     function handleClick(e) {
@@ -253,47 +222,41 @@ export function NotificationIsland({ liveActivity, notices, onDismiss }) {
 
   return (
     <>
-      {/* keyframes injected once */}
       <style>{`
         @keyframes islandIn {
-          from { opacity: 0; transform: translateY(-10px) scale(0.94); }
-          to   { opacity: 1; transform: translateY(0) scale(1); }
+          from { opacity: 0; transform: translateY(-20px) scale(0.9); filter: blur(5px); }
+          to   { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
         }
         @keyframes islandOut {
-          from { opacity: 1; transform: translateY(0) scale(1); }
-          to   { opacity: 0; transform: translateY(-8px) scale(0.94); }
+          from { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+          to   { opacity: 0; transform: translateY(-15px) scale(0.9); filter: blur(4px); }
         }
-        @keyframes islandOrbPulse {
-          0%,100% { transform: scale(1);   opacity: 0.85; }
-          50%      { transform: scale(1.25); opacity: 1; }
+        @keyframes pillExpand {
+          from { opacity: 0; transform: scale(0.95); border-radius: 999px; }
+          to   { opacity: 1; transform: scale(1); border-radius: 36px; }
         }
-        @keyframes pillIn {
-          from { opacity: 0; transform: translateY(-8px) scale(0.9); }
-          to   { opacity: 1; transform: translateY(0) scale(1); }
-        }
-        @keyframes pillOut {
-          from { opacity: 1; transform: scale(1); }
-          to   { opacity: 0; transform: scale(0.88); }
+        @keyframes wave {
+          0%, 100% { height: 40%; }
+          50% { height: 100%; }
         }
       `}</style>
 
       <div
         style={{
           position: "fixed",
-          top: 16, left: "50%", transform: "translateX(-50%)",
-          zIndex: 200,
-          display: "flex", flexDirection: "column", alignItems: "center", gap: 8,
+          top: 16, left: 0, right: 0,
+          zIndex: 9999,
+          display: "flex", flexDirection: "column", alignItems: "center", gap: 12,
           pointerEvents: "none",
         }}
-        aria-live="polite" aria-atomic="false"
       >
-        {/* Live activity */}
         {visible && liveActivity && (
           <div
             ref={overlayRef}
             style={{
               pointerEvents: "auto",
-              animation: animOut ? "pillOut 0.3s ease forwards" : "pillIn 0.25s cubic-bezier(0.34,1.56,0.64,1) forwards",
+              transformOrigin: "top center",
+              animation: animOut ? "islandOut 0.4s cubic-bezier(0.32, 0.72, 0, 1) forwards" : "islandIn 0.5s cubic-bezier(0.32, 0.72, 0, 1) forwards",
             }}
           >
             {expanded ? (
@@ -304,8 +267,8 @@ export function NotificationIsland({ liveActivity, notices, onDismiss }) {
           </div>
         )}
 
-        {/* Toast notices */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, pointerEvents: "auto", alignItems: "center" }}>
+        {/* Toast notices queue */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, pointerEvents: "auto", alignItems: "center" }}>
           {visibleNotices.map((n) => (
             <NoticeItem key={n.id} notice={n} onDismiss={onDismiss} />
           ))}

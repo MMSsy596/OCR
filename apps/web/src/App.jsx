@@ -151,6 +151,10 @@ export function App() {
     srt_key: "manual.translated.srt", output_format: "wav",
     voice: "vi-VN-HoaiMyNeural", rate: "+0%", volume: "+0%", pitch: "+0Hz",
     match_video_duration: true,
+    tts_engine: "edge",
+    fpt_api_key: "",
+    fpt_voice: "banmai",
+    fpt_speed: 0,
   });
 
   /* ── notifications ── */

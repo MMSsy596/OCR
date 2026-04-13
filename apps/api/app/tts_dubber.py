@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 import time
+import urllib.request
 import wave
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -314,8 +315,8 @@ def _resolve_srt_path(project_dir: Path, preferred_key: str) -> Path | None:
     return None
 
 
-def _make_tts_cache_id(text: str, voice: str, rate: str, volume: str, pitch: str) -> str:
-    raw = "\n".join([text, voice, rate, volume, pitch]).encode("utf-8", errors="ignore")
+def _make_tts_cache_id(text: str, voice: str, rate: str, volume: str, pitch: str, extra: str = "") -> str:
+    raw = "\n".join([text, voice, rate, volume, pitch, extra]).encode("utf-8", errors="ignore")
     return hashlib.sha1(raw).hexdigest()[:20]
 
 
@@ -324,6 +325,46 @@ def _shared_tts_cache_dir(project_dir: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
 
+
+FPT_DEFAULT_API_KEY = "gSZ0IfH1XDMKp2I2X5bzAet2EgxhKzDn"
+
+
+def _save_fpt_tts_wav(text: str, output_path: Path, api_key: str, voice: str, speed: int) -> None:
+    """Gọi FPT.AI TTS v5, lưu kết quả (mp3) rồi convert sang WAV 24kHz mono s16."""
+    url = "https://api.fpt.ai/hmi/tts/v5"
+    speed_str = str(int(speed)) if speed != 0 else ""
+    data = text.encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("api-key", api_key or FPT_DEFAULT_API_KEY)
+    req.add_header("voice", voice)
+    req.add_header("speed", speed_str)
+    req.add_header("Content-Type", "application/octet-stream")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        body = resp.read()
+
+    # FPT trả về JSON có field "async" là URL mp3 hoặc trực tiếp mp3 bytes
+    import json as _json
+    try:
+        result = _json.loads(body)
+        mp3_url = result.get("async") or result.get("url") or ""
+    except Exception:
+        mp3_url = ""
+
+    raw_mp3 = output_path.with_suffix(".fpt.mp3")
+    if mp3_url:
+        # Tải file mp3 từ URL async
+        with urllib.request.urlopen(mp3_url, timeout=30) as r:
+            raw_mp3.write_bytes(r.read())
+    else:
+        # Body chính là raw mp3
+        raw_mp3.write_bytes(body)
+
+    _run_cmd([
+        "ffmpeg", "-y", "-i", str(raw_mp3),
+        "-ac", "1", "-ar", "24000", "-sample_fmt", "s16",
+        str(output_path),
+    ])
+    raw_mp3.unlink(missing_ok=True)
 
 def _render_tts_variant(
     *,
@@ -334,12 +375,33 @@ def _render_tts_variant(
     pitch: str,
     cache_dir: Path,
     gtts_lang: str,
+    tts_engine: str = "edge",
+    fpt_api_key: str = "",
+    fpt_voice: str = "banmai",
+    fpt_speed: int = 0,
 ) -> tuple[Path, str]:
-    cache_id = _make_tts_cache_id(text, voice, rate, volume, pitch)
+    extra = f"fpt:{fpt_voice}:{fpt_speed}" if tts_engine == "fpt" else ""
+    cache_id = _make_tts_cache_id(text, voice, rate, volume, pitch, extra)
     seg_wav = cache_dir / f"{cache_id}.wav"
     if seg_wav.exists():
         return seg_wav, "cache_existing"
 
+    # ── FPT engine ──
+    if tts_engine == "fpt":
+        try:
+            _save_fpt_tts_wav(
+                text=text,
+                output_path=seg_wav,
+                api_key=fpt_api_key or FPT_DEFAULT_API_KEY,
+                voice=fpt_voice,
+                speed=fpt_speed,
+            )
+            return seg_wav, "fpt"
+        except Exception as fpt_ex:
+            # fallback sang edge nếu FPT lỗi
+            pass
+
+    # ── Edge / fallback chain ──
     raw_mp3 = cache_dir / f"{cache_id}.edge.mp3"
     gtts_mp3 = cache_dir / f"{cache_id}.gtts.mp3"
     try:
@@ -353,40 +415,20 @@ def _render_tts_variant(
                 pitch=pitch,
             )
         )
-        _run_cmd(
-            [
-                "ffmpeg",
-                "-y",
-                "-i",
-                str(raw_mp3),
-                "-ac",
-                "1",
-                "-ar",
-                "24000",
-                "-sample_fmt",
-                "s16",
-                str(seg_wav),
-            ]
-        )
-        return seg_wav, "edge"
+        _run_cmd([
+            "ffmpeg", "-y", "-i", str(raw_mp3),
+            "-ac", "1", "-ar", "24000", "-sample_fmt", "s16",
+            str(seg_wav),
+        ])
+        return seg_wav, "fpt_fallback_edge" if tts_engine == "fpt" else "edge"
     except Exception as edge_ex:
         try:
             _save_gtts_mp3(text, gtts_mp3, gtts_lang)
-            _run_cmd(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-i",
-                    str(gtts_mp3),
-                    "-ac",
-                    "1",
-                    "-ar",
-                    "24000",
-                    "-sample_fmt",
-                    "s16",
-                    str(seg_wav),
-                ]
-            )
+            _run_cmd([
+                "ffmpeg", "-y", "-i", str(gtts_mp3),
+                "-ac", "1", "-ar", "24000", "-sample_fmt", "s16",
+                str(seg_wav),
+            ])
             return seg_wav, "gtts"
         except Exception as gtts_ex:
             try:
@@ -399,6 +441,7 @@ def _render_tts_variant(
                 ) from py_ex
 
 
+
 def run_dub_job(
     job_id: str,
     srt_key: str = "manual.translated.srt",
@@ -408,6 +451,10 @@ def run_dub_job(
     volume: str = "+0%",
     pitch: str = "+0Hz",
     match_video_duration: bool = True,
+    tts_engine: str = "edge",
+    fpt_api_key: str = "",
+    fpt_voice: str = "banmai",
+    fpt_speed: int = 0,
 ) -> dict:
     db = SessionLocal()
     tmp_dir: Path | None = None
@@ -438,6 +485,9 @@ def run_dub_job(
                 "pitch": pitch,
                 "output_format": output_format,
                 "match_video_duration": bool(match_video_duration),
+                "tts_engine": tts_engine,
+                "fpt_voice": fpt_voice if tts_engine == "fpt" else "",
+                "fpt_speed": fpt_speed if tts_engine == "fpt" else 0,
             },
         )
         push_event(job, artifacts, "dub", "Bắt đầu job lồng tiếng từ SRT.", 1, logger_name="tts")
@@ -488,12 +538,13 @@ def run_dub_job(
         total_chars = sum(len(re.sub(r"\s+", "", cue.text or "")) for cue in cues)
         total_slot_sec = round(sum(max(0.0, cue.end_sec - cue.start_sec) for cue in cues), 3)
 
-        cue_plans: list[tuple[SrtCue, float, tuple[str, str, str, str, str]]] = []
-        unique_keys: dict[tuple[str, str, str, str, str], None] = {}
+        cue_plans: list[tuple] = []
+        unique_keys: dict[tuple, None] = {}
+
         for cue in cues:
             slot_sec = max(0.05, cue.end_sec - cue.start_sec)
             dynamic_rate = _adaptive_rate(cue.text, slot_sec, rate)
-            cache_key = (cue.text, voice, dynamic_rate, volume, pitch)
+            cache_key = (cue.text, voice, dynamic_rate, volume, pitch, tts_engine, fpt_voice, str(fpt_speed))
             cue_plans.append((cue, slot_sec, cache_key))
             unique_keys.setdefault(cache_key, None)
 
@@ -520,7 +571,8 @@ def run_dub_job(
         )
         _update_job(db, job, JobStatus.running, 10, "synthesize_tts", artifacts=artifacts)
 
-        render_results: dict[tuple[str, str, str, str, str], tuple[Path, str]] = {}
+        render_results: dict[tuple, tuple[Path, str]] = {}
+
         edge_ok = 0
         gtts_ok = 0
         pyttsx3_ok = 0
@@ -538,6 +590,10 @@ def run_dub_job(
                     pitch=cache_key[4],
                     cache_dir=cache_dir,
                     gtts_lang=gtts_lang,
+                    tts_engine=tts_engine,
+                    fpt_api_key=fpt_api_key,
+                    fpt_voice=fpt_voice,
+                    fpt_speed=fpt_speed,
                 ): cache_key
                 for cache_key in unique_keys.keys()
             }
@@ -546,7 +602,9 @@ def run_dub_job(
                 wav_path, engine_name = future.result()
                 render_results[cache_key] = (wav_path, engine_name)
                 render_done += 1
-                if engine_name == "edge":
+                if engine_name in ("fpt", "fpt_fallback_edge"):
+                    edge_ok += 1  # đếm FPT/fallback chung vào edge_ok
+                elif engine_name == "edge":
                     edge_ok += 1
                 elif engine_name == "gtts":
                     gtts_ok += 1

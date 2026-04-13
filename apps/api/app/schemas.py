@@ -121,6 +121,11 @@ class DubStartRequest(BaseModel):
     volume: str = "+0%"
     pitch: str = "+0Hz"
     match_video_duration: bool = True
+    # FPT.AI TTS
+    tts_engine: str = "edge"  # edge|fpt
+    fpt_api_key: str = ""
+    fpt_voice: str = "banmai"
+    fpt_speed: int = Field(default=0, ge=-3, le=3)
 
 
 class ClearSessionsRequest(BaseModel):

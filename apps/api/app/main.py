@@ -196,6 +196,10 @@ def _enqueue_dub_job(job_id: str, payload: schemas.DubStartRequest) -> None:
         volume=payload.volume,
         pitch=payload.pitch,
         match_video_duration=payload.match_video_duration,
+        tts_engine=payload.tts_engine,
+        fpt_api_key=payload.fpt_api_key,
+        fpt_voice=payload.fpt_voice,
+        fpt_speed=payload.fpt_speed,
         job_id=job_id,
         job_timeout=14400,
     )
@@ -569,6 +573,10 @@ def start_dub(project_id: str, payload: schemas.DubStartRequest, db: Session = D
             volume=payload.volume,
             pitch=payload.pitch,
             match_video_duration=payload.match_video_duration,
+            tts_engine=payload.tts_engine,
+            fpt_api_key=payload.fpt_api_key,
+            fpt_voice=payload.fpt_voice,
+            fpt_speed=payload.fpt_speed,
         )
     return job
 
@@ -723,7 +731,9 @@ def retry_stuck_jobs(project_id: str, db: Session = Depends(get_db)):
                 _enqueue_pipeline_job(new_job.id, payload)  # type: ignore[arg-type]
         except Exception:
             if kind == "dub":
-                run_dub_job(
+                _run_job_in_background(
+                    f"dub-retry-{new_job.id}",
+                    run_dub_job,
                     new_job.id,
                     srt_key=payload.srt_key,  # type: ignore[attr-defined]
                     output_format=payload.output_format,  # type: ignore[attr-defined]
@@ -732,6 +742,10 @@ def retry_stuck_jobs(project_id: str, db: Session = Depends(get_db)):
                     volume=payload.volume,  # type: ignore[attr-defined]
                     pitch=payload.pitch,  # type: ignore[attr-defined]
                     match_video_duration=payload.match_video_duration,  # type: ignore[attr-defined]
+                    tts_engine=getattr(payload, "tts_engine", "edge"),
+                    fpt_api_key=getattr(payload, "fpt_api_key", ""),
+                    fpt_voice=getattr(payload, "fpt_voice", "banmai"),
+                    fpt_speed=getattr(payload, "fpt_speed", 0),
                 )
             else:
                 run_pipeline(

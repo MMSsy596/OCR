@@ -40,6 +40,8 @@ function Stop-ByPidFile([string]$PidFile, [string]$Name) {
     if ($proc) {
         try {
             Stop-Process -Id $targetPid -Force -ErrorAction Stop
+            # Chờ Windows release handle file log (tối đa 3 giây)
+            $proc.WaitForExit(3000) | Out-Null
             Write-Info "Stopped old process of $Name (PID $targetPid)."
         } catch {
             Write-Info "Cannot stop old process of $Name (PID $targetPid): $($_.Exception.Message)"
@@ -55,20 +57,23 @@ function Start-DetachedCmd(
     [string]$ErrLog,
     [string]$PidFile
 ) {
-    if (Test-Path $OutLog) { Remove-Item -Force $OutLog -ErrorAction SilentlyContinue }
-    if (Test-Path $ErrLog) { Remove-Item -Force $ErrLog -ErrorAction SilentlyContinue }
+    # Dùng cmd.exe /c với outer-quote bọc toàn bộ để cmd parse đúng path có spaces/quotes bên trong
+    # Cú pháp: cmd /c ""exe" args 1>>"out" 2>>"err""  ← outer quotes + inner quoted exe
+    $redirect = '1>>"{0}" 2>>"{1}"' -f $OutLog, $ErrLog
+    $cmdArgs  = '/c "{0} {1}"' -f $CommandLine, $redirect
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "cmd.exe"
+    $psi.FileName         = "cmd.exe"
+    $psi.Arguments        = $cmdArgs
     $psi.WorkingDirectory = $WorkingDir
-    $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
-    $psi.Arguments = ('/c {0} 1>>"{1}" 2>>"{2}"' -f $CommandLine, $OutLog, $ErrLog)
+    $psi.UseShellExecute  = $false
+    $psi.CreateNoWindow   = $true
 
     $proc = [System.Diagnostics.Process]::Start($psi)
     Set-Content -Path $PidFile -Value $proc.Id -Encoding ascii
     Write-Info "Started $Name (PID $($proc.Id))."
 }
+
 
 function Ensure-ApiEnv {
     if (Test-Path $ApiPython) {
@@ -127,7 +132,7 @@ if (-not $NoBackend) {
     Ensure-ApiEnv
     $apiCmd = "`"$ApiPython`" -m uvicorn app.main:app --host 0.0.0.0 --port $BackendPort"
     Start-DetachedCmd -Name "backend" -WorkingDir $ApiDir -CommandLine $apiCmd -OutLog $ApiOutLog -ErrLog $ApiErrLog -PidFile $ApiPidFile
-    Wait-Http -Name "Backend" -Url "http://127.0.0.1:$BackendPort/health"
+    Wait-Http -Name "Backend" -Url "http://127.0.0.1:$BackendPort/health" -TimeoutSec 40
 }
 
 if (-not $NoFrontend) {

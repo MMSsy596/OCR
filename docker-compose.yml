@@ -1,6 +1,40 @@
 version: "3.9"
 
 services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE: ""
+    image: nanbao-ocr-app:latest
+    container_name: nanbao-ocr-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+    environment:
+      APP_NAME: NanBao OCR Studio
+      ENVIRONMENT: development
+      PORT: 8000
+      WEB_ORIGIN: http://localhost:8000
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      ENABLE_DOCS: "true"
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/ocr
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_ROOT: /data/projects
+      GEMINI_API_KEYS: ${GEMINI_API_KEYS:-}
+      API_TOKEN: ${API_TOKEN:-}
+      API_TOKENS: ${API_TOKENS:-}
+      DEFAULT_SOURCE_LANG: ${DEFAULT_SOURCE_LANG:-zh}
+      DEFAULT_TARGET_LANG: ${DEFAULT_TARGET_LANG:-vi}
+    ports:
+      - "8000:8000"
+    volumes:
+      - app_data:/data
+
   postgres:
     image: postgres:16
     container_name: nanbao-ocr-postgres
@@ -36,6 +70,7 @@ services:
       - minio_data:/data
 
 volumes:
+  app_data:
   postgres_data:
   minio_data:
 

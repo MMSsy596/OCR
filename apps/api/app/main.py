@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import shutil
+import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -83,6 +84,11 @@ def runtime_capabilities():
     ffmpeg_path = shutil.which("ffmpeg")
     ffprobe_path = shutil.which("ffprobe")
     whisper_path = shutil.which("whisper")
+    if not whisper_path:
+        venv_whisper = Path(sys.executable).parent / "whisper.exe"
+        if venv_whisper.exists():
+            whisper_path = str(venv_whisper)
+            
     audio_ready = bool(ffmpeg_path and whisper_path)
     return {
         "input_modes": {

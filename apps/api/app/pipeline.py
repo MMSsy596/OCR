@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import wave
@@ -321,7 +322,11 @@ def _run_whisper_cli(
 ) -> Path:
     whisper_bin = shutil.which("whisper")
     if not whisper_bin:
-        raise RuntimeError("audio_asr_requires_whisper_cli")
+        venv_whisper = Path(sys.executable).parent / "whisper.exe"
+        if venv_whisper.exists():
+            whisper_bin = str(venv_whisper)
+        else:
+            raise RuntimeError("audio_asr_requires_whisper_cli")
     cmd = [
         whisper_bin,
         str(audio_path),

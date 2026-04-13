@@ -18,6 +18,7 @@ describe("useProjectWizard", () => {
         editableSegments: [],
         jobs: [],
         hasValidRoi: () => true,
+        pipelineInputMode: "video_ocr",
         setMessage,
       }),
     );
@@ -42,12 +43,13 @@ describe("useProjectWizard", () => {
         editableSegments: [],
         jobs: [],
         hasValidRoi: () => true,
+        pipelineInputMode: "video_ocr",
         setMessage,
       }),
     );
 
     act(() => {
-      result.current.goToStep(4);
+      result.current.goToStep(5);
     });
 
     expect(result.current.wizardStep).toBe(1);
@@ -70,6 +72,7 @@ describe("useProjectWizard", () => {
       editableSegments: [{ id: 1 }],
       jobs: [],
       hasValidRoi: () => true,
+      pipelineInputMode: "video_ocr",
       setMessage,
     };
 
@@ -92,6 +95,6 @@ describe("useProjectWizard", () => {
     });
 
     expect(result.current.maxUnlockedStep).toBe(1);
-    expect(result.current.wizardStep).toBe(1);
+    expect(result.current.wizardStep).toBe(2);
   });
 });

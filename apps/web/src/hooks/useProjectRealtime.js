@@ -4,11 +4,7 @@ import { useProjectEventStream } from "./useProjectEventStream";
 const QUEUED_ACTIVITY_WINDOW_MS = 120000;
 
 function jobTimeValue(job) {
-  const candidates = [
-    job?.updated_at,
-    job?.created_at,
-    job?.artifacts?.last_event?.time,
-  ];
+  const candidates = [job?.updated_at, job?.created_at, job?.artifacts?.last_event?.time];
   for (const value of candidates) {
     const parsed = value ? Date.parse(value) : Number.NaN;
     if (!Number.isNaN(parsed)) return parsed;
@@ -76,12 +72,7 @@ export function useProjectRealtime({
       }
       setJobs(incomingJobs);
 
-      if (
-        hadRunningBefore &&
-        !hasRunningNow &&
-        !isEditingSegmentsRef.current &&
-        selectedProjectId
-      ) {
+      if (hadRunningBefore && !hasRunningNow && !isEditingSegmentsRef.current && selectedProjectId) {
         loadProjectDataRef.current(selectedProjectId, { includeSegments: true });
       }
     },
@@ -141,30 +132,13 @@ export function useProjectRealtime({
     };
   }, [selectedProjectId, streamState]);
 
-  // Keep track of the initial loaded state
-  const isFirstLoadRef = useRef(true);
-  
-  useEffect(() => {
-    if (isFirstLoadRef.current && latestDubAudioJob) {
-        lastDubDoneRef.current = latestDubAudioJob.id;
-        isFirstLoadRef.current = false;
-    } else if (isFirstLoadRef.current && jobs.length > 0) {
-        // jobs loaded but no dub job
-        isFirstLoadRef.current = false;
-    }
-  }, [jobs, latestDubAudioJob]);
-
   useEffect(() => {
     if (!latestDubAudioJob?.artifacts?.dubbed_audio) return;
-    if (isFirstLoadRef.current) return; // Still loading/initializing
-    
     if (lastDubDoneRef.current === latestDubAudioJob.id) return;
-    
+
     lastDubDoneRef.current = latestDubAudioJob.id;
-    setWizardStep(6);
-    setMessage(
-      `Đã tạo xong âm thanh: ${latestDubAudioJob.artifacts.dub_output_key || "dub-output.wav"}`,
-    );
+    setWizardStep(7);
+    setMessage(`Đã tạo xong âm thanh: ${latestDubAudioJob.artifacts.dub_output_key || "dub-output.wav"}`);
   }, [latestDubAudioJob, setMessage, setWizardStep]);
 
   return {

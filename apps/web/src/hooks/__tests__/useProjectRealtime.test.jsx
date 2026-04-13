@@ -40,7 +40,7 @@ describe("useProjectRealtime", () => {
     expect(loadProjectData).toHaveBeenCalledWith("p1", { includeSegments: true });
   });
 
-  it("đẩy wizard sang bước 4 khi job dub hoàn tất", () => {
+  it("đẩy wizard sang bước kết quả khi job dub hoàn tất", () => {
     streamMock.mockReturnValue("open");
     const setWizardStep = vi.fn();
     const setMessage = vi.fn();
@@ -66,7 +66,7 @@ describe("useProjectRealtime", () => {
       }),
     );
 
-    expect(setWizardStep).toHaveBeenCalledWith(4);
+    expect(setWizardStep).toHaveBeenCalledWith(7);
     expect(setMessage).toHaveBeenCalledWith("Đã tạo xong âm thanh: audio.wav");
   });
 

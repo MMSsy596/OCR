@@ -42,22 +42,14 @@ function hasValidRoi(roi) {
   return n.w > 0.01 && n.h > 0.01;
 }
 
-const QUEUED_WINDOW_MS = 120000;
-function jobTimeValue(job) {
-  for (const v of [job?.updated_at, job?.created_at, job?.artifacts?.last_event?.time]) {
-    const p = v ? Date.parse(v) : NaN;
-    if (!isNaN(p)) return p;
-  }
-  return 0;
-}
-function isFreshQueuedJob(job, now = Date.now()) {
-  return job?.status === "queued" && now - jobTimeValue(job) <= QUEUED_WINDOW_MS;
+function isQueuedJob(job) {
+  return job?.status === "queued";
 }
 function pickLatestByKind(jobs, kind) {
   const pool = (jobs || []).filter((j) => (j?.artifacts?.job_kind || "pipeline") === kind);
   if (!pool.length) return null;
   return pool.find((j) => j.status === "running")
-      || pool.find((j) => isFreshQueuedJob(j))
+      || pool.find((j) => isQueuedJob(j))
       || pool.find((j) => j.status === "done" || j.status === "failed")
       || pool[0];
 }
@@ -129,6 +121,7 @@ export function App() {
   const [notices, setNotices]             = useState([]);
   const [apiStatus, setApiStatus]         = useState("checking");
   const [runtimeCapabilities, setRuntimeCapabilities] = useState(null);
+  const [syncPendingCount, setSyncPendingCount] = useState(0);
 
   const [projectForm, setProjectForm] = useState({
     name: "", source_lang: "zh", target_lang: "vi",
@@ -222,7 +215,15 @@ export function App() {
     });
 
   /* ── data loading ── */
+  function beginSync() {
+    setSyncPendingCount((count) => count + 1);
+  }
+  function endSync() {
+    setSyncPendingCount((count) => Math.max(0, count - 1));
+  }
+
   async function loadProjectsSafe() {
+    beginSync();
     try {
       const [data, cap] = await Promise.all([
         jsonFetch(`${API_BASE}/projects`),
@@ -235,10 +236,13 @@ export function App() {
     } catch {
       setApiStatus("offline");
       setMessage(`Không kết nối được API. Hãy chạy backend.`);
+    } finally {
+      endSync();
     }
   }
 
   async function loadProjectData(projectId, opts = {}) {
+    beginSync();
     try {
       const [incomingJobs, project] = await Promise.all([
         jsonFetch(`${API_BASE}/projects/${projectId}/jobs`),
@@ -252,6 +256,9 @@ export function App() {
       setJobs(incomingJobs);
       setProjects((prev) => prev.map((p) => (p.id === project.id ? project : p)));
     } catch { /* Bỏ qua lỗi polling tạm thời */ }
+    finally {
+      endSync();
+    }
   }
 
   /* ── effects ── */
@@ -266,18 +273,86 @@ export function App() {
     return () => ts.forEach(clearTimeout);
   }, [notices]);
 
-  /* ── liveActivity for island ── */
-  const liveActivity = useMemo(() => {
-    if (latestDubJob?.status === "running") {
-      return { tone: "info", title: "Đang dựng lồng tiếng", progress: latestDubJob.progress ?? 0, message: latestDubEvents[0]?.message || "Đang xử lý âm thanh…" };
-    }
+  /* ── liveActivities for island ── */
+  const liveActivities = useMemo(() => {
+    const activities = [];
+    const push = (item) => {
+      if (!item) return;
+      activities.push(item);
+    };
+
+    if (syncPendingCount > 0) push({ tone: "info", title: "Đang đồng bộ dữ liệu", message: "Ứng dụng vẫn đang tải dữ liệu mới nhất...", state: "waiting", priority: 12 });
+    if (creating) push({ tone: "info", title: "Đang tạo dự án", message: "Khởi tạo metadata dự án...", state: "waiting", priority: 18 });
+    if (projectLoading) push({ tone: "info", title: "Đang tải video", message: "Đang upload nguồn video vào dự án...", state: "waiting", priority: 18 });
+    if (ingestingUrl) push({ tone: "info", title: "Đang nhận link video", message: "Đang tải nguồn từ URL...", state: "waiting", priority: 18 });
+    if (savingRoi) push({ tone: "info", title: "Đang lưu vùng OCR", message: "Đang cập nhật ROI cho dự án...", state: "waiting", priority: 14 });
+    if (pipelineLoading) push({ tone: "info", title: "Đang gửi job pipeline", message: "Đang đẩy job OCR/Dịch vào hàng đợi...", state: "waiting", priority: 20 });
+    if (savingSegments) push({ tone: "info", title: "Đang lưu phụ đề", message: "Đang lưu chỉnh sửa subtitle...", state: "waiting", priority: 14 });
+    if (retranslating) push({ tone: "info", title: "Đang dịch lại phụ đề", message: "Đang xử lý AI dịch lại toàn bộ...", state: "waiting", priority: 22 });
+    if (exporting) push({ tone: "info", title: "Đang xuất phụ đề", message: "Đang tạo file export...", state: "waiting", priority: 16 });
+    if (uploadingSrt) push({ tone: "info", title: "Đang tải SRT", message: "Đang upload file phụ đề ngoài...", state: "waiting", priority: 14 });
+    if (dubbing) push({ tone: "info", title: "Đang gửi job lồng tiếng", message: "Đang tạo job dub audio...", state: "waiting", priority: 20 });
+    if (retryingStuckJobs) push({ tone: "warning", title: "Đang retry job kẹt", message: "Đang khởi động lại các job thất bại/queued...", state: "waiting", priority: 21 });
+
     if (latestPipelineJob?.status === "running") {
-      return { tone: "info", title: "Đang chạy OCR / dịch", progress: latestPipelineJob.progress ?? 0, message: latestJobEvents[0]?.message || "Pipeline đang xử lý video…" };
+      push({
+        tone: "info",
+        title: "Đang chạy OCR / dịch",
+        progress: latestPipelineJob.progress ?? 0,
+        message: latestJobEvents[0]?.message || "Pipeline đang xử lý video...",
+        state: "running",
+        priority: 26,
+      });
+    } else if (latestPipelineJob && isQueuedJob(latestPipelineJob)) {
+      push({
+        tone: "warning",
+        title: "Đang chờ worker pipeline",
+        progress: 0,
+        message: "Job đang trong hàng đợi worker...",
+        state: "waiting",
+        priority: 24,
+      });
     }
-    if (latestDubJob && isFreshQueuedJob(latestDubJob))       return { tone: "warning", title: "Đang chờ worker lồng tiếng", progress: 0, message: "Chờ worker…" };
-    if (latestPipelineJob && isFreshQueuedJob(latestPipelineJob)) return { tone: "warning", title: "Đang chờ worker pipeline", progress: 0, message: "Chờ worker…" };
-    return null;
-  }, [latestDubJob, latestDubEvents, latestPipelineJob, latestJobEvents]);
+
+    if (latestDubJob?.status === "running") {
+      push({
+        tone: "info",
+        title: "Đang dựng lồng tiếng",
+        progress: latestDubJob.progress ?? 0,
+        message: latestDubEvents[0]?.message || "Đang xử lý audio dub...",
+        state: "running",
+        priority: 27,
+      });
+    } else if (latestDubJob && isQueuedJob(latestDubJob)) {
+      push({
+        tone: "warning",
+        title: "Đang chờ worker lồng tiếng",
+        progress: 0,
+        message: "Job lồng tiếng đang chờ xử lý...",
+        state: "waiting",
+        priority: 25,
+      });
+    }
+
+    return activities;
+  }, [
+    creating,
+    projectLoading,
+    ingestingUrl,
+    savingRoi,
+    pipelineLoading,
+    savingSegments,
+    retranslating,
+    exporting,
+    uploadingSrt,
+    dubbing,
+    retryingStuckJobs,
+    syncPendingCount,
+    latestPipelineJob,
+    latestDubJob,
+    latestJobEvents,
+    latestDubEvents,
+  ]);
 
   /* ── pipeline start ── */
   async function startPipeline() {
@@ -348,7 +423,7 @@ export function App() {
     retranslateOnly, exportSubtitle, uploadExternalSrt,
     lastExport, undoSegments, redoSegments, updateEditableSegment,
     mergeAdjacentDuplicateSegments, currentVideoTime, activeSegment,
-    onNextStep: () => setWizardStep(5),
+    onNextStep: () => setWizardStep(6),
   };
   const step6Props = {
     editableSegments, dubbing, dubForm, setDubForm,
@@ -364,10 +439,10 @@ export function App() {
     onNewProject: () => { goToStep(1); },
   };
 
-  const STEPS = [step2Props, step3Props, step4Props, step5Props, step6Props, step7Props];
-  const STEP_COMPONENTS = [Step2Upload, Step3Region, Step4Run, Step5Export, Step6Dub, Step7Result];
-  const StepComponent = STEP_COMPONENTS[wizardStep - 1];
-  const stepProps = STEPS[wizardStep - 1];
+  const STEPS = [step1Props, step2Props, step3Props, step4Props, step5Props, step6Props, step7Props];
+  const STEP_COMPONENTS = [Step1Project, Step2Upload, Step3Region, Step4Run, Step5Export, Step6Dub, Step7Result];
+  const StepComponent = STEP_COMPONENTS[wizardStep - 1] || Step1Project;
+  const stepProps = STEPS[wizardStep - 1] || step1Props;
 
   return (
     <div className="app-shell">
@@ -440,7 +515,7 @@ export function App() {
 
       {/* Notifications */}
       <NotificationIsland
-        liveActivity={liveActivity}
+        liveActivities={liveActivities}
         notices={notices}
         onDismiss={dismissNotice}
       />

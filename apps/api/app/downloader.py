@@ -356,11 +356,6 @@ def run_url_ingest_job(
     gemini_api_key: str | None = None,
     voice_map: dict[str, str] | None = None,
     scan_interval_sec: float = 1.5,
-    audio_provider: str = "whisper_cli",
-    audio_asr_model: str = "base",
-    audio_asr_language: str = "zh",
-    audio_chunk_sec: int = 600,
-    audio_chunk_overlap_sec: int = 4,
 ) -> dict[str, Any]:
     db = SessionLocal()
     try:
@@ -463,11 +458,6 @@ def run_url_ingest_job(
                 "gemini_api_key": gemini_api_key,
                 "voice_map": voice_map or {},
                 "scan_interval_sec": float(scan_interval_sec),
-                "audio_provider": audio_provider,
-                "audio_asr_model": audio_asr_model,
-                "audio_asr_language": audio_asr_language,
-                "audio_chunk_sec": int(audio_chunk_sec or 600),
-                "audio_chunk_overlap_sec": int(audio_chunk_overlap_sec or 4),
             }
             pipeline_job = _create_pipeline_job(db, project.id, job.id, request_payload)
             pipeline_job_id = pipeline_job.id
@@ -480,11 +470,6 @@ def run_url_ingest_job(
                     gemini_api_key=gemini_api_key,
                     voice_map=voice_map or {},
                     scan_interval_sec=float(scan_interval_sec),
-                    audio_provider=audio_provider,
-                    audio_asr_model=audio_asr_model,
-                    audio_asr_language=audio_asr_language,
-                    audio_chunk_sec=int(audio_chunk_sec or 600),
-                    audio_chunk_overlap_sec=int(audio_chunk_overlap_sec or 4),
                     job_id=pipeline_job.id,
                 )
                 _push_event(artifacts, "pipeline", f"Đã xếp hàng auto pipeline: {pipeline_job.id}.", 97)
@@ -502,11 +487,6 @@ def run_url_ingest_job(
                     gemini_api_key=gemini_api_key,
                     voice_map=voice_map or {},
                     scan_interval_sec=float(scan_interval_sec),
-                    audio_provider=audio_provider,
-                    audio_asr_model=audio_asr_model,
-                    audio_asr_language=audio_asr_language,
-                    audio_chunk_sec=int(audio_chunk_sec or 600),
-                    audio_chunk_overlap_sec=int(audio_chunk_overlap_sec or 4),
                 )
         else:
             project.status = ProjectStatus.ready

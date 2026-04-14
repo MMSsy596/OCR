@@ -53,11 +53,7 @@ export function PipelineBlock({
   formatValue,
 }) {
   const inputMode = pipelineForm.input_mode || "video_ocr";
-  const isAudioMode = inputMode === "audio_asr";
   const queueActive = isFreshQueuedJob(latestPipelineJob);
-  const audioRuntimeReady = Boolean(
-    runtimeCapabilities?.input_modes?.audio_asr?.available,
-  );
   const capabilityTools = runtimeCapabilities?.tools || {};
 
   return (
@@ -78,141 +74,13 @@ export function PipelineBlock({
               : queueActive
                 ? "Pipeline đang chờ worker nhận..."
                 : latestPipelineJob?.status === "running"
-                  ? isAudioMode
-                    ? "Pipeline đang nhận diện âm thanh, dịch và xuất subtitle..."
-                    : "Pipeline đang OCR, dịch và xuất subtitle..."
+                  ? "Pipeline đang OCR, dịch và xuất subtitle..."
                   : ""
         }
       />
       <details>
         <summary>Tùy chọn xử lý nâng cao</summary>
-        <div className="inline-two">
-          <label>
-            Nguồn nhận diện
-            <select
-              value={inputMode}
-              onChange={(e) =>
-                setPipelineForm((prev) => ({
-                  ...prev,
-                  input_mode:
-                    e.target.value === "audio_asr" && !audioRuntimeReady
-                      ? "video_ocr"
-                      : e.target.value,
-                }))
-              }
-            >
-              <option value="video_ocr">OCR từ khung hình video</option>
-              <option value="audio_asr">
-                {audioRuntimeReady
-                  ? "Nhận diện từ âm thanh"
-                  : "Nhận diện từ âm thanh (thiếu runtime)"}
-              </option>
-            </select>
-          </label>
-          <label>
-            Provider âm thanh
-            <select
-              value={pipelineForm.audio_provider || "whisper_cli"}
-              disabled={!isAudioMode}
-              onChange={(e) =>
-                setPipelineForm((prev) => ({
-                  ...prev,
-                  audio_provider: e.target.value,
-                }))
-              }
-            >
-              <option value="whisper_cli">Whisper CLI cục bộ</option>
-            </select>
-          </label>
-        </div>
-        {isAudioMode ? (
-          <>
-            <p className="hint">
-              Chế độ này bỏ qua ROI, tách audio từ video rồi nhận diện lời nói thành subtitle.
-              Máy cần có `ffmpeg` và `whisper` CLI cài sẵn.
-            </p>
-            {!audioRuntimeReady ? (
-              <p className="error">
-                Runtime âm thanh chưa sẵn sàng:
-                {capabilityTools.ffmpeg?.available ? "" : " thiếu ffmpeg;"}
-                {capabilityTools.ffprobe?.available ? "" : " thiếu ffprobe;"}
-                {capabilityTools.whisper?.available ? "" : " thiếu whisper CLI."}
-              </p>
-            ) : (
-              <p className="hint">
-                Runtime âm thanh đã sẵn sàng.
-                {" "}
-                {runtimeCapabilities?.recommendations?.audio_asr_hint || ""}
-              </p>
-            )}
-            <div className="inline-two">
-              <label>
-                Model ASR
-                <select
-                  value={pipelineForm.audio_asr_model || "base"}
-                  onChange={(e) =>
-                    setPipelineForm((prev) => ({
-                      ...prev,
-                      audio_asr_model: e.target.value,
-                    }))
-                  }
-                >
-                  <option value="tiny">tiny</option>
-                  <option value="base">base</option>
-                  <option value="small">small</option>
-                  <option value="medium">medium</option>
-                </select>
-              </label>
-              <label>
-                Ngôn ngữ audio
-                <input
-                  value={pipelineForm.audio_asr_language || "zh"}
-                  onChange={(e) =>
-                    setPipelineForm((prev) => ({
-                      ...prev,
-                      audio_asr_language: e.target.value,
-                    }))
-                  }
-                  placeholder="Ví dụ: zh, en, ja"
-                />
-              </label>
-            </div>
-            <div className="inline-two">
-              <label>
-                Độ dài chunk audio (giây)
-                <input
-                  type="number"
-                  min="60"
-                  max="3600"
-                  step="30"
-                  value={pipelineForm.audio_chunk_sec || 600}
-                  onChange={(e) =>
-                    setPipelineForm((prev) => ({
-                      ...prev,
-                      audio_chunk_sec: Number(e.target.value),
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                Overlap chunk (giây)
-                <input
-                  type="number"
-                  min="0"
-                  max="30"
-                  step="1"
-                  value={pipelineForm.audio_chunk_overlap_sec || 4}
-                  onChange={(e) =>
-                    setPipelineForm((prev) => ({
-                      ...prev,
-                      audio_chunk_overlap_sec: Number(e.target.value),
-                    }))
-                  }
-                />
-              </label>
-            </div>
-          </>
-        ) : null}
+
         <label>
           Khóa API Gemini (tùy chọn)
           <input
@@ -300,7 +168,6 @@ export function PipelineBlock({
           min="0.1"
           max="10"
           value={pipelineForm.scan_interval_sec}
-          disabled={isAudioMode}
           onChange={(e) =>
             setPipelineForm((prev) => ({
               ...prev,
@@ -309,32 +176,17 @@ export function PipelineBlock({
           }
         />
       </label>
-      {isAudioMode ? (
-        <p className="hint">
-          OCR theo khung hình đã tắt. Pipeline sẽ chạy{" "}
-          <code>audio -&gt; ASR -&gt; dịch -&gt; xuất subtitle</code>.
-        </p>
-      ) : null}
       <button
         disabled={
           loading ||
           !selectedProjectId ||
-          (requiresRoi && !hasSavedRoi) ||
-          (isAudioMode && !audioRuntimeReady)
+          (requiresRoi && !hasSavedRoi)
         }
         onClick={startPipeline}
       >
         Chạy quy trình
       </button>
-      {isAudioMode ? (
-        <p className="hint">
-          Gợi ý cấu hình cho video dài:
-          {" "}
-          <code>30-60 phút: chunk 480-600s</code>
-          {"; "}
-          <code>1-2 giờ: chunk 600-900s, overlap 4-6s</code>.
-        </p>
-      ) : null}
+
       {latestPipelineJob ? (
         <div className="info">
           <p>
@@ -371,14 +223,7 @@ export function PipelineBlock({
               ({Number(latestJobStats.ocr_live.progress_pct || 0).toFixed(1)}%)
             </p>
           ) : null}
-          {latestJobStats?.audio_live ? (
-            <p>
-              <strong>Audio realtime:</strong>{" "}
-              {latestJobStats.audio_live.chunks_done ?? 0}/
-              {latestJobStats.audio_live.chunks_total ?? 0} chunk{" "}
-              ({Number(latestJobStats.audio_live.progress_pct || 0).toFixed(1)}%)
-            </p>
-          ) : null}
+
           {latestPipelineJob?.artifacts?.translation_stats ? (
             <p>
               <strong>Dịch:</strong>{" "}

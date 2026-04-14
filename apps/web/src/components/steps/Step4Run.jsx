@@ -40,13 +40,11 @@ export function Step4Run({
   const isDone    = status === "done";
   const isFailed  = status === "failed";
 
-  const audioRuntimeReady = Boolean(runtimeCapabilities?.input_modes?.audio_asr?.available);
-  const inputMode = pipelineForm.input_mode || "video_ocr";
 
   const statusColor = isDone ? "var(--success)" : isFailed ? "var(--danger)" : "var(--accent-2)";
   const statusIcon  = isDone ? "✅" : isFailed ? "❌" : isRunning ? "⚙️" : isQueued ? "⏳" : "🚀";
 
-  const canStart = selectedProject && (inputMode === "audio_asr" || hasSavedRoi) && !isRunning && !isQueued;
+  const canStart = selectedProject && hasSavedRoi && !isRunning && !isQueued;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 800, margin: "0 auto", width: "100%" }}>
@@ -126,7 +124,7 @@ export function Step4Run({
                           "🚀 Bắt đầu xử lý"}
           </button>
 
-          {!hasSavedRoi && inputMode !== "audio_asr" && (
+          {!hasSavedRoi && (
             <div className="hint-text" style={{ textAlign: "center", color: "var(--warning)" }}>
               ⚠️ Chưa lưu vùng OCR — quay lại Bước 3
             </div>
@@ -166,23 +164,10 @@ export function Step4Run({
         <div className="accordion-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div className="form-row">
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Nguồn nhận diện</label>
-              <select
-                value={inputMode}
-                onChange={(e) => setPipelineForm((p) => ({ ...p, input_mode: e.target.value }))}
-              >
-                <option value="video_ocr">OCR từ hình ảnh video</option>
-                <option value="audio_asr" disabled={!audioRuntimeReady}>
-                  {audioRuntimeReady ? "Nhận diện từ âm thanh" : "Âm thanh (thiếu ffmpeg/whisper)"}
-                </option>
-              </select>
-            </div>
-            <div className="form-group" style={{ marginBottom: 0 }}>
               <label>Khoảng quét OCR (giây)</label>
               <input
                 type="number" step="0.1" min="0.1" max="10"
                 value={pipelineForm.scan_interval_sec}
-                disabled={inputMode === "audio_asr"}
                 onChange={(e) => setPipelineForm((p) => ({ ...p, scan_interval_sec: Number(e.target.value) }))}
               />
             </div>

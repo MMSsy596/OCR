@@ -83,38 +83,18 @@ def health():
 def runtime_capabilities():
     ffmpeg_path = shutil.which("ffmpeg")
     ffprobe_path = shutil.which("ffprobe")
-    whisper_path = shutil.which("whisper")
-    if not whisper_path:
-        venv_whisper = Path(sys.executable).parent / "whisper.exe"
-        if venv_whisper.exists():
-            whisper_path = str(venv_whisper)
-            
-    audio_ready = bool(ffmpeg_path and whisper_path)
     return {
         "input_modes": {
             "video_ocr": {
                 "available": True,
                 "label": "OCR từ khung hình video",
             },
-            "audio_asr": {
-                "available": audio_ready,
-                "label": "Nhận diện từ âm thanh",
-                "requires": ["ffmpeg", "whisper"],
-            },
         },
         "tools": {
             "ffmpeg": {"available": bool(ffmpeg_path), "path": ffmpeg_path or ""},
             "ffprobe": {"available": bool(ffprobe_path), "path": ffprobe_path or ""},
-            "whisper": {"available": bool(whisper_path), "path": whisper_path or ""},
         },
-        "recommendations": {
-            "audio_asr_ready": audio_ready,
-            "audio_asr_hint": (
-                "Có thể dùng mode âm thanh ngay."
-                if audio_ready
-                else "Cần cài ffmpeg và whisper CLI để dùng mode âm thanh."
-            ),
-        },
+        "recommendations": {},
     }
 
 
@@ -246,11 +226,6 @@ def _enqueue_url_ingest_job(job_id: str, payload: schemas.UrlIngestStartRequest)
         gemini_api_key=payload.gemini_api_key,
         voice_map=payload.voice_map,
         scan_interval_sec=payload.scan_interval_sec,
-        audio_provider=payload.audio_provider,
-        audio_asr_model=payload.audio_asr_model,
-        audio_asr_language=payload.audio_asr_language,
-        audio_chunk_sec=payload.audio_chunk_sec,
-        audio_chunk_overlap_sec=payload.audio_chunk_overlap_sec,
         job_id=job_id,
         job_timeout=14400,
     )
@@ -534,11 +509,6 @@ def start_pipeline(project_id: str, payload: schemas.PipelineStartRequest, db: S
             gemini_api_key=payload.gemini_api_key,
             voice_map=payload.voice_map,
             scan_interval_sec=payload.scan_interval_sec,
-            audio_provider=payload.audio_provider,
-            audio_asr_model=payload.audio_asr_model,
-            audio_asr_language=payload.audio_asr_language,
-            audio_chunk_sec=payload.audio_chunk_sec,
-            audio_chunk_overlap_sec=payload.audio_chunk_overlap_sec,
         )
     return job
 
@@ -754,11 +724,6 @@ def retry_stuck_jobs(project_id: str, db: Session = Depends(get_db)):
                     gemini_api_key=payload.gemini_api_key,  # type: ignore[attr-defined]
                     voice_map=payload.voice_map,  # type: ignore[attr-defined]
                     scan_interval_sec=payload.scan_interval_sec,  # type: ignore[attr-defined]
-                    audio_provider=payload.audio_provider,  # type: ignore[attr-defined]
-                    audio_asr_model=payload.audio_asr_model,  # type: ignore[attr-defined]
-                    audio_asr_language=payload.audio_asr_language,  # type: ignore[attr-defined]
-                    audio_chunk_sec=payload.audio_chunk_sec,  # type: ignore[attr-defined]
-                    audio_chunk_overlap_sec=payload.audio_chunk_overlap_sec,  # type: ignore[attr-defined]
                 )
 
         retried_from.append(old_job.id)

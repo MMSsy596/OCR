@@ -19,7 +19,7 @@ export function useProjectWizard({
     () => hasVideo && hasValidRoi(selectedProject?.roi),
     [hasVideo, selectedProject?.roi, hasValidRoi],
   );
-  const requiresRoi = pipelineInputMode !== "audio_asr";
+  const requiresRoi = true;
 
   const hasOcrProgress = useMemo(() => {
     if ((latestPipelineJob?.progress || 0) > 0) return true;
@@ -57,7 +57,7 @@ export function useProjectWizard({
   const wizardSteps = [
     { id: 1, label: "Dự án" },
     { id: 2, label: "Video" },
-    { id: 3, label: requiresRoi ? "Vùng OCR" : "Nguồn vào" },
+    { id: 3, label: "Vùng OCR" },
     { id: 4, label: "Xử lý" },
     { id: 5, label: "Xuất SRT" },
     { id: 6, label: "Âm thanh" },
@@ -80,9 +80,7 @@ export function useProjectWizard({
     const msgs = {
       2: "Cần tạo dự án trước.",
       3: "Cần tải video lên trước.",
-      4: requiresRoi
-        ? "Cần lưu vùng OCR trước khi chạy xử lý."
-        : "Cần chuẩn bị nguồn vào trước khi chạy xử lý.",
+      4: "Cần lưu vùng OCR trước khi chạy xử lý.",
       5: "Cần chạy OCR để có tiến trình trước khi sang bước SRT/TTS.",
       6: "Cần xuất phụ đề trước khi tạo âm thanh.",
       7: "Cần có kết quả lồng tiếng trước khi xem bước kết quả.",

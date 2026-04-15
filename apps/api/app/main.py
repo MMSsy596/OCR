@@ -124,11 +124,6 @@ def _enqueue_pipeline_job(job_id: str, payload: schemas.PipelineStartRequest) ->
         gemini_api_key=payload.gemini_api_key,
         voice_map=payload.voice_map,
         scan_interval_sec=payload.scan_interval_sec,
-        audio_provider=payload.audio_provider,
-        audio_asr_model=payload.audio_asr_model,
-        audio_asr_language=payload.audio_asr_language,
-        audio_chunk_sec=payload.audio_chunk_sec,
-        audio_chunk_overlap_sec=payload.audio_chunk_overlap_sec,
         job_id=job_id,
     )
 

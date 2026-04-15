@@ -1,6 +1,6 @@
 # NanBao OCR Studio 男宝
 
-> Ứng dụng trích xuất subtitle từ video bằng OCR / ASR, tự động dịch và tạo audio dub.
+> Ứng dụng trích xuất subtitle từ video bằng OCR, tự động dịch và tạo audio dub.
 
 ---
 
@@ -25,9 +25,7 @@
 
 **NanBao OCR Studio** là một web application chạy local (hoặc self-hosted) giúp:
 
-- **Trích xuất subtitle** từ video bằng 2 phương thức:
-  - 🖼 **OCR** (đọc chữ hiển thị trên khung hình) — dùng RapidOCR + OpenCV
-  - 🎙 **ASR** (nhận diện giọng nói) — dùng Whisper CLI + FFmpeg
+- **Trích xuất subtitle** từ video bằng OCR (đọc chữ hiển thị trên khung hình) — dùng RapidOCR + OpenCV
 - **Tự động dịch** subtitle sang ngôn ngữ đích (Gemini API ưu tiên, fallback sang Deep Translator)
 - **Chỉnh sửa subtitle** thủ công ngay trên giao diện web
 - **Export** phụ đề ra nhiều định dạng: SRT, VTT, CSV, TXT, JSON
@@ -43,7 +41,7 @@ D:\project\OCR
 │   ├── api/          # Backend FastAPI (Python)
 │   │   └── app/
 │   │       ├── main.py       # Router, middleware, endpoint
-│   │       ├── pipeline.py   # Pipeline OCR / ASR / dịch
+│   │       ├── pipeline.py   # Pipeline OCR / dịch
 │   │       ├── tts_dubber.py # Audio dub
 │   │       ├── exporter.py   # Export SRT/VTT/CSV/TXT/JSON
 │   │       ├── downloader.py # Ingest video từ URL (yt-dlp)
@@ -84,7 +82,7 @@ Upload Video / URL
       ↓
   Background Thread / RQ Worker
       ↓
-  Pipeline (OCR hoặc ASR)
+  Pipeline OCR (RapidOCR + OpenCV)
       ↓
   Dịch (Gemini → Deep Translator fallback)
       ↓
@@ -113,19 +111,13 @@ Upload Video / URL
 
 ### 3.3 Pipeline xử lý
 
-**Chế độ OCR (Video OCR)**
+**OCR từ khung hình video**
 - Đọc từng khung hình theo `scan_interval_sec` (mặc định 1s)
-- Crop theo ROI (vùng subtitle cài đặt)
+- Crop theo ROI (vùng subtitle cài đặt), chỉ decode frame được chọn (tiết kiệm CPU)
 - Thử nhiều preprocessing variant: grayscale, upscale, Gaussian blur, Otsu, CLAHE
 - Chọn kết quả OCR tốt nhất theo score
 - Gộp các segment liền kề, trùng nội dung
 - Tự động giới hạn sample nếu video dài (tối đa 1600 frames)
-
-**Chế độ ASR (Audio Recognition)**
-- Dùng `ffmpeg` để cắt audio → WAV 16kHz mono
-- Hỗ trợ chia chunk video dài (chunk_sec, overlap_sec)
-- Chạy `whisper` CLI để nhận diện giọng nói → SRT
-- Parse SRT → segment
 
 **Dịch thuật**
 - Ưu tiên **Gemini API** (`gemini-2.5-flash-lite`) với context trước/sau để dịch tự nhiên
@@ -200,8 +192,7 @@ Các file có thể tải về trực tiếp từ giao diện web hoặc qua API
 | Phần mềm | Mục đích |
 |---|---|
 | **Docker Desktop** | Chạy PostgreSQL / Redis / MinIO bằng container |
-| **FFmpeg + ffprobe** | Cắt audio cho chế độ ASR, tạo audio dub |
-| **Whisper CLI** | Nhận diện giọng nói (`pip install openai-whisper`) |
+| **FFmpeg + ffprobe** | Tạo audio dub (TTS) |
 | **CUDA / GPU ONNX** | Tăng tốc OCR nếu có GPU NVIDIA |
 
 ### Kiểm tra môi trường
@@ -215,7 +206,6 @@ npm --version       # 9.x.x trở lên
 docker --version    # Docker version 24+
 ffmpeg -version     # ffmpeg version ...
 ffprobe -version    # ffprobe version ...
-whisper --help      # nếu đã cài openai-whisper
 ```
 
 ---
@@ -473,10 +463,6 @@ docker compose up
 - ROI mặc định: toàn bộ phần dưới màn hình — phù hợp video có subtitle ở dưới
 - Kéo/thu nhỏ để chỉ bao vùng chữ cần đọc → tăng độ chính xác OCR
 
-**Chọn chế độ xử lý:**
-- `video_ocr` — OCR từ khung hình (phù hợp video có subtitle hard-sub)
-- `audio_asr` — Nhận diện giọng nói (cần `ffmpeg` + `whisper`)
-
 **Cài đặt dịch:**
 - Nhập **Gemini API Key** nếu có (dịch chất lượng cao hơn)
 - Nhập **Prompt** tùy chỉnh: ví dụ "Dịch theo văn phong anime, giữ nguyên tên nhân vật"
@@ -484,12 +470,6 @@ docker compose up
 
 **Tùy chọn OCR nâng cao:**
 - `scan_interval_sec`: khoảng cách giữa 2 frame scan (mặc định 1.0s)
-
-**Tùy chọn ASR nâng cao:**
-- `audio_provider`: hiện chỉ hỗ trợ `whisper_cli`
-- `audio_asr_model`: `tiny`, `base`, `small`, `medium`, `large`
-- `audio_asr_language`: ngôn ngữ nguồn (ví dụ `zh`, `ja`, `en`)
-- `audio_chunk_sec`: chia video dài thành chunk (mặc định 600s)
 
 ### Bước 4 — Chạy Pipeline
 
@@ -601,9 +581,9 @@ Get-Content D:\project\OCR\logs\worker.out.log -Tail 50
 
 ### ❌ OCR trả về rỗng / không có subtitle
 
-- Kiểm tra video có subtitle **hard-coded** (in lên frame) — chế độ OCR chỉ đọc được loại này
+- Kiểm tra video có subtitle **hard-coded** (in lên frame) — OCR chỉ đọc được loại này
 - Thử thu nhỏ ROI để chỉ bao vùng subtitle thay vì cả màn hình
-- Thử tăng `scan_interval_sec` (ví dụ từ 1.0 → 0.5) để scan dày hơn
+- Thử giảm `scan_interval_sec` (ví dụ từ 1.0 → 0.5) để scan dày hơn
 
 ### ❌ Lỗi Audio Dub thất bại
 
@@ -674,4 +654,4 @@ Get-NetTCPConnection -State Listen | Where-Object LocalPort -in @(8000, 5173, 63
 
 ---
 
-*README được cập nhật lần cuối: Tháng 4/2026*
+*README được cập nhật lần cuối: Tháng 4/2026 — phiên bản OCR only (đã loại bỏ module ASR)*

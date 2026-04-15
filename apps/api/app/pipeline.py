@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import wave
 from queue import Empty, Queue
@@ -345,12 +346,18 @@ def _ocr_segments_from_video(
         sampled = 0
         try:
             while True:
-                ok, frame = cap.read()
-                if not ok or frame is None:
-                    break
                 if frame_idx % sample_step == 0:
+                    # Frame cần lấy ảnh: grab + decode đầy đủ
+                    ok, frame = cap.read()
+                    if not ok or frame is None:
+                        break
                     sampled += 1
                     frame_queue.put((frame_idx, frame))
+                else:
+                    # Frame bỏ qua: chỉ dịch chuyển con trỏ, KHÔNG decode
+                    ok = cap.grab()
+                    if not ok:
+                        break
                 frame_idx += 1
             meta["producer_frames_read"] = frame_idx
             meta["producer_frames_sampled"] = sampled
@@ -788,19 +795,31 @@ def _translate_project_segments(
     gemini_batch_chunks_failed = 0
     gemini_batch_lines_ok = 0
     invalid_gemini_keys: set[str] = set()
+    _invalid_keys_lock = threading.Lock()
 
     if (primary_api_key or backup_api_key) and len(db_segments) >= 2:
         chunk_size = 8
+        # Chuẩn bị tất cả chunks để submit song song
+        chunks_meta: list[tuple[int, list, str, str]] = []
         for start in range(0, len(db_segments), chunk_size):
             chunk = db_segments[start : start + chunk_size]
-            lines = [seg.raw_text for seg in chunk]
             ctx_before = db_segments[start - 1].raw_text if start > 0 else ""
             end_idx = start + len(chunk)
             ctx_after = db_segments[end_idx].raw_text if end_idx < len(db_segments) else ""
-            batch_key = primary_api_key
-            if (not batch_key) or (batch_key in invalid_gemini_keys):
-                batch_key = backup_api_key
-            translated_chunk, batch_err = _call_gemini_translate_batch(
+            chunks_meta.append((start, chunk, ctx_before, ctx_after))
+
+        # Xác định số worker: tối đa 8, tối thiểu 1, không vượt số chunks
+        max_parallel = min(8, len(chunks_meta))
+
+        def _translate_one_chunk(
+            args: tuple[int, list, str, str],
+        ) -> tuple[int, list, list, str]:
+            """Dịch một chunk, trả về (start, chunk, translated_lines, err)."""
+            start_idx, chunk, ctx_before, ctx_after = args
+            lines = [seg.raw_text for seg in chunk]
+            with _invalid_keys_lock:
+                batch_key = primary_api_key if (primary_api_key and primary_api_key not in invalid_gemini_keys) else backup_api_key
+            translated, err = _call_gemini_translate_batch(
                 lines,
                 project.prompt,
                 batch_key or "",
@@ -810,14 +829,15 @@ def _translate_project_segments(
                 context_after=ctx_after,
             )
             if (
-                (not translated_chunk)
-                and _is_gemini_key_error(batch_err)
+                (not translated)
+                and _is_gemini_key_error(err)
                 and batch_key
                 and backup_api_key
                 and batch_key != backup_api_key
             ):
-                invalid_gemini_keys.add(batch_key)
-                translated_chunk, batch_err = _call_gemini_translate_batch(
+                with _invalid_keys_lock:
+                    invalid_gemini_keys.add(batch_key)
+                translated, err = _call_gemini_translate_batch(
                     lines,
                     project.prompt,
                     backup_api_key,
@@ -826,17 +846,23 @@ def _translate_project_segments(
                     context_before=ctx_before,
                     context_after=ctx_after,
                 )
-            if translated_chunk and len(translated_chunk) == len(chunk):
-                gemini_batch_chunks_ok += 1
-                gemini_batch_lines_ok += len(chunk)
-                for seg_item, out_text in zip(chunk, translated_chunk):
-                    batch_prefill[seg_item.id] = out_text
-            else:
-                gemini_batch_chunks_failed += 1
-                if batch_err and not first_translation_error:
-                    first_translation_error = batch_err
-                if "gemini_batch_" in batch_err:
-                    gemini_error_count += 1
+            return start_idx, chunk, translated, err
+
+        with ThreadPoolExecutor(max_workers=max_parallel, thread_name_prefix="gemini-batch") as pool:
+            futures = {pool.submit(_translate_one_chunk, args): args for args in chunks_meta}
+            for future in as_completed(futures):
+                start_idx, chunk, translated_chunk, batch_err = future.result()
+                if translated_chunk and len(translated_chunk) == len(chunk):
+                    gemini_batch_chunks_ok += 1
+                    gemini_batch_lines_ok += len(chunk)
+                    for seg_item, out_text in zip(chunk, translated_chunk):
+                        batch_prefill[seg_item.id] = out_text
+                else:
+                    gemini_batch_chunks_failed += 1
+                    if batch_err and not first_translation_error:
+                        first_translation_error = batch_err
+                    if "gemini_batch_" in batch_err:
+                        gemini_error_count += 1
 
     for idx, seg in enumerate(db_segments):
         prev_text = db_segments[idx - 1].raw_text if idx > 0 else ""

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 export function useProjectWizard({
   selectedProject,
+  selectedProjectId,
   latestPipelineJob,
   latestJobEvents,
   latestJobStats,
@@ -13,7 +14,9 @@ export function useProjectWizard({
 }) {
   const [wizardStep, setWizardStep] = useState(1);
 
-  const hasProject = Boolean(selectedProject);
+  // hasProject dùng selectedProjectId (có ngay sau createProject)
+  // thay vì selectedProject object (phải chờ load từ API)
+  const hasProject = Boolean(selectedProjectId);
   const hasVideo = Boolean(selectedProject?.video_path);
   const hasSavedRoi = useMemo(
     () => hasVideo && hasValidRoi(selectedProject?.roi),

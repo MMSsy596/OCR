@@ -53,6 +53,7 @@ export function useProjectActions(deps) {
       });
       await loadProjectsSafe();
       setSelectedProjectId(created.id);
+      setWizardStep(2); // Tự động sang bước 2: Tải video
       setMessage(`✅ Đã tạo dự án: ${created.name}`);
     } catch (err) {
       setMessage(`❌ Lỗi tạo dự án: ${await normalizeApiError(err, "create_project_failed")}`);
@@ -133,7 +134,7 @@ export function useProjectActions(deps) {
       await loadProjectsSafe();
       await loadProjectData(selectedProjectId);
       setMessage("✅ Tải video lên thành công.");
-      setWizardStep(2);
+      setWizardStep(3); // Chuyển sang bước 3: Vùng OCR
     } catch (err) {
       setMessage(`❌ Lỗi tải lên: ${await normalizeApiError(err, "upload_video_failed")}`);
     } finally {
@@ -167,7 +168,7 @@ export function useProjectActions(deps) {
           ? "✅ Đã nhận link, đang tải và sẽ tự chạy pipeline."
           : "✅ Đã nhận link, đang tự tải video vào dự án.",
       );
-      setWizardStep(2);
+      setWizardStep(3); // Chuyển sang bước 3: Vùng OCR
     } catch (err) {
       setMessage(`❌ Lỗi nhận link: ${await normalizeApiError(err, "ingest_url_failed")}`);
     } finally {
@@ -191,7 +192,7 @@ export function useProjectActions(deps) {
       setProjects((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
       setRoiDraft(normalizeRoi(updated.roi));
       setMessage("✅ Đã cấu hình Video và vùng quét ROI thành công.");
-      setWizardStep(3); // Auto advance to Next step (Run step is index 3)
+      setWizardStep(4); // Chuyển sang bước 4: Xử lý
     } catch (err) {
       setMessage(`❌ Lỗi lưu ROI: ${await normalizeApiError(err, "save_roi_failed")}`);
     } finally {

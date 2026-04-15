@@ -184,7 +184,7 @@ export function App() {
     useRoiEditor({ normalizeRoi, selectedProject, setMessage, setCurrentVideoTime });
 
   const { wizardStep, setWizardStep, maxUnlockedStep, canGoNext, wizardSteps, statusLabel, hasSavedRoi, goToStep } =
-    useProjectWizard({ selectedProject, latestPipelineJob, latestJobEvents, latestJobStats, editableSegments, jobs, hasValidRoi, pipelineInputMode, setMessage });
+    useProjectWizard({ selectedProject, selectedProjectId, latestPipelineJob, latestJobEvents, latestJobStats, editableSegments, jobs, hasValidRoi, pipelineInputMode, setMessage });
 
   const { streamState, streamErrorCount } = useProjectRealtime({
     apiBase: API_BASE, selectedProjectId, latestDubAudioJob, latestDubJob, jobs,
@@ -473,7 +473,16 @@ export function App() {
                 key={p.id}
                 className={`project-card${p.id === selectedProjectId ? " active" : ""}`}
                 style={{ marginBottom: 6 }}
-                onClick={() => { setSelectedProjectId(p.id); goToStep(1); }}
+                onClick={() => {
+                  setSelectedProjectId(p.id);
+                  // Tính step phù hợp từ dữ liệu project hiện có (không cần chờ fetch)
+                  const targetStep = (() => {
+                    if (!p.video_path) return 2;       // Chưa có video → bước Upload
+                    if (!hasValidRoi(p.roi)) return 3; // Có video, chưa ROI → bước ROI
+                    return 4;                           // Có cả hai → bước Xử lý
+                  })();
+                  setWizardStep(targetStep);
+                }}
               >
                 <div className="project-card-icon" style={{ width: 26, height: 26, fontSize: 13 }}>🎞️</div>
                 <div style={{ minWidth: 0 }}>
@@ -505,11 +514,7 @@ export function App() {
         </header>
 
         <main className="main-content">
-          {!selectedProjectId ? (
-            <Step1Project {...step1Props} />
-          ) : (
-            StepComponent && <StepComponent {...stepProps} />
-          )}
+          <StepComponent {...stepProps} />
         </main>
       </div>
 

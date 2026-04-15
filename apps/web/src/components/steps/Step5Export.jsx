@@ -1,4 +1,4 @@
-
+import { useEffect, useRef, useState } from "react";
 
 export function Step5Export({
   editableSegments,
@@ -24,20 +24,88 @@ export function Step5Export({
   activeSegment,
   onNextStep,
 }) {
+  // Track which segment indices have unsaved changes
+  const [dirtySet, setDirtySet] = useState(new Set());
+
+  // Reset dirty tracking when segments reloaded fresh
+  useEffect(() => {
+    setDirtySet(new Set());
+  }, [editableSegments.length]);
+
+  function handleChange(idx, field, value) {
+    updateEditableSegment(idx, { [field]: value });
+    setDirtySet((prev) => new Set(prev).add(idx));
+  }
+
+  function handleSave() {
+    saveSegments();
+    setDirtySet(new Set());
+  }
+
+  // Ctrl+S shortcut
+  useEffect(() => {
+    function onKeyDown(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+        e.preventDefault();
+        if (dirtySet.size > 0 && !savingSegments) handleSave();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [dirtySet.size, savingSegments]);
+
+  function handleNextStep() {
+    if (dirtySet.size > 0) {
+      if (!window.confirm(`Bạn có ${dirtySet.size} dòng chưa lưu. Lưu trước khi tiếp tục?`)) {
+        onNextStep();
+        return;
+      }
+      handleSave();
+      setTimeout(onNextStep, 400);
+      return;
+    }
+    onNextStep();
+  }
+
+  const dirtyCount = dirtySet.size;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, height: "100%", minHeight: 0 }}>
       <div className="step-guide">
         <span className="step-guide-icon">📝</span>
         <div className="step-guide-text">
-          <h3>Bước 5: Chỉnh sửa & Xuất phụ đề</h3>
-          <p>Xem lại phụ đề, chỉnh sửa nếu cần rồi xuất file SRT/VTT. Bước tiếp theo sẽ tạo âm thanh lồng tiếng.</p>
+          <h3>Bước 5: Chỉnh sửa &amp; Xuất phụ đề</h3>
+          <p>Chỉnh sửa trực tiếp văn bản gốc hoặc bản dịch trong bảng bên dưới, sau đó lưu và xuất file.</p>
         </div>
       </div>
 
       {/* Action bar */}
       <div className="card">
         <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+
+          {/* Unsaved indicator */}
+          {dirtyCount > 0 && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 10,
+              padding: "8px 14px",
+              borderRadius: "var(--radius-md)",
+              background: "rgba(251,146,60,0.1)",
+              border: "1px solid rgba(251,146,60,0.3)",
+            }}>
+              <span style={{ fontSize: 16 }}>✏️</span>
+              <span style={{ fontSize: 13, color: "var(--warning)", flex: 1 }}>
+                <strong>{dirtyCount} dòng</strong> đã chỉnh sửa chưa lưu
+              </span>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={handleSave}
+                disabled={savingSegments}
+              >
+                {savingSegments ? "⏳ Đang lưu…" : "💾 Lưu ngay (Ctrl+S)"}
+              </button>
+            </div>
+          )}
+
           {/* Quick export */}
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-secondary)", marginRight: 4 }}>
@@ -59,20 +127,13 @@ export function Step5Export({
 
             <span className="spacer" />
 
+            <button className="btn btn-secondary btn-sm" onClick={undoSegments} title="Hoàn tác">↩</button>
+            <button className="btn btn-secondary btn-sm" onClick={redoSegments} title="Làm lại">↪</button>
             <button
               className="btn btn-secondary btn-sm"
-              onClick={undoSegments}
-              title="Hoàn tác"
-            >↩</button>
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={redoSegments}
-              title="Làm lại"
-            >↪</button>
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={saveSegments}
+              onClick={handleSave}
               disabled={savingSegments}
+              title="Lưu (Ctrl+S)"
             >
               {savingSegments ? "⏳" : "💾 Lưu"}
             </button>
@@ -83,10 +144,7 @@ export function Step5Export({
             >
               {retranslating ? "⏳ Đang dịch…" : "🔄 Dịch lại"}
             </button>
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={mergeAdjacentDuplicateSegments}
-            >
+            <button className="btn btn-secondary btn-sm" onClick={mergeAdjacentDuplicateSegments}>
               🔗 Gộp trùng
             </button>
           </div>
@@ -127,7 +185,10 @@ export function Step5Export({
       {/* Subtitle table */}
       <div className="card" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <div className="card-header">
-          <h2>📋 Phụ đề ({editableSegments.length} dòng)</h2>
+          <h2>
+            📋 Phụ đề ({editableSegments.length} dòng
+            {dirtyCount > 0 ? <span style={{ color: "var(--warning)" }}> · {dirtyCount} đã sửa</span> : ""})
+          </h2>
           <span className="badge badge-purple">
             {currentVideoTime ? `${currentVideoTime.toFixed(1)}s` : "--"}
           </span>
@@ -151,29 +212,39 @@ export function Step5Export({
               <tbody>
                 {editableSegments.map((seg, idx) => {
                   const isActive = activeSegment?.id === seg.id;
+                  const isDirty = dirtySet.has(idx);
                   return (
-                    <tr key={seg.id ?? idx} className={isActive ? "active-row" : ""}>
-                      <td className="col-id" style={{ textAlign: "center", color: "var(--text-muted)", fontSize: 11 }}>
-                        {idx + 1}
+                    <tr
+                      key={seg.id ?? idx}
+                      className={isActive ? "active-row" : ""}
+                      style={isDirty ? { background: "rgba(251,146,60,0.06)" } : undefined}
+                    >
+                      <td className="col-id" style={{ textAlign: "center", fontSize: 11, verticalAlign: "top", paddingTop: 12 }}>
+                        <div style={{ color: "var(--text-muted)" }}>{idx + 1}</div>
+                        {isDirty && (
+                          <div style={{ color: "var(--warning)", fontSize: 14, marginTop: 4 }} title="Chưa lưu">✏️</div>
+                        )}
                       </td>
-                      <td className="col-time" style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                      <td className="col-time" style={{ fontSize: 11, color: "var(--text-muted)", verticalAlign: "top", paddingTop: 12 }}>
                         <div>{formatTime(seg.start_sec)}</div>
                         <div>{formatTime(seg.end_sec)}</div>
                       </td>
                       <td className="col-orig">
-                        <textarea
-                          rows={2}
+                        <AutoTextarea
                           value={seg.raw_text ?? ""}
-                          onChange={(e) => updateEditableSegment(idx, { raw_text: e.target.value })}
-                          style={{ fontSize: 12 }}
+                          onChange={(v) => handleChange(idx, "raw_text", v)}
+                          placeholder="Văn bản gốc..."
+                          isDirty={isDirty}
+                          accent="orange"
                         />
                       </td>
                       <td className="col-tran">
-                        <textarea
-                          rows={2}
+                        <AutoTextarea
                           value={seg.translated_text ?? ""}
-                          onChange={(e) => updateEditableSegment(idx, { translated_text: e.target.value })}
-                          style={{ fontSize: 12 }}
+                          onChange={(v) => handleChange(idx, "translated_text", v)}
+                          placeholder="Bản dịch..."
+                          isDirty={isDirty}
+                          accent="indigo"
                         />
                       </td>
                     </tr>
@@ -189,12 +260,52 @@ export function Step5Export({
       <button
         className="btn btn-primary btn-lg"
         style={{ width: "100%", marginTop: 4 }}
-        onClick={onNextStep}
+        onClick={handleNextStep}
         disabled={!editableSegments.length}
       >
-        ▶ Tiếp theo: Tạo âm thanh →
+        {dirtyCount > 0 ? "💾 Lưu & Tiếp theo: Tạo âm thanh →" : "▶ Tiếp theo: Tạo âm thanh →"}
       </button>
     </div>
+  );
+}
+
+/* Auto-resize textarea */
+function AutoTextarea({ value, onChange, placeholder, isDirty, accent = "orange" }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.style.height = "auto";
+      ref.current.style.height = `${Math.max(ref.current.scrollHeight, 44)}px`;
+    }
+  }, [value]);
+
+  const borderColor = isDirty
+    ? accent === "indigo" ? "rgba(99,102,241,0.6)" : "rgba(251,146,60,0.6)"
+    : "var(--border)";
+  const bgColor = isDirty
+    ? accent === "indigo" ? "rgba(99,102,241,0.05)" : "rgba(251,146,60,0.05)"
+    : "var(--input-bg)";
+
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      placeholder={placeholder}
+      onChange={(e) => onChange(e.target.value)}
+      rows={2}
+      style={{
+        fontSize: 12,
+        resize: "vertical",
+        minHeight: 44,
+        width: "100%",
+        border: `1px solid ${borderColor}`,
+        background: bgColor,
+        transition: "border-color 0.15s, background 0.15s",
+        lineHeight: 1.5,
+        boxSizing: "border-box",
+      }}
+    />
   );
 }
 

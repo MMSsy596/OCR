@@ -827,6 +827,171 @@ async def stream_project(project_id: str):
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# CapCut Import Endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_capcut_root() -> Path | None:
+    """Trả về đường dẫn gốc thư mục CapCut draft trên máy hiện tại."""
+    import os
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    if local_app_data:
+        candidate = Path(local_app_data) / "CapCut" / "User Data" / "Projects" / "com.lveditor.draft"
+        if candidate.exists():
+            return candidate
+    # Fallback: thử tìm theo profile user phổ biến
+    home = Path.home()
+    fallback = home / "AppData" / "Local" / "CapCut" / "User Data" / "Projects" / "com.lveditor.draft"
+    if fallback.exists():
+        return fallback
+    return None
+
+
+def _parse_capcut_draft(draft_folder: Path) -> "schemas.CapCutDraftInfo | None":
+    """Đọc draft_meta_info.json và trả về CapCutDraftInfo, bỏ qua nếu lỗi."""
+    meta_file = draft_folder / "draft_meta_info.json"
+    if not meta_file.exists():
+        return None
+    try:
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    draft_id = meta.get("draft_id", draft_folder.name)
+    draft_name = meta.get("draft_name", draft_folder.name)
+    duration_us = meta.get("tm_duration", 0) or 0
+    duration_sec = duration_us / 1_000_000
+
+    # Tìm video và SRT trong draft_materials
+    video_path = ""
+    srt_path = ""
+    for material_group in meta.get("draft_materials", []):
+        group_type = material_group.get("type", -1)
+        for item in material_group.get("value", []):
+            item_type = item.get("type", -1)
+            metetype = item.get("metetype", "")
+            file_path = item.get("file_Path", "") or ""
+            if group_type == 0 and item_type == 0 and metetype == "video" and file_path:
+                video_path = file_path
+            elif group_type == 2 and item_type == 2 and file_path and file_path.endswith(".srt"):
+                srt_path = file_path
+
+    cover_path = draft_folder / (meta.get("draft_cover", "draft_cover.jpg") or "draft_cover.jpg")
+    import base64
+    encoded_folder = base64.urlsafe_b64encode(str(draft_folder).encode()).decode()
+    cover_url = f"/capcut/drafts/cover/{encoded_folder}"
+
+    return schemas.CapCutDraftInfo(
+        draft_id=draft_id,
+        draft_name=draft_name,
+        draft_folder=str(draft_folder),
+        cover_url=cover_url,
+        duration_sec=round(duration_sec, 2),
+        has_video=bool(video_path and Path(video_path).exists()),
+        video_path=video_path,
+        has_srt=bool(srt_path and Path(srt_path).exists()),
+        srt_path=srt_path,
+    )
+
+
+@app.get("/capcut/drafts", response_model=list[schemas.CapCutDraftInfo])
+def list_capcut_drafts():
+    """Quét thư mục CapCut và trả về danh sách draft có sẵn."""
+    capcut_root = _get_capcut_root()
+    if not capcut_root:
+        return []
+
+    drafts: list[schemas.CapCutDraftInfo] = []
+    for entry in sorted(capcut_root.iterdir(), key=lambda p: p.stat().st_mtime if p.is_dir() else 0, reverse=True):
+        if not entry.is_dir() or entry.name.startswith("."):
+            continue
+        info = _parse_capcut_draft(entry)
+        if info:
+            drafts.append(info)
+    return drafts
+
+
+@app.get("/capcut/drafts/cover/{encoded_folder}")
+def get_capcut_cover(encoded_folder: str):
+    """Trả về ảnh thumbnail của CapCut draft."""
+    import base64
+    try:
+        folder_str = base64.urlsafe_b64decode(encoded_folder.encode()).decode()
+        folder = Path(folder_str)
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid_path")
+
+    capcut_root = _get_capcut_root()
+    if not capcut_root:
+        raise HTTPException(status_code=404, detail="capcut_not_found")
+
+    # Bảo mật: chỉ cho phép đọc ảnh trong thư mục CapCut
+    try:
+        folder.resolve().relative_to(capcut_root.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    cover = folder / "draft_cover.jpg"
+    if not cover.exists():
+        raise HTTPException(status_code=404, detail="cover_not_found")
+    return FileResponse(path=cover, media_type="image/jpeg")
+
+
+@app.post("/capcut/import", response_model=schemas.ProjectRead)
+def import_capcut_draft(payload: schemas.CapCutImportRequest, db: Session = Depends(get_db)):
+    """Tạo project OCR từ một CapCut draft: copy video + SRT vào storage."""
+    draft_folder = Path(payload.draft_folder)
+    if not draft_folder.exists() or not draft_folder.is_dir():
+        raise HTTPException(status_code=400, detail="draft_folder_not_found")
+
+    # Bảo mật: thư mục phải nằm trong CapCut root
+    capcut_root = _get_capcut_root()
+    if capcut_root:
+        try:
+            draft_folder.resolve().relative_to(capcut_root.resolve())
+        except ValueError:
+            raise HTTPException(status_code=403, detail="forbidden")
+
+    # Parse meta info
+    draft_info = _parse_capcut_draft(draft_folder)
+    if not draft_info:
+        raise HTTPException(status_code=400, detail="invalid_capcut_draft")
+
+    project_name = (payload.project_name or draft_info.draft_name or draft_folder.name).strip() or "CapCut Import"
+
+    # Tạo project trong DB
+    project_payload = schemas.ProjectCreate(
+        name=project_name,
+        source_lang=payload.source_lang,
+        target_lang=payload.target_lang,
+        roi=schemas.ROI(x=0.05, y=0.78, w=0.9, h=0.18),
+    )
+    project = crud.create_project(db, project_payload)
+
+    # Tạo thư mục storage
+    project_dir = settings.storage_path / project.id
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy video
+    if draft_info.has_video and draft_info.video_path:
+        src_video = Path(draft_info.video_path)
+        if src_video.exists():
+            ext = src_video.suffix or ".mp4"
+            dest_video = project_dir / f"source{ext}"
+            shutil.copy2(src_video, dest_video)
+            project = crud.attach_video(db, project, dest_video)
+
+    # Copy SRT (nếu có)
+    if draft_info.has_srt and draft_info.srt_path:
+        src_srt = Path(draft_info.srt_path)
+        if src_srt.exists():
+            dest_srt = project_dir / "manual.external.srt"
+            shutil.copy2(src_srt, dest_srt)
+
+    db.refresh(project)
+    return _to_project_read(project)
+
+
 @app.get("/{full_path:path}", include_in_schema=False)
 def serve_web_app(full_path: str):
     if not web_index_file.exists():
@@ -842,3 +1007,4 @@ def serve_web_app(full_path: str):
             return FileResponse(path=target)
 
     return FileResponse(path=web_index_file, media_type="text/html")
+

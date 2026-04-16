@@ -155,3 +155,23 @@ class JobRead(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ── CapCut Import ──────────────────────────────────────────────
+class CapCutDraftInfo(BaseModel):
+    draft_id: str
+    draft_name: str
+    draft_folder: str
+    cover_url: str  # URL để frontend load ảnh thumbnail
+    duration_sec: float
+    has_video: bool
+    video_path: str
+    has_srt: bool
+    srt_path: str
+
+
+class CapCutImportRequest(BaseModel):
+    draft_folder: str
+    project_name: str | None = None  # Nếu None thì dùng draft_name
+    source_lang: str = "zh"
+    target_lang: str = "vi"

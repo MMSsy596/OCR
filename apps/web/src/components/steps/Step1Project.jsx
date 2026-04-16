@@ -21,6 +21,7 @@ export function Step1Project({
   clearingSessions,
   translationPreset,
   setTranslationPreset,
+  onOpenCapcutModal,
 }) {
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", width: "100%", padding: "20px 0" }}>
@@ -29,14 +30,30 @@ export function Step1Project({
           <h2 style={{ fontSize: 20, display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ fontSize: 26 }}>🚀</span> Tạo dự án mới
           </h2>
-          <button
-            className="btn btn-sm btn-ghost"
-            onClick={clearOldSessions}
-            disabled={clearingSessions}
-            title="Dọn dẹp phiên cũ"
-          >
-            {clearingSessions ? "Đang xoá…" : "🧹 Dọn dẹp Cache"}
-          </button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button
+              className="btn btn-sm"
+              style={{
+                background: "linear-gradient(135deg, #7c3aed, #a855f7)",
+                color: "#fff",
+                border: "1px solid rgba(168,85,247,0.4)",
+                fontWeight: 600,
+                display: "flex", alignItems: "center", gap: 6,
+              }}
+              onClick={onOpenCapcutModal}
+              title="Import dự án từ CapCut"
+            >
+              🎬 Import CapCut
+            </button>
+            <button
+              className="btn btn-sm btn-ghost"
+              onClick={clearOldSessions}
+              disabled={clearingSessions}
+              title="Dọn dẹp phiên cũ"
+            >
+              {clearingSessions ? "Đang xoá…" : "🧹 Dọn dẹp Cache"}
+            </button>
+          </div>
         </div>
 
         <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 20, padding: "28px 32px" }}>

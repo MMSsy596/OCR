@@ -1,4 +1,5 @@
 import { startTransition, useEffect, useMemo, useState } from "react";
+import { CapcutImportModal } from "./components/CapcutImportModal";
 import { NotificationIsland } from "./components/NotificationIsland";
 import { WizardNav } from "./components/WizardNav";
 import { Step1Project } from "./components/steps/Step1Project";
@@ -122,6 +123,7 @@ export function App() {
   const [apiStatus, setApiStatus]         = useState("checking");
   const [runtimeCapabilities, setRuntimeCapabilities] = useState(null);
   const [syncPendingCount, setSyncPendingCount] = useState(0);
+  const [showCapcutModal, setShowCapcutModal] = useState(false);
 
   const [projectForm, setProjectForm] = useState({
     name: "", source_lang: "zh", target_lang: "vi",
@@ -213,6 +215,17 @@ export function App() {
       latestDubAudioUrl, latestDubAudioName, loadProjectData,
       syncPromptPresetForCurrentProjectIfEnabled,
     });
+
+  /* ── CapCut import handler ── */
+  async function handleCapcutImported(project, hasSrt) {
+    setShowCapcutModal(false);
+    await loadProjectsSafe();
+    setSelectedProjectId(project.id);
+    // Nếu có SRT và video → bước 4; chỉ có video → bước 3 (cài ROI)
+    setWizardStep(hasSrt ? 4 : 3);
+    setMessage(`Đã import dự án ${project.name} từ CapCut thành công!`);
+
+  }
 
   /* ── data loading ── */
   function beginSync() {
@@ -399,6 +412,7 @@ export function App() {
     projectForm, setProjectForm, creating, createProject,
     clearOldSessions, clearingSessions, translationPreset, setTranslationPreset,
     statusLabel,
+    onOpenCapcutModal: () => setShowCapcutModal(true),
   };
   const step2Props = {
     selectedProject, videoFile, setVideoFile, loading, uploadVideo,
@@ -524,6 +538,14 @@ export function App() {
         notices={notices}
         onDismiss={dismissNotice}
       />
+
+      {/* CapCut Import Modal */}
+      {showCapcutModal && (
+        <CapcutImportModal
+          onClose={() => setShowCapcutModal(false)}
+          onImported={handleCapcutImported}
+        />
+      )}
     </div>
   );
 }

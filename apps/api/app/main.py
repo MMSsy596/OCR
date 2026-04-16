@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from . import crud, models, schemas
 from .auth import require_api_auth
+from .capcut_exporter import export_to_capcut
 from .db import Base, SessionLocal, engine, ensure_runtime_indexes, get_db
 from .downloader import run_url_ingest_job
 from .exporter import export_subtitle_file
@@ -990,6 +991,58 @@ def import_capcut_draft(payload: schemas.CapCutImportRequest, db: Session = Depe
 
     db.refresh(project)
     return _to_project_read(project)
+
+
+@app.post("/projects/{project_id}/capcut/export", response_model=schemas.CapCutExportResponse)
+def export_project_to_capcut(
+    project_id: str,
+    payload: schemas.CapCutExportRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Tạo dự án CapCut Draft mới từ kết quả OCR:
+    - Video track: video gốc của dự án
+    - Subtitle track: các segment đã dịch với timestamp chính xác
+    - (Optional) Audio track: file dub nếu include_dub=true
+    """
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="project_not_found")
+
+    segments_db = crud.list_segments(db, project_id)
+    if not segments_db:
+        raise HTTPException(status_code=400, detail="no_segments")
+
+    segments = [
+        {
+            "start_sec": s.start_sec,
+            "end_sec":   s.end_sec,
+            "translated_text": s.translated_text or s.raw_text or "",
+            "raw_text":        s.raw_text or "",
+        }
+        for s in segments_db
+    ]
+
+    # Xác định đường dẫn audio dub (nếu có)
+    dub_path: str | None = None
+    if payload.include_dub:
+        project_dir = settings.storage_path / project_id
+        for ext in (".wav", ".mp3", ".m4a", ".aac"):
+            candidate = project_dir / f"dub_output{ext}"
+            if not candidate.exists():
+                candidate = project_dir / f"output_dub{ext}"
+            if candidate.exists():
+                dub_path = str(candidate)
+                break
+
+    result = export_to_capcut(
+        project_name=project.name,
+        video_path=project.video_path,
+        segments=segments,
+        dub_audio_path=dub_path,
+    )
+
+    return schemas.CapCutExportResponse(**result)
 
 
 @app.get("/{full_path:path}", include_in_schema=False)

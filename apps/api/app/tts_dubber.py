@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import logging
 import re
 import shutil
 import subprocess
@@ -16,6 +17,8 @@ from .db import SessionLocal
 from .job_state import persist_snapshot, prepare_job_artifacts, push_event, set_stat
 from .models import JobStatus, PipelineJob, Project, ProjectStatus
 from .settings import get_settings
+
+logger = logging.getLogger("solar.ocr.tts")
 
 
 TIMESTAMP_RE = re.compile(
@@ -243,6 +246,28 @@ async def _save_edge_tts(
     await communicate.save(str(output_path))
 
 
+def _run_edge_tts_in_thread(text: str, output_path: Path, voice: str, rate: str, volume: str, pitch: str) -> None:
+    """
+    Chạy edge-tts trong event loop riêng (không dùng asyncio.run) để tránh
+    deadlock khi gọi từ ThreadPoolExecutor trên Windows.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(
+            asyncio.wait_for(
+                _save_edge_tts(text=text, output_path=output_path,
+                               voice=voice, rate=rate, volume=volume, pitch=pitch),
+                timeout=45,  # timeout 45s per segment
+            )
+        )
+    finally:
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception:
+            pass
+        loop.close()
+
+
 def _save_pyttsx3_wav(text: str, output_path: Path, rate: str = "+0%") -> None:
     import pyttsx3  # type: ignore
 
@@ -399,21 +424,20 @@ def _render_tts_variant(
             return seg_wav, "fpt"
         except Exception as fpt_ex:
             # fallback sang edge nếu FPT lỗi
-            pass
+            logger.warning("FPT TTS thất bại, fallback sang Edge TTS: %s", str(fpt_ex)[:200])
+
 
     # ── Edge / fallback chain ──
     raw_mp3 = cache_dir / f"{cache_id}.edge.mp3"
     gtts_mp3 = cache_dir / f"{cache_id}.gtts.mp3"
     try:
-        asyncio.run(
-            _save_edge_tts(
-                text=text,
-                output_path=raw_mp3,
-                voice=voice,
-                rate=rate,
-                volume=volume,
-                pitch=pitch,
-            )
+        _run_edge_tts_in_thread(
+            text=text,
+            output_path=raw_mp3,
+            voice=voice,
+            rate=rate,
+            volume=volume,
+            pitch=pitch,
         )
         _run_cmd([
             "ffmpeg", "-y", "-i", str(raw_mp3),
@@ -422,6 +446,7 @@ def _render_tts_variant(
         ])
         return seg_wav, "fpt_fallback_edge" if tts_engine == "fpt" else "edge"
     except Exception as edge_ex:
+        logger.warning("Edge TTS thất bại: %s", str(edge_ex)[:200])
         try:
             _save_gtts_mp3(text, gtts_mp3, gtts_lang)
             _run_cmd([
@@ -597,9 +622,14 @@ def run_dub_job(
                 ): cache_key
                 for cache_key in unique_keys.keys()
             }
-            for future in as_completed(future_map):
+            for future in as_completed(future_map, timeout=120):
                 cache_key = future_map[future]
-                wav_path, engine_name = future.result()
+                try:
+                    wav_path, engine_name = future.result(timeout=60)
+                except Exception as seg_ex:
+                    logger.error("TTS render thất bại cho 1 segment, bỏ qua: %s", str(seg_ex)[:200])
+                    render_done += 1
+                    continue
                 render_results[cache_key] = (wav_path, engine_name)
                 render_done += 1
                 if engine_name in ("fpt", "fpt_fallback_edge"):
@@ -646,7 +676,12 @@ def run_dub_job(
         fit_max_speed = 1.0
 
         for idx, (cue, slot_sec, cache_key) in enumerate(cue_plans, start=1):
-            seg_wav, _engine_name = render_results[cache_key]
+            result_entry = render_results.get(cache_key)
+            if result_entry is None:
+                # Segment bị skip do TTS lỗi: bỏ qua (im lặng trong timeline)
+                logger.warning("Segment %d bỏ qua do TTS lỗi.", idx)
+                continue
+            seg_wav, _engine_name = result_entry
             fitted_wav = tmp_dir / f"seg_{idx:06d}.fit.wav"
             fit_used, before_sec, after_sec = _fit_wav_to_slot(seg_wav, fitted_wav, slot_sec)
             if fit_used:

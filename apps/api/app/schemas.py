@@ -175,3 +175,15 @@ class CapCutImportRequest(BaseModel):
     project_name: str | None = None  # Nếu None thì dùng draft_name
     source_lang: str = "zh"
     target_lang: str = "vi"
+
+
+class CapCutExportRequest(BaseModel):
+    include_dub: bool = False  # Kèm file audio dub (nếu có)
+
+
+class CapCutExportResponse(BaseModel):
+    success: bool
+    draft_name: str = ""
+    draft_folder: str = ""
+    subtitle_count: int = 0
+    message: str = ""

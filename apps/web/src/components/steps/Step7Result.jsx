@@ -1,5 +1,7 @@
 import { useState } from "react";
 
+const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+
 function formatDuration(sec) {
   if (!sec) return "--";
   const s = Math.round(sec);
@@ -9,13 +11,6 @@ function formatDuration(sec) {
   if (h > 0) return `${h}g ${m}p ${ss}s`;
   if (m > 0) return `${m} phút ${ss} giây`;
   return `${ss} giây`;
-}
-
-function formatBytes(bytes) {
-  if (!bytes) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function ResultCard({ icon, label, subtitle, href, filename, disabled, children }) {
@@ -71,10 +66,11 @@ export function Step7Result({
   videoSrc,
   onNewProject,
 }) {
-  const [showCapCutGuide, setShowCapCutGuide] = useState(false);
   const [capCutLoading, setCapCutLoading] = useState(false);
+  const [capCutResult, setCapCutResult]   = useState(null);
+  const [capCutError, setCapCutError]     = useState("");
+  const [includeDub, setIncludeDub]       = useState(false);
 
-  // Compute stats
   const segCount = editableSegments.length;
   const totalDuration = editableSegments.length
     ? Math.max(...editableSegments.map((s) => s.end_sec || 0))
@@ -95,99 +91,24 @@ export function Step7Result({
     setTimeout(exportSubtitle, 50);
   }
 
-  async function buildCapCutZip() {
+  async function exportToCapcut() {
+    if (!selectedProject?.id) return;
     setCapCutLoading(true);
+    setCapCutResult(null);
+    setCapCutError("");
     try {
-      // Dynamically import JSZip (available if installed, otherwise fallback)
-      let JSZip;
-      try {
-        JSZip = (await import("jszip")).default;
-      } catch {
-        setShowCapCutGuide(true);
-        setCapCutLoading(false);
-        return;
+      const res = await fetch(`${API_BASE}/projects/${selectedProject.id}/capcut/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ include_dub: includeDub && hasDubAudio }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.detail || data.message || `HTTP ${res.status}`);
       }
-
-      const zip = new JSZip();
-
-      // Build draft_content.json (CapCut draft format)
-      const projectName = selectedProject?.name || "Solar OCR";
-      const now = Date.now();
-      const draftId = `solar_${now}`;
-
-      // CapCut draft_content.json minimal structure
-      const draftContent = {
-        id: draftId,
-        name: projectName,
-        create_time: Math.floor(now / 1000),
-        update_time: Math.floor(now / 1000),
-        version: 360000,
-        type: "draft",
-        materials: {
-          videos: hasVideo ? [{
-            id: "video_main",
-            path: "video/source.mp4",
-            duration: Math.round(totalDuration * 1000000),
-            type: "video",
-          }] : [],
-          texts: [],
-          audios: hasDubAudio ? [{
-            id: "audio_dub",
-            path: `audio/${latestDubAudioName || "dub.wav"}`,
-            type: "audio",
-            duration: Math.round(totalDuration * 1000000),
-          }] : [],
-        },
-        tracks: [],
-      };
-
-      zip.file("draft_content.json", JSON.stringify(draftContent, null, 2));
-
-      // Add SRT file
-      if (hasSubtitle) {
-        const srtContent = editableSegments.map((seg, i) => {
-          const fmt = (sec) => {
-            const s = Math.floor(sec);
-            const ms = Math.round((sec - s) * 1000);
-            const hh = String(Math.floor(s / 3600)).padStart(2, "0");
-            const mm = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
-            const ss = String(s % 60).padStart(2, "0");
-            return `${hh}:${mm}:${ss},${String(ms).padStart(3, "0")}`;
-          };
-          return `${i + 1}\n${fmt(seg.start_sec)} --> ${fmt(seg.end_sec)}\n${seg.translated_text || seg.raw_text || ""}\n`;
-        }).join("\n");
-        zip.file("subtitle/subtitle.srt", srtContent);
-      }
-
-      // README inside zip
-      zip.file("README.txt",
-        `Solar OCR Studio — CapCut Import Package\n` +
-        `===========================================\n\n` +
-        `Dự án: ${projectName}\n` +
-        `Tổng phụ đề: ${segCount} dòng\n` +
-        `Thời lượng: ${formatDuration(totalDuration)}\n\n` +
-        `Hướng dẫn import vào CapCut:\n` +
-        `1. Mở File Explorer → điều hướng đến thư mục Drafts của CapCut:\n` +
-        `   Windows: C:\\Users\\<Tên>\\AppData\\Local\\CapCut\\User Data\\Projects\\com.lveditor.draft\\\n` +
-        `   Mac: /Users/<Tên>/Movies/CapCut/User Data/Projects/com.lveditor.draft/\n` +
-        `2. Tạo thư mục mới tên "${draftId}"\n` +
-        `3. Giải nén toàn bộ nội dung file ZIP này vào thư mục vừa tạo\n` +
-        `4. Mở CapCut → Dự án "${projectName}" sẽ xuất hiện trong danh sách\n` +
-        `5. Vào dự án → Import video thủ công nếu cần và attach subtitle\n\n` +
-        `Lưu ý: File video gốc không được đóng gói do kích thước lớn.\n` +
-        `Hãy kéo thả video vào CapCut sau khi mở draft.\n`
-      );
-
-      const blob = await zip.generateAsync({ type: "blob" });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `${projectName.replace(/\s+/g, "_")}_capcut.zip`;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      setCapCutResult(data);
     } catch (err) {
-      console.error("CapCut export error:", err);
-      setShowCapCutGuide(true);
+      setCapCutError(`Xuất thất bại: ${err.message}`);
     } finally {
       setCapCutLoading(false);
     }
@@ -211,10 +132,7 @@ export function Step7Result({
         </p>
 
         {/* Quick stats */}
-        <div style={{
-          display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap",
-          marginTop: 20,
-        }}>
+        <div style={{ display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap", marginTop: 20 }}>
           {[
             { icon: "📋", label: "Phụ đề", value: `${segCount} dòng` },
             { icon: "⏱️", label: "Thời lượng", value: formatDuration(totalDuration) },
@@ -241,8 +159,6 @@ export function Step7Result({
           <h2>📦 File kết quả</h2>
         </div>
         <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-
-          {/* Video gốc */}
           <ResultCard
             icon="🎬"
             label="Video gốc"
@@ -251,8 +167,6 @@ export function Step7Result({
             filename={selectedProject?.video_path?.split(/[/\\]/).pop() || "source.mp4"}
             disabled={!hasVideo}
           />
-
-          {/* Phụ đề */}
           <ResultCard
             icon="📄"
             label="File phụ đề"
@@ -270,8 +184,6 @@ export function Step7Result({
               </button>
             ))}
           </ResultCard>
-
-          {/* File âm thanh */}
           <ResultCard
             icon="🔊"
             label="File âm thanh lồng tiếng"
@@ -283,40 +195,116 @@ export function Step7Result({
         </div>
       </div>
 
-      {/* CapCut import */}
-      <div className="card">
-        <div className="card-header">
-          <h2>🎬 Import vào CapCut</h2>
+      {/* ── Xuất sang CapCut ─────────────────────────────────────── */}
+      <div className="card" style={{ border: "1px solid rgba(168,85,247,0.35)" }}>
+        <div className="card-header" style={{
+          background: "linear-gradient(135deg, rgba(124,58,237,0.18) 0%, rgba(168,85,247,0.08) 100%)",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 24 }}>📤</span>
+            <div>
+              <h2 style={{ margin: 0, fontSize: 16 }}>Xuất sang CapCut</h2>
+              <p style={{ margin: 0, fontSize: 11, color: "var(--text-muted)", marginTop: 1 }}>
+                Tạo dự án CapCut mới ngay trên máy — mở CapCut lên là thấy ngay
+              </p>
+            </div>
+          </div>
         </div>
-        <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <p style={{ margin: 0, fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6 }}>
-            Tải gói ZIP để nhanh chóng import dự án vào CapCut. Gói bao gồm file phụ đề đúng cấu trúc Draft của CapCut và hướng dẫn chi tiết.
-          </p>
+        <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+
+          {/* Status cards */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+            {[
+              { icon: "🎬", label: "Track video", desc: hasVideo ? "Video gốc đã nhúng" : "Không có video", ok: hasVideo },
+              { icon: "💬", label: "Track subtitle", desc: hasSubtitle ? `${segCount} dòng dịch` : "Chưa có phụ đề", ok: hasSubtitle },
+              { icon: "🔊", label: "Track audio dub", desc: hasDubAudio ? "Có file dub (tùy chọn)" : "Chưa tạo dub", ok: hasDubAudio },
+            ].map((item) => (
+              <div key={item.label} style={{
+                padding: "12px 14px",
+                borderRadius: "var(--radius-md)",
+                background: item.ok ? "rgba(34,197,94,0.08)" : "var(--surface-2)",
+                border: `1px solid ${item.ok ? "rgba(34,197,94,0.25)" : "var(--border)"}`,
+                display: "flex", alignItems: "center", gap: 10,
+              }}>
+                <span style={{ fontSize: 20 }}>{item.icon}</span>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700 }}>{item.label}</div>
+                  <div style={{ fontSize: 11, color: item.ok ? "rgba(34,197,94,0.9)" : "var(--text-muted)" }}>{item.desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Checkbox include dub */}
+          {hasDubAudio && (
+            <label style={{
+              display: "flex", alignItems: "center", gap: 10,
+              cursor: "pointer", fontSize: 13, color: "var(--text-secondary)",
+              padding: "8px 12px",
+              borderRadius: "var(--radius-sm)",
+              border: "1px solid var(--border)",
+              background: includeDub ? "rgba(168,85,247,0.08)" : "transparent",
+            }}>
+              <input
+                type="checkbox"
+                checked={includeDub}
+                onChange={(e) => setIncludeDub(e.target.checked)}
+                style={{ width: 16, height: 16, accentColor: "#a855f7" }}
+              />
+              <span>🔊 Kèm track audio lồng tiếng trong dự án CapCut</span>
+            </label>
+          )}
+
+          {/* Button */}
           <button
-            className="btn btn-primary"
-            style={{ width: "100%", gap: 8 }}
-            onClick={buildCapCutZip}
-            disabled={capCutLoading || (!hasSubtitle && !hasDubAudio)}
+            id="btn-export-capcut"
+            className="btn"
+            style={{
+              width: "100%", gap: 10, fontSize: 15, fontWeight: 700,
+              background: "linear-gradient(135deg, #7c3aed, #a855f7)",
+              color: "#fff",
+              border: "1px solid rgba(168,85,247,0.4)",
+              padding: "14px",
+              boxShadow: capCutLoading ? "none" : "0 4px 20px rgba(168,85,247,0.35)",
+              transition: "all 0.2s",
+            }}
+            disabled={capCutLoading || !hasSubtitle}
+            onClick={exportToCapcut}
           >
-            {capCutLoading ? "⏳ Đang tạo gói…" : "🎬 Tải gói import CapCut (.zip)"}
+            {capCutLoading ? "⏳ Đang tạo dự án CapCut…" : "📤 Xuất sang CapCut ngay"}
           </button>
 
-          {showCapCutGuide && (
+          {/* Success */}
+          {capCutResult?.success && (
             <div style={{
-              padding: "14px 16px",
+              padding: "16px 18px",
               borderRadius: "var(--radius-md)",
-              background: "var(--accent-muted)",
-              border: "1px solid var(--border)",
-              fontSize: 13, lineHeight: 1.8,
+              background: "rgba(34,197,94,0.1)",
+              border: "1px solid rgba(34,197,94,0.35)",
+              animation: "fadeInUp 0.3s ease",
             }}>
-              <strong>📂 Hướng dẫn import thủ công:</strong>
-              <ol style={{ margin: "8px 0 0 16px", padding: 0 }}>
-                <li>Tải file SRT ở trên</li>
-                <li>Mở CapCut → Tạo project mới</li>
-                <li>Import video gốc vào timeline</li>
-                <li>Vào <strong>Text → Import subtitles</strong> → chọn file SRT vừa tải</li>
-                {hasDubAudio && <li>Import file âm thanh lồng tiếng vào track Audio</li>}
-              </ol>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>
+                ✅ Đã tạo dự án CapCut thành công!
+              </div>
+              <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 6 }}>
+                Tên dự án: <strong>"{capCutResult.draft_name}"</strong> · {capCutResult.subtitle_count} dòng subtitle
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.6 }}>
+                👉 Mở CapCut → Dự án mới đã xuất hiện đầu danh sách. Nếu CapCut đang mở sẵn, hãy đóng và mở lại.
+              </div>
+            </div>
+          )}
+
+          {/* Error */}
+          {capCutError && (
+            <div style={{
+              padding: "12px 16px",
+              borderRadius: "var(--radius-md)",
+              background: "rgba(239,68,68,0.08)",
+              border: "1px solid rgba(239,68,68,0.3)",
+              fontSize: 13, color: "#fca5a5",
+            }}>
+              ⚠️ {capCutError}
             </div>
           )}
         </div>
@@ -324,18 +312,10 @@ export function Step7Result({
 
       {/* Actions */}
       <div style={{ display: "flex", gap: 10 }}>
-        <button
-          className="btn btn-ghost"
-          style={{ flex: 1 }}
-          onClick={onNewProject}
-        >
+        <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onNewProject}>
           ➕ Tạo dự án mới
         </button>
-        <button
-          className="btn btn-secondary"
-          style={{ flex: 1 }}
-          onClick={() => window.location.reload()}
-        >
+        <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => window.location.reload()}>
           🔄 Quay về đầu
         </button>
       </div>

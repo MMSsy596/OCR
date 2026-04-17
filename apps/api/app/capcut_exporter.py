@@ -228,6 +228,39 @@ def _pick_reference_draft(capcut_root: Path, exclude_names: set[str] | None = No
     return best_path
 
 
+def _pick_style_reference_draft(
+    capcut_root: Path,
+    style_source: str = "preset_0417",
+    exclude_names: set[str] | None = None,
+) -> Path | None:
+    exclude_names = exclude_names or set()
+    if style_source == "preset_0417":
+        preferred = capcut_root / "0417"
+        if preferred.name not in exclude_names and preferred.is_dir():
+            try:
+                content = _load_json(preferred / "draft_content.json")
+                text_materials = (content.get("materials") or {}).get("texts") or []
+                text_tracks = [track for track in (content.get("tracks") or []) if track.get("type") == "text" and track.get("segments")]
+                if text_materials and text_tracks:
+                    return preferred
+            except Exception:
+                logger.warning("Khong doc duoc style preset 0417", exc_info=True)
+    for entry in sorted(capcut_root.iterdir(), key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True):
+        if not entry.is_dir() or entry.name in exclude_names:
+            continue
+        if "broken" in entry.name.lower():
+            continue
+        try:
+            content = _load_json(entry / "draft_content.json")
+            text_materials = (content.get("materials") or {}).get("texts") or []
+            text_tracks = [track for track in (content.get("tracks") or []) if track.get("type") == "text" and track.get("segments")]
+            if text_materials and text_tracks:
+                return entry
+        except Exception:
+            logger.warning("Khong doc duoc draft style tham chieu %s", entry, exc_info=True)
+    return _pick_reference_draft(capcut_root, exclude_names=exclude_names)
+
+
 def _build_key_value_payload(segment_id: str, material_id: str, material_name: str) -> dict:
     return {
         segment_id: {
@@ -399,13 +432,6 @@ def _clone_text_material_from_template(template: dict, text: str, font_path: str
     material = _deep_clone(template)
     material["id"] = _new_uuid()
     material["group_id"] = group_id
-    material["font_path"] = ""
-    material["font_name"] = ""
-    material["font_title"] = "none"
-    material["font_id"] = ""
-    material["font_size"] = 4.0
-    material["text_size"] = 24
-    material["line_max_width"] = 0.9
     content = {}
     try:
         content = json.loads(material.get("content") or "{}")
@@ -416,10 +442,9 @@ def _clone_text_material_from_template(template: dict, text: str, font_path: str
     for style in styles:
         style["range"] = [0, text_len]
         font_info = style.get("font") or {}
-        font_info["id"] = ""
-        font_info["path"] = ""
+        if font_path and not font_info.get("path"):
+            font_info["path"] = font_path
         style["font"] = font_info
-        style["size"] = 4.0
     content["styles"] = styles
     content["text"] = text
     material["content"] = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
@@ -533,6 +558,7 @@ def _export_to_capcut_from_reference(
     *,
     capcut_root: Path,
     reference_draft: Path,
+    style_reference_draft: Path,
     draft_folder: Path,
     draft_name: str,
     video_path: str | None,
@@ -562,6 +588,7 @@ def _export_to_capcut_from_reference(
     (new_timeline_dir / "common_attachment").mkdir(exist_ok=True)
 
     draft_content = _load_json(draft_folder / "draft_content.json")
+    style_content = _load_json(style_reference_draft / "draft_content.json")
     draft_meta = _load_json(draft_folder / "draft_meta_info.json")
     timeline_layout = _load_json(draft_folder / "timeline_layout.json")
 
@@ -602,9 +629,11 @@ def _export_to_capcut_from_reference(
         video_track_segment["source_timerange"] = {"duration": video_duration_us, "start": 0}
     video_track_segment["target_timerange"] = {"duration": video_duration_us, "start": 0}
 
-    text_template = ((draft_content.get("materials") or {}).get("texts") or [None])[0]
-    animation_template = ((draft_content.get("materials") or {}).get("material_animations") or [None])[0]
-    text_segment_template = (text_track.get("segments") or [None])[0]
+    style_materials = style_content.get("materials") or {}
+    style_text_tracks = [track for track in (style_content.get("tracks") or []) if track.get("type") == "text" and track.get("segments")]
+    text_template = (style_materials.get("texts") or [None])[0]
+    animation_template = (style_materials.get("material_animations") or [None])[0]
+    text_segment_template = (style_text_tracks[0].get("segments") if style_text_tracks else [None])[0]
     if not text_template or not animation_template or not text_segment_template:
         raise RuntimeError("reference_text_templates_missing")
 
@@ -1003,6 +1032,7 @@ def export_to_capcut(
     video_path: str | None,
     segments: list[dict],
     dub_audio_path: str | None = None,
+    style_source: str = "preset_0417",
 ) -> dict:
     """
     Táº¡o CapCut draft má»›i tá»« káº¿t quáº£ OCR.
@@ -1040,13 +1070,20 @@ def export_to_capcut(
     final_name = draft_folder.name
 
     reference_draft = None
+    style_reference_draft = None
     if not dub_audio_path:
         reference_draft = _pick_reference_draft(capcut_root, exclude_names={final_name})
+        style_reference_draft = _pick_style_reference_draft(
+            capcut_root,
+            style_source=style_source,
+            exclude_names={final_name},
+        )
     if reference_draft:
         try:
             return _export_to_capcut_from_reference(
                 capcut_root=capcut_root,
                 reference_draft=reference_draft,
+                style_reference_draft=style_reference_draft or reference_draft,
                 draft_folder=draft_folder,
                 draft_name=final_name,
                 video_path=video_path,

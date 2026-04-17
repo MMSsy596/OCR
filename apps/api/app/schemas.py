@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -178,6 +178,7 @@ class CapCutImportRequest(BaseModel):
 
 
 class CapCutExportRequest(BaseModel):
+    style_source: Literal["preset_0417", "latest_draft"] = "preset_0417"
     include_dub: bool = False  # Kèm file audio dub (nếu có)
 
 

@@ -1041,6 +1041,7 @@ def export_project_to_capcut(
         video_path=project.video_path,
         segments=segments,
         dub_audio_path=dub_path,
+        style_source=payload.style_source,
     )
 
     return schemas.CapCutExportResponse(**result)

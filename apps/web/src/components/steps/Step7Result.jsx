@@ -70,6 +70,7 @@ export function Step7Result({
   const [capCutResult, setCapCutResult]   = useState(null);
   const [capCutError, setCapCutError]     = useState("");
   const [includeDub, setIncludeDub]       = useState(false);
+  const [capCutStyleSource, setCapCutStyleSource] = useState("preset_0417");
 
   const segCount = editableSegments.length;
   const totalDuration = editableSegments.length
@@ -100,7 +101,10 @@ export function Step7Result({
       const res = await fetch(`${API_BASE}/projects/${selectedProject.id}/capcut/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ include_dub: includeDub && hasDubAudio }),
+        body: JSON.stringify({
+          include_dub: includeDub && hasDubAudio,
+          style_source: capCutStyleSource,
+        }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
@@ -254,6 +258,38 @@ export function Step7Result({
               <span>🔊 Kèm track audio lồng tiếng trong dự án CapCut</span>
             </label>
           )}
+
+          <div style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            padding: "10px 12px",
+            borderRadius: "var(--radius-sm)",
+            border: "1px solid var(--border)",
+            background: "var(--surface-2)",
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>Kiểu subtitle khi xuất CapCut</div>
+            <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontSize: 13 }}>
+              <input
+                type="radio"
+                name="capcut-style-source"
+                value="preset_0417"
+                checked={capCutStyleSource === "preset_0417"}
+                onChange={(e) => setCapCutStyleSource(e.target.value)}
+              />
+              <span>Dùng mẫu cố định `0417` (Mặc định)</span>
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontSize: 13 }}>
+              <input
+                type="radio"
+                name="capcut-style-source"
+                value="latest_draft"
+                checked={capCutStyleSource === "latest_draft"}
+                onChange={(e) => setCapCutStyleSource(e.target.value)}
+              />
+              <span>Dùng style của draft CapCut mới nhất lúc bấm xuất</span>
+            </label>
+          </div>
 
           {/* Button */}
           <button

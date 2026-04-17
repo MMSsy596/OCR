@@ -39,6 +39,7 @@ export function useProjectRealtime({
   const lastDubDoneRef = useRef("");
   const hadActiveJobRef = useRef(false);
   const lastStreamSnapshotRef = useRef("");
+  const lastSnapshotAtRef = useRef(0);
   const loadProjectDataRef = useRef(loadProjectData);
 
   useEffect(() => {
@@ -52,6 +53,7 @@ export function useProjectRealtime({
       const serialized = JSON.stringify(payload);
       if (serialized === lastStreamSnapshotRef.current) return;
       lastStreamSnapshotRef.current = serialized;
+      lastSnapshotAtRef.current = Date.now();
 
       const project = payload?.project || null;
       const incomingJobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
@@ -92,6 +94,8 @@ export function useProjectRealtime({
   useEffect(() => {
     if (!selectedProjectId) return;
     pollTickRef.current = 0;
+    lastStreamSnapshotRef.current = "";
+    lastSnapshotAtRef.current = 0;
     loadProjectDataRef.current(selectedProjectId, { includeSegments: true });
     let stopped = false;
     let timerId = null;
@@ -103,15 +107,15 @@ export function useProjectRealtime({
 
     const runPoll = async () => {
       if (stopped) return;
-      if (streamState === "open") {
-        scheduleNext(document.hidden ? 25000 : 15000);
-        return;
-      }
       pollTickRef.current += 1;
       const nowMs = Date.now();
       const hasLiveJob = (jobsRef.current || []).some(
         (job) => job?.status === "running" || isQueueLikelyActive(job, nowMs),
       );
+      const hasFreshStreamSnapshot =
+        streamState === "open" &&
+        lastSnapshotAtRef.current > 0 &&
+        nowMs - lastSnapshotAtRef.current <= (document.hidden ? 25000 : 10000);
       let includeSegments = false;
       if (hasLiveJob) {
         hadActiveJobRef.current = true;
@@ -119,9 +123,15 @@ export function useProjectRealtime({
         includeSegments = hadActiveJobRef.current || pollTickRef.current % 6 === 0;
         hadActiveJobRef.current = false;
       }
-      await loadProjectDataRef.current(selectedProjectId, { includeSegments });
+      if (!hasFreshStreamSnapshot || pollTickRef.current % (hasLiveJob ? 2 : 4) === 0) {
+        await loadProjectDataRef.current(selectedProjectId, { includeSegments });
+      }
 
-      const nextDelay = document.hidden ? 20000 : hasLiveJob ? 5000 : 15000;
+      const nextDelay = document.hidden
+        ? (hasLiveJob ? 12000 : 20000)
+        : hasLiveJob
+          ? (hasFreshStreamSnapshot ? 4000 : 2000)
+          : (hasFreshStreamSnapshot ? 10000 : 5000);
       scheduleNext(nextDelay);
     };
 

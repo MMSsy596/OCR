@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -788,8 +789,8 @@ def _build_project_snapshot(project_id: str) -> dict:
             jobs = crud.list_jobs(db, project_id)
         return {
             "type": "snapshot",
-            "project": _to_project_read(project).model_dump(),
-            "jobs": [_job_to_job_read(job).model_dump() for job in jobs],
+            "project": _to_project_read(project).model_dump(mode="json"),
+            "jobs": [_job_to_job_read(job).model_dump(mode="json") for job in jobs],
         }
     finally:
         db.close()
@@ -807,7 +808,7 @@ async def stream_project(project_id: str):
         tick = 0
         while True:
             snapshot = _build_project_snapshot(project_id)
-            payload = json.dumps(snapshot, ensure_ascii=False)
+            payload = json.dumps(jsonable_encoder(snapshot), ensure_ascii=False)
             if payload != last_payload:
                 last_payload = payload
                 yield f"data: {payload}\n\n"
@@ -1060,4 +1061,3 @@ def serve_web_app(full_path: str):
             return FileResponse(path=target)
 
     return FileResponse(path=web_index_file, media_type="text/html")
-

@@ -106,11 +106,28 @@ def _parse_srt(path: Path) -> list[SrtCue]:
     return sorted(cues, key=lambda x: x.start_sec)
 
 
+def _get_ffprobe_path() -> str:
+    """Trả về đường dẫn ffprobe: system ffprobe ưu tiên, fallback sang imageio-ffmpeg bundle."""
+    sys_ffprobe = shutil.which("ffprobe")
+    if sys_ffprobe:
+        return sys_ffprobe
+    try:
+        import imageio_ffmpeg  # type: ignore
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        for suffix in ("ffprobe.exe", "ffprobe"):
+            candidate = Path(ffmpeg_exe).parent / suffix
+            if candidate.exists():
+                return str(candidate)
+    except Exception:
+        pass
+    return "ffprobe"
+
+
 def _probe_media_duration(path: Path) -> float | None:
     if not path.exists():
         return None
     cmd = [
-        "ffprobe",
+        _get_ffprobe_path(),
         "-v",
         "error",
         "-show_entries",
@@ -127,7 +144,23 @@ def _probe_media_duration(path: Path) -> float | None:
         return None
 
 
+def _get_ffmpeg_path() -> str:
+    """Trả về đường dẫn ffmpeg: system ffmpeg ưu tiên, fallback sang imageio-ffmpeg bundled."""
+    sys_ffmpeg = shutil.which("ffmpeg")
+    if sys_ffmpeg:
+        return sys_ffmpeg
+    try:
+        import imageio_ffmpeg  # type: ignore
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        pass
+    return "ffmpeg"  # Thử gọi ffmpeg cuối cùng, nếu lỗi sẽ raise ngay
+
+
 def _run_cmd(cmd: list[str]) -> None:
+    # Thay thế 'ffmpeg'/'ffprobe' đầu command bằng path thực tế
+    if cmd and cmd[0] == "ffmpeg":
+        cmd = [_get_ffmpeg_path()] + cmd[1:]
     subprocess.run(cmd, check=True, capture_output=True)
 
 

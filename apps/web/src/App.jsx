@@ -46,11 +46,23 @@ function hasValidRoi(roi) {
 function isQueuedJob(job) {
   return job?.status === "queued";
 }
+
+function jobTimeValue(job) {
+  const candidates = [job?.updated_at, job?.created_at, job?.artifacts?.last_event?.time];
+  for (const value of candidates) {
+    const parsed = value ? Date.parse(value) : Number.NaN;
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return 0;
+}
+
 function pickLatestByKind(jobs, kind) {
-  const pool = (jobs || []).filter((j) => (j?.artifacts?.job_kind || "pipeline") === kind);
+  const pool = (jobs || [])
+    .filter((j) => (j?.artifacts?.job_kind || "pipeline") === kind)
+    .sort((a, b) => jobTimeValue(b) - jobTimeValue(a));
   if (!pool.length) return null;
   return pool.find((j) => j.status === "running")
-      || pool.find((j) => isQueuedJob(j))
+      || pool.find((j) => isQueuedJob(j) && jobTimeValue(pool[0]) - jobTimeValue(j) < 15000)
       || pool.find((j) => j.status === "done" || j.status === "failed")
       || pool[0];
 }

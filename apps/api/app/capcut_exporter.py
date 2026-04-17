@@ -13,6 +13,7 @@ import base64
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -183,6 +184,16 @@ def _write_json(path: Path, payload: dict) -> None:
 
 def _pick_reference_draft(capcut_root: Path, exclude_names: set[str] | None = None) -> Path | None:
     exclude_names = exclude_names or set()
+    preferred_name = "0416"
+    preferred_path = capcut_root / preferred_name
+    if preferred_name not in exclude_names and preferred_path.is_dir():
+        try:
+            preferred_meta = _load_json(preferred_path / "draft_meta_info.json")
+            type0 = next((item for item in (preferred_meta.get("draft_materials") or []) if item.get("type") == 0), None)
+            if type0 and len(type0.get("value") or []) >= 2:
+                return preferred_path
+        except Exception:
+            logger.warning("Khong doc duoc preferred draft tham chieu %s", preferred_path, exc_info=True)
     best_path: Path | None = None
     best_score = -1
     for entry in capcut_root.iterdir():
@@ -198,6 +209,10 @@ def _pick_reference_draft(capcut_root: Path, exclude_names: set[str] | None = No
             continue
         try:
             content = _load_json(draft_content_path)
+            meta = _load_json(draft_meta_path)
+            type0 = next((item for item in (meta.get("draft_materials") or []) if item.get("type") == 0), None)
+            if not type0 or len(type0.get("value") or []) < 2:
+                continue
             materials = content.get("materials") or {}
             tracks = content.get("tracks") or []
             videos = materials.get("videos") or []
@@ -331,11 +346,66 @@ def _build_draft_virtual_store_payload(placeholder_id: str, video_id: str) -> di
     }
 
 
+def _parse_srt_timestamp(value: str) -> float:
+    hh, mm, rest = value.split(":")
+    ss, ms = rest.split(",")
+    return (int(hh) * 3600) + (int(mm) * 60) + int(ss) + (int(ms) / 1000.0)
+
+
+def _parse_srt_file(path: Path) -> list[dict]:
+    text = path.read_text(encoding="utf-8-sig")
+    blocks = re.split(r"\r?\n\r?\n+", text.strip())
+    segments: list[dict] = []
+    for block in blocks:
+        lines = [line.strip("\ufeff") for line in block.splitlines() if line.strip()]
+        if len(lines) < 2:
+            continue
+        time_line_index = 1 if "-->" in lines[1] else 0
+        if "-->" not in lines[time_line_index]:
+            continue
+        start_raw, end_raw = [part.strip() for part in lines[time_line_index].split("-->", 1)]
+        body = " ".join(lines[time_line_index + 1:]).strip()
+        if not body:
+            continue
+        segments.append({
+            "start_sec": _parse_srt_timestamp(start_raw),
+            "end_sec": _parse_srt_timestamp(end_raw),
+            "translated_text": body,
+            "raw_text": body,
+        })
+    return segments
+
+
+def _resolve_reference_segments(video_path: str | None, fallback_segments: list[dict]) -> list[dict]:
+    if video_path:
+        project_dir = Path(video_path).parent
+        candidates = [
+            project_dir / "output.vi.srt",
+            project_dir / "manual.translated.srt",
+            project_dir / "manual.external.srt",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                try:
+                    parsed = _parse_srt_file(candidate)
+                    if parsed:
+                        return parsed
+                except Exception:
+                    logger.warning("Khong parse duoc SRT tham chieu %s", candidate, exc_info=True)
+    return fallback_segments
+
+
 def _clone_text_material_from_template(template: dict, text: str, font_path: str, group_id: str) -> dict:
     material = _deep_clone(template)
     material["id"] = _new_uuid()
     material["group_id"] = group_id
-    material["font_path"] = font_path or material.get("font_path", "")
+    material["font_path"] = ""
+    material["font_name"] = ""
+    material["font_title"] = "none"
+    material["font_id"] = ""
+    material["font_size"] = 4.0
+    material["text_size"] = 24
+    material["line_max_width"] = 0.9
     content = {}
     try:
         content = json.loads(material.get("content") or "{}")
@@ -347,9 +417,9 @@ def _clone_text_material_from_template(template: dict, text: str, font_path: str
         style["range"] = [0, text_len]
         font_info = style.get("font") or {}
         font_info["id"] = ""
-        if font_path:
-            font_info["path"] = font_path
+        font_info["path"] = ""
         style["font"] = font_info
+        style["size"] = 4.0
     content["styles"] = styles
     content["text"] = text
     material["content"] = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
@@ -378,6 +448,24 @@ def _clone_text_segment_from_template(
     segment["source_timerange"] = None
     segment["target_timerange"] = {"duration": duration_us, "start": start_us}
     return segment
+
+
+def _build_text_track_lanes(valid_text_segments: list[dict]) -> list[list[dict]]:
+    lanes: list[list[dict]] = []
+    lane_end_times: list[int] = []
+    for seg in valid_text_segments:
+        start_us = _sec_to_us(seg.get("start_sec", 0))
+        assigned = False
+        for idx, lane_end in enumerate(lane_end_times):
+            if start_us >= lane_end:
+                lanes[idx].append(seg)
+                lane_end_times[idx] = _sec_to_us(seg.get("end_sec", 0))
+                assigned = True
+                break
+        if not assigned:
+            lanes.append([seg])
+            lane_end_times.append(_sec_to_us(seg.get("end_sec", 0)))
+    return lanes
 
 
 def _upsert_root_meta(
@@ -481,7 +569,8 @@ def _export_to_capcut_from_reference(
     video_width = int(video_info["width"])
     video_height = int(video_info["height"])
     video_fps = float(video_info["fps"])
-    total_end_sec = max((seg.get("end_sec", 0) for seg in segments), default=0) if segments else 0
+    reference_segments = _resolve_reference_segments(video_path, segments)
+    total_end_sec = max((seg.get("end_sec", 0) for seg in reference_segments), default=0) if reference_segments else 0
     video_duration_us = int(video_info["duration_us"]) or _sec_to_us(total_end_sec) or 30_000_000
     video_path_fwd = str(video_path).replace("\\", "/") if video_path else ""
     video_name = Path(video_path).name if video_path else "source.mp4"
@@ -520,36 +609,40 @@ def _export_to_capcut_from_reference(
         raise RuntimeError("reference_text_templates_missing")
 
     valid_text_segments = [
-        seg for seg in segments
+        seg for seg in reference_segments
         if (seg.get("translated_text") or seg.get("raw_text") or "").strip()
     ]
     valid_text_segments.sort(key=lambda item: float(item.get("start_sec", 0)))
 
     text_materials = []
     material_animations = []
-    text_track_segments = []
-    for idx, seg in enumerate(valid_text_segments):
-        text = (seg.get("translated_text") or seg.get("raw_text") or "").strip()
-        start_us = _sec_to_us(seg.get("start_sec", 0))
-        end_us = _sec_to_us(seg.get("end_sec", 0))
-        if idx + 1 < len(valid_text_segments):
-            next_start_us = _sec_to_us(valid_text_segments[idx + 1].get("start_sec", 0))
-            if next_start_us > start_us:
-                end_us = min(end_us, next_start_us)
-        duration_us = max(1, end_us - start_us)
-        text_material = _clone_text_material_from_template(text_template, text, font_path, group_id)
-        text_animation = _clone_text_animation_from_template(animation_template)
-        text_segment = _clone_text_segment_from_template(
-            text_segment_template,
-            text_material["id"],
-            text_animation["id"],
-            start_us,
-            duration_us,
-            14000 + idx,
-        )
-        text_materials.append(text_material)
-        material_animations.append(text_animation)
-        text_track_segments.append(text_segment)
+    text_tracks = []
+    render_index = 14000
+    for lane_idx, lane_segments in enumerate(_build_text_track_lanes(valid_text_segments)):
+        lane_track = _deep_clone(text_track)
+        lane_track["id"] = _new_uuid()
+        lane_track["segments"] = []
+        for seg in lane_segments:
+            text = (seg.get("translated_text") or seg.get("raw_text") or "").strip()
+            start_us = _sec_to_us(seg.get("start_sec", 0))
+            end_us = _sec_to_us(seg.get("end_sec", 0))
+            duration_us = max(1, end_us - start_us)
+            text_material = _clone_text_material_from_template(text_template, text, font_path, group_id)
+            text_animation = _clone_text_animation_from_template(animation_template)
+            text_segment = _clone_text_segment_from_template(
+                text_segment_template,
+                text_material["id"],
+                text_animation["id"],
+                start_us,
+                duration_us,
+                render_index,
+            )
+            text_segment["track_render_index"] = 1 + lane_idx
+            render_index += 1
+            text_materials.append(text_material)
+            material_animations.append(text_animation)
+            lane_track["segments"].append(text_segment)
+        text_tracks.append(lane_track)
 
     draft_content["id"] = timeline_uuid
     draft_content["canvas_config"]["width"] = video_width
@@ -562,7 +655,10 @@ def _export_to_capcut_from_reference(
         draft_content["materials"]["sound_channel_mappings"][0]["type"] = ""
     draft_content["materials"]["texts"] = text_materials
     draft_content["materials"]["material_animations"] = material_animations
-    text_track["segments"] = text_track_segments
+    draft_content["tracks"] = [
+        track for track in (draft_content.get("tracks") or [])
+        if track.get("type") != "text"
+    ] + text_tracks
 
     type0["value"][0]["id"] = placeholder_meta_id
     type0["value"][1]["id"] = video_meta_id
@@ -691,9 +787,9 @@ def _build_text_material(text: str, font_path: str) -> dict:
                     "solid": {"alpha": 1.0, "color": [1.0, 1.0, 1.0]},
                 },
             },
-            "font": {"id": "", "path": font_path or ""},
+            "font": {"id": "", "path": ""},
             "range": [0, text_len],
-            "size": 5.0,
+            "size": 4.0,
         }],
         "text": text,
     }
@@ -732,9 +828,9 @@ def _build_text_material(text: str, font_path: str) -> dict:
         "font_category_name": "",
         "font_id": "",
         "font_name": "",
-        "font_path": font_path or "",
+        "font_path": "",
         "font_resource_id": "",
-        "font_size": 5.0,
+        "font_size": 4.0,
         "font_source_platform": 0,
         "font_team_id": "",
         "font_third_resource_id": "",
@@ -758,7 +854,7 @@ def _build_text_material(text: str, font_path: str) -> dict:
         "layer_weight": 1,
         "letter_spacing": 0.0,
         "line_feed": 1,
-        "line_max_width": 0.82,
+        "line_max_width": 0.9,
         "line_spacing": 0.02,
         "lyric_group_id": "",
         "lyrics_template": {
@@ -816,7 +912,7 @@ def _build_text_material(text: str, font_path: str) -> dict:
         "text_exceeds_path_process_type": 0,
         "text_loop_on_path": False,
         "text_preset_resource_id": "",
-        "text_size": 30,
+        "text_size": 24,
         "text_to_audio_ids": [],
         "text_typesetting_path_index": 0,
         "text_typesetting_paths": None,
@@ -925,6 +1021,7 @@ def export_to_capcut(
         return {"success": False, "message": "KhÃ´ng tÃ¬m tháº¥y thÆ° má»¥c CapCut trÃªn mÃ¡y nÃ y."}
 
     font_path = _detect_capcut_font()
+    segments = _resolve_reference_segments(video_path, segments)
 
     now_us = int(time.time() * 1_000_000)
     now_s  = int(time.time())

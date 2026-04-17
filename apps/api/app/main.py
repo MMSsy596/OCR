@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import mimetypes
 import shutil
 import sys
 import threading
@@ -434,14 +435,17 @@ def stream_video(project_id: str, request: Request, db: Session = Depends(get_db
     file_size = video_path.stat().st_size
     range_header = request.headers.get("Range")
     
+    mime_type, _ = mimetypes.guess_type(str(video_path))
+    mime_type = mime_type or "video/mp4"
+
     if not range_header:
         headers = {
             "Accept-Ranges": "bytes",
             "Content-Length": str(file_size),
-            "Content-Type": "video/mp4",
+            "Content-Type": mime_type,
         }
         return FileResponse(path=video_path, headers=headers)
-        
+
     try:
         range_match = range_header.replace("bytes=", "").split("-")
         start = int(range_match[0]) if range_match[0] else 0
@@ -452,9 +456,9 @@ def stream_video(project_id: str, request: Request, db: Session = Depends(get_db
     if start >= file_size or end >= file_size:
         from fastapi import Response
         return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}"})
-        
+
     chunk_size = end - start + 1
-    
+
     def file_iterator(path, offset, bytes_to_read):
         with open(path, "rb") as f:
             f.seek(offset)
@@ -470,7 +474,7 @@ def stream_video(project_id: str, request: Request, db: Session = Depends(get_db
         "Content-Range": f"bytes {start}-{end}/{file_size}",
         "Accept-Ranges": "bytes",
         "Content-Length": str(chunk_size),
-        "Content-Type": "video/mp4",
+        "Content-Type": mime_type,
     }
     return StreamingResponse(
         file_iterator(video_path, start, chunk_size),
@@ -715,7 +719,9 @@ def retry_stuck_jobs(project_id: str, db: Session = Depends(get_db)):
                     fpt_speed=getattr(payload, "fpt_speed", 0),
                 )
             else:
-                run_pipeline(
+                _run_job_in_background(
+                    f"pipeline-retry-{new_job.id}",
+                    run_pipeline,
                     new_job.id,
                     input_mode=payload.input_mode,  # type: ignore[attr-defined]
                     gemini_api_key=payload.gemini_api_key,  # type: ignore[attr-defined]

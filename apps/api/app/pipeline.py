@@ -1116,22 +1116,43 @@ def run_pipeline(
             )
             ocr_source = "rapidocr"
             if not segments:
-                push_event(
-                    job,
-                    artifacts,
-                    "ocr",
-                    "OCR that khong co ket qua, fallback sang mau subtitle gia lap.",
-                    12,
-                    level="warning",
-                    logger_name="pipeline",
-                )
-                segments = _fake_ocr_segments(project)
-                ocr_source = "fake_fallback"
-                ocr_meta = {
-                    **ocr_meta,
-                    "engine": "fake_fallback",
-                    "segments_before_merge": len(segments),
-                }
+                ocr_engine_hint = ocr_meta.get("engine", "unknown")
+                # Kiểm tra flag debug – chỉ bật fake khi dev cần test end-to-end mà không có video thật
+                fake_fallback_enabled = os.environ.get("SOLAR_OCR_FAKE_FALLBACK", "").lower() in ("1", "true", "yes")
+                if fake_fallback_enabled:
+                    push_event(
+                        job,
+                        artifacts,
+                        "ocr",
+                        f"[DEBUG] OCR khong co ket qua (engine={ocr_engine_hint}), SOLAR_OCR_FAKE_FALLBACK=true → dung mau gia lap.",
+                        12,
+                        level="warning",
+                        logger_name="pipeline",
+                    )
+                    segments = _fake_ocr_segments(project)
+                    ocr_source = "fake_fallback"
+                    ocr_meta = {
+                        **ocr_meta,
+                        "engine": "fake_fallback",
+                        "segments_before_merge": len(segments),
+                    }
+                else:
+                    # Production: OCR thất bại thật sự → fail job với lý do rõ ràng
+                    set_stat(artifacts, "ocr", {**ocr_meta, "source": "failed", "segments_raw": 0})
+                    err_msg = (
+                        f"ocr_empty_result: engine={ocr_engine_hint}. "
+                        "Kiểm tra: video có subtitle không, ROI có bao subtitle không, "
+                        "và rapidocr_onnxruntime đã cài đúng chưa."
+                    )
+                    push_event(
+                        job, artifacts, "ocr", err_msg, 12, level="error", logger_name="pipeline"
+                    )
+                    _update_job(db, job, JobStatus.failed, 12, "ocr_empty_result", err_msg, artifacts=artifacts)
+                    project.status = ProjectStatus.failed
+                    db.add(project)
+                    db.commit()
+                    return {"ok": False, "job_id": job_id, "error": err_msg}
+
             set_stat(
                 artifacts,
                 "ocr",

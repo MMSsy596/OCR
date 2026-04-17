@@ -88,8 +88,7 @@ export function Step7Result({
   const hasVideo    = Boolean(selectedProject?.video_path);
 
   async function handleExportAndDownload(fmt) {
-    setExportForm((p) => ({ ...p, export_format: fmt }));
-    setTimeout(exportSubtitle, 50);
+    await exportSubtitle({ ...exportForm, export_format: fmt });
   }
 
   async function exportToCapcut() {

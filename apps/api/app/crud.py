@@ -160,7 +160,7 @@ def list_jobs(db: Session, project_id: str) -> list[PipelineJob]:
 
 
 def clear_sessions(db: Session, include_processing: bool = False) -> tuple[list[str], int]:
-    all_projects = list(db.scalars(select(Project.id, Project.status)).all())
+    all_projects = db.execute(select(Project.id, Project.status)).all()
 
     # Bóc tách dạng tuple (id, status)
     to_delete: list[str] = []

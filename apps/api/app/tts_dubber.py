@@ -655,7 +655,7 @@ def run_dub_job(
                 ): cache_key
                 for cache_key in unique_keys.keys()
             }
-            for future in as_completed(future_map, timeout=120):
+            for future in as_completed(future_map, timeout=max(120, 30 + len(unique_keys) * 45)):
                 cache_key = future_map[future]
                 try:
                     wav_path, engine_name = future.result(timeout=60)

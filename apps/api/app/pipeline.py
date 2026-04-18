@@ -414,15 +414,15 @@ def _ocr_segments_from_video(
             sig_diff = abs(sig_mean - last_signature[0]) + abs(sig_std - last_signature[1])
         should_skip_similar = (
             last_signature is not None
-            and sig_diff <= 2
+            and sig_diff <= 3
             and bool(segments)
-            and consecutive_similar_skips < 2
         )
         if should_skip_similar:
             meta["skipped_similar_frame_count"] = int(meta["skipped_similar_frame_count"]) + 1
             consecutive_similar_skips += 1
             if segments:
-                extended_end = (idx / fps) + max(0.5, effective_scan_interval)
+                # Extend end_sec liên tục theo frame hiện tại để lấp đầy khoảng trống
+                extended_end = (idx / fps) + max(0.4, effective_scan_interval * 0.6)
                 segments[-1]["end_sec"] = max(float(segments[-1]["end_sec"]), float(extended_end))
                 meta["duplicate_extend_count"] = int(meta["duplicate_extend_count"]) + 1
             continue
@@ -470,7 +470,8 @@ def _ocr_segments_from_video(
             continue
 
         start_sec = idx / fps
-        end_sec = start_sec + max(1.2, effective_scan_interval * 1.5)
+        # end_sec ban đầu ngắn hơn để bước post-process tự snap/fill sau
+        end_sec = start_sec + max(0.8, effective_scan_interval)
         last_text = text
         segments.append(
             {
@@ -555,6 +556,32 @@ def _merge_adjacent_similar_segments(
             continue
         merged.append(seg.copy())
     return merged
+
+
+def _fill_subtitle_gaps(
+    segments: list[dict[str, Any]],
+    max_gap_to_fill_sec: float = 1.5,
+    min_gap_between_sec: float = 0.04,
+) -> list[dict[str, Any]]:
+    """Post-process: snap end_sec về sát start_sec tiếp theo nếu gap nhỏ.
+    Giúp loại bỏ khoảng trắng thừa và đảm bảo phụ đề liên tục hơn."""
+    if len(segments) < 2:
+        return segments
+    result = [seg.copy() for seg in segments]
+    for i in range(len(result) - 1):
+        cur = result[i]
+        nxt = result[i + 1]
+        cur_end = float(cur["end_sec"])
+        nxt_start = float(nxt["start_sec"])
+        gap = nxt_start - cur_end
+        if gap <= 0:
+            # Overlap: cắt bớt end_sec để không overlap
+            cur["end_sec"] = max(float(cur["start_sec"]) + 0.1, nxt_start - min_gap_between_sec)
+        elif gap <= max_gap_to_fill_sec:
+            # Khoảng trống nhỏ: extend end_sec lên gần start tiếp theo
+            cur["end_sec"] = nxt_start - min_gap_between_sec
+        # Nếu gap lớn hơn max_gap_to_fill_sec → giữ nguyên (cố ý ngừng)
+    return result
 
 
 def _call_gemini_translate(
@@ -1149,16 +1176,22 @@ def run_pipeline(
                 28,
                 logger_name="pipeline",
             )
+            segments_before_merge = len(segments)
             segments = _merge_adjacent_similar_segments(
                 segments,
                 max_gap_sec=max(0.8, effective_scan_interval * 1.5),
                 ratio_threshold=0.9,
             )
+            # Fill khoảng trống nhỏ giữa các segment OCR
+            segments = _fill_subtitle_gaps(
+                segments,
+                max_gap_to_fill_sec=max(1.0, effective_scan_interval * 1.2),
+            )
             set_stat(
                 artifacts,
                 "dedupe_ocr",
                 {
-                    "before": int(ocr_meta.get("segments_before_merge", len(segments))),
+                    "before": segments_before_merge,
                     "after": len(segments),
                 },
             )
@@ -1252,6 +1285,11 @@ def run_pipeline(
                 effective_scan_interval * 1.5,
             ),
             ratio_threshold=0.92,
+        )
+        # Fill khoảng trống nhỏ lần cuối sau dịch (tránh khoảng trắng thừa trong SRT)
+        deduped = _fill_subtitle_gaps(
+            deduped,
+            max_gap_to_fill_sec=max(1.0, effective_scan_interval * 1.2),
         )
         set_stat(
             artifacts,

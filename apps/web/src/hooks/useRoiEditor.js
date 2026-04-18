@@ -8,7 +8,7 @@ export function useRoiEditor({
 }) {
   const [roiDraft, setRoiDraft] = useState({ x: 0.1, y: 0.75, w: 0.8, h: 0.2 });
   const [dragState, setDragState] = useState(null);
-  const [roiEditMode, setRoiEditMode] = useState(false);
+  const [roiEditMode, setRoiEditMode] = useState(true);
   const [isShiftPressed, setIsShiftPressed] = useState(false);
 
   const stageRef = useRef(null);
@@ -166,10 +166,7 @@ export function useRoiEditor({
   }
 
   function toggleRoiEditMode() {
-    setRoiEditMode((value) => !value);
-    if (!roiEditMode) {
-      setMessage?.("Đã bật chế độ chỉnh ROI. Giữ Shift để vẽ khung mới.");
-    }
+    // Chức năng đã bị loại bỏ theo yêu cầu, luôn bật edit mode
   }
 
   return {

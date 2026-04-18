@@ -136,6 +136,7 @@ export function App() {
   const [runtimeCapabilities, setRuntimeCapabilities] = useState(null);
   const [syncPendingCount, setSyncPendingCount] = useState(0);
   const [showCapcutModal, setShowCapcutModal] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen]     = useState(true);
 
   const [projectForm, setProjectForm] = useState({
     name: "", source_lang: "zh", target_lang: "vi",
@@ -474,15 +475,30 @@ export function App() {
   return (
     <div className="app-shell">
       {/* Sidebar */}
-      <aside className="sidebar">
-        <div className="sidebar-header">
-          <div className="app-logo-icon" style={{ background: "none", boxShadow: "none", padding: 0, overflow: "hidden", borderRadius: "var(--radius-sm)" }}>
-            <img src="/favicon.png" alt="Solar OCR" style={{ width: 26, height: 26, objectFit: "cover", display: "block", borderRadius: "var(--radius-sm)" }} />
-          </div>
-          <h1 style={{fontSize: 15, fontWeight: 700}}>Solar OCR Studio</h1>
+      <aside className={`sidebar ${isSidebarOpen ? "" : "collapsed"}`}>
+        <div className="sidebar-header" style={{ padding: isSidebarOpen ? "20px 24px" : "20px 0", justifyContent: isSidebarOpen ? "flex-start" : "center", display: "flex", alignItems: "center", gap: 12 }}>
+          <button 
+            className="sidebar-toggle-btn"
+            onClick={() => setIsSidebarOpen(!isSidebarOpen)} 
+            style={{ background: "transparent", border: "none", color: "var(--text-secondary)", cursor: "pointer", fontSize: 18, width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "var(--radius-sm)" }}
+            onMouseOver={(e) => e.currentTarget.style.background = "var(--bg-hover)"}
+            onMouseOut={(e) => e.currentTarget.style.background = "transparent"}
+            title={isSidebarOpen ? "Thu gọn (Thu hẹp sidebar)" : "Mở rộng"}
+          >
+            {isSidebarOpen ? "◀" : "▶"}
+          </button>
+          
+          {isSidebarOpen && (
+            <>
+              <div className="app-logo-icon" style={{ background: "none", boxShadow: "none", padding: 0, overflow: "hidden", borderRadius: "var(--radius-sm)" }}>
+                <img src="/favicon.png" alt="Solar OCR" style={{ width: 26, height: 26, objectFit: "cover", display: "block", borderRadius: "var(--radius-sm)" }} />
+              </div>
+              <h1 style={{fontSize: 15, fontWeight: 700, whiteSpace: "nowrap"}}>Solar OCR</h1>
+            </>
+          )}
         </div>
 
-        <div style={{ padding: "16px 14px", flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
+        {isSidebarOpen ? (
           <button
             className="btn btn-primary"
             style={{ width: "100%", justifyContent: "center" }}
@@ -519,7 +535,41 @@ export function App() {
               </div>
             ))}
           </div>
-        </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, alignItems: "center", paddingTop: 16 }}>
+            <button
+              style={{ background: "var(--text-primary)", color: "var(--bg-base)", width: 36, height: 36, borderRadius: "var(--radius-pill)", border: "none", cursor: "pointer", fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center" }}
+              title="Tạo dự án mới"
+              onClick={() => {
+                setIsSidebarOpen(true);
+                setSelectedProjectId("");
+              }}
+            >
+              +
+            </button>
+            <div style={{ height: 1, background: "var(--border)", width: "60%" }} />
+            {projects.slice(0, 5).map(p => (
+              <div 
+                key={p.id}
+                title={p.name}
+                onClick={() => {
+                  setSelectedProjectId(p.id);
+                  const targetStep = p.video_path ? (hasValidRoi(p.roi) ? 4 : 3) : 2;
+                  setWizardStep(targetStep);
+                }}
+                className={`project-card-icon ${p.id === selectedProjectId ? "active" : ""}`}
+                style={{ 
+                  cursor: "pointer", 
+                  width: 32, height: 32, fontSize: 14, 
+                  background: p.id === selectedProjectId ? "var(--accent)" : "var(--bg-elevated)", 
+                  color: p.id === selectedProjectId ? "#fff" : "inherit" 
+                }}
+              >
+                🎞️
+              </div>
+            ))}
+          </div>
+        )}
       </aside>
 
       {/* Main Area */}

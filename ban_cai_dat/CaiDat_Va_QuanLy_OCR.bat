@@ -4,6 +4,9 @@ chcp 65001 >nul
 cd /d "%~dp0"
 title Phan Mem Quan Ly OCR Studio
 
+rem === URL tai ban cap nhat file quan ly nay ===
+set "BAT_UPDATE_URL=https://raw.githubusercontent.com/nanbao/ocr/main/ban_cai_dat/CaiDat_Va_QuanLy_OCR.bat"
+
 :menu
 cls
 echo ========================================================
@@ -12,21 +15,23 @@ echo ========================================================
 echo Ban dang mo vi tri tai thu muc: %CD%
 echo ========================================================
 echo 1. Cai dat lan dau
-echo 2. Cap nhat phien ban moi
+echo 2. Cap nhat ung dung (Docker image)
 echo 3. Chay ung dung (Dung hang ngay)
 echo 4. Dung ung dung
-echo 5. Thoat bang quan ly
+echo 5. Tu cap nhat file quan ly nay
+echo 6. Thoat bang quan ly
 echo ========================================================
-set /p choice="Moi ban nhap lua chon (1-5): "
+set /p choice="Moi ban nhap lua chon (1-6): "
 
 if "%choice%"=="1" goto install
 if "%choice%"=="2" goto update
 if "%choice%"=="3" goto run
 if "%choice%"=="4" goto stop
-if "%choice%"=="5" goto end
+if "%choice%"=="5" goto update_self
+if "%choice%"=="6" goto end
 
 echo.
-echo [LOI] Lua chon cua ban khong hop le, vui long go dung so tu 1 nhes!
+echo [LOI] Lua chon cua ban khong hop le, vui long go dung so tu 1 den 6!
 pause
 goto menu
 
@@ -85,7 +90,7 @@ if %ERRORLEVEL% EQU 0 (
 )
 set /a WAIT_COUNT+=1
 if %WAIT_COUNT% LSS 12 (
-    echo Dang cho Docker khoi dong... [%WAIT_COUNT%/12 - %WAIT_COUNT%0/%120s]
+    echo Dang cho Docker khoi dong... [%WAIT_COUNT%/12 - khoang %WAIT_COUNT%0 giay]
     goto wait_docker
 )
 
@@ -113,6 +118,10 @@ if exist "%LOCALAPPDATA%\CapCut\User Data\Projects\com.lveditor.draft" (
     set "CAPCUT_FOUND=1"
 )
 
+rem --- Tinh HOST_STORAGE_ROOT: duong dan Windows cua thu muc luu du lieu ---
+set "HOST_STORAGE_WIN=%CD%\ocr-data\projects"
+set "HOST_STORAGE_FWD=%HOST_STORAGE_WIN:\=/%"
+
 echo name: ocr_studio> docker-compose.yml
 echo services:>> docker-compose.yml
 echo   redis:>> docker-compose.yml
@@ -136,12 +145,8 @@ echo       - DATABASE_URL=sqlite+pysqlite:////data/ocr.db>> docker-compose.yml
 echo       - REDIS_URL=redis://redis:6379/0>> docker-compose.yml
 echo       - STORAGE_ROOT=/data/projects>> docker-compose.yml
 echo       - CAPCUT_DRAFT_DIR=/capcut-data>> docker-compose.yml
-rem Ghi HOST_STORAGE_ROOT = duong dan Windows thuc cua thu muc luu du lieu
-set "HOST_STORAGE_WIN=%CD%\ocr-data\projects"
-set "HOST_STORAGE_FWD=%HOST_STORAGE_WIN:\=/%"
 echo       - HOST_STORAGE_ROOT=%HOST_STORAGE_FWD%>> docker-compose.yml
 echo     volumes:>> docker-compose.yml
-rem Bind mount thay vi named volume, CapCut moi doc duoc file video
 echo       - ./ocr-data:/data>> docker-compose.yml
 echo       - %CAPCUT_HOST_PATH%:/capcut-data>> docker-compose.yml
 echo     depends_on:>> docker-compose.yml
@@ -251,6 +256,69 @@ echo    - CACH SUA: Kiem tra Internet hoac tat bat lai Docker.
 echo ========================================================
 pause
 goto menu
+
+:update_self
+echo.
+echo ========================================================
+echo   TU CAP NHAT FILE QUAN LY
+echo ========================================================
+echo Dang tai phien ban moi tu:
+echo   %BAT_UPDATE_URL%
+echo.
+
+rem --- Tai file moi ve thu muc tam ---
+set "TMP_NEW=%TEMP%\ocr_update_new.bat"
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "try { Invoke-WebRequest -Uri '%BAT_UPDATE_URL%' -OutFile '%TMP_NEW%' -UseBasicParsing; exit 0 } catch { Write-Host $_.Exception.Message; exit 1 }"
+
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo [LOI] Khong tai duoc ban cap nhat!
+    echo Kiem tra lai:
+    echo   1. Ket noi Internet cua ban
+    echo   2. URL trong file nay co chinh xac khong
+    pause
+    goto menu
+)
+
+rem --- Kiem tra file tai ve co hop le khong ---
+findstr /i "@echo off" "%TMP_NEW%" >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo [LOI] File tai ve bi loi hoac khong phai file quan ly hop le!
+    del "%TMP_NEW%" >nul 2>&1
+    pause
+    goto menu
+)
+
+echo [OK] Da tai xong phien ban moi!
+echo.
+echo Dang chuan bi thay the va khoi dong lai...
+echo Cua so nay se tu dong dong va mo lai sau khi cap nhat.
+timeout /t 2 /nobreak >nul
+
+rem --- Tao helper script chay sau khi bat nay thoat ---
+rem    Helper se: cho 2s -> copy de -> mo bat moi -> tu xoa ban than
+set "HELPER=%TEMP%\ocr_self_update_helper.bat"
+set "THIS_BAT=%~f0"
+
+(
+    echo @echo off
+    echo timeout /t 2 /nobreak ^>nul
+    echo copy /y "%TMP_NEW%" "%THIS_BAT%" ^>nul
+    echo if %%ERRORLEVEL%% EQU 0 ^(
+    echo     start "" "%THIS_BAT%"
+    echo ^) else ^(
+    echo     echo [LOI] Khong the ghi de file. Thu chay lai bang quyen Admin.
+    echo     pause
+    echo ^)
+    echo del "%TMP_NEW%" ^>nul 2^>^&1
+    echo del "%%~f0"
+) > "%HELPER%"
+
+rem Chay helper trong nen roi thoat de giai phong file lock
+start "" "%HELPER%"
+exit
 
 :end
 exit

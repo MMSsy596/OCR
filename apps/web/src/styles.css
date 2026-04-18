@@ -123,6 +123,11 @@ body {
   z-index: 1;
 }
 
+/* Đẩy main-wrapper lên trên sidebar khi có phần tử full-screen bên trong */
+.main-wrapper:has(.fullscreen-step) {
+  z-index: 9999;
+}
+
 .app-header {
   display: flex;
   align-items: center;

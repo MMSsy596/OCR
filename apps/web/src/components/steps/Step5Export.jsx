@@ -26,6 +26,7 @@ export function Step5Export({
 }) {
   // Track which segment indices have unsaved changes
   const [dirtySet, setDirtySet] = useState(new Set());
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Reset dirty tracking when segments reloaded fresh
   useEffect(() => {
@@ -70,7 +71,14 @@ export function Step5Export({
   const dirtyCount = dirtySet.size;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16, height: "100%", minHeight: 0 }}>
+    <div 
+      className={isFullscreen ? "fullscreen-step" : ""}
+      style={
+        isFullscreen 
+          ? { position: "fixed", inset: 0, zIndex: 9999, background: "var(--bg-base)", padding: "20px 32px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 16 } 
+          : { display: "flex", flexDirection: "column", gap: 16, height: "100%", minHeight: 0 }
+      }
+    >
       <div className="step-guide">
         <span className="step-guide-icon">📝</span>
         <div className="step-guide-text">
@@ -189,9 +197,18 @@ export function Step5Export({
             📋 Phụ đề ({editableSegments.length} dòng
             {dirtyCount > 0 ? <span style={{ color: "var(--warning)" }}> · {dirtyCount} đã sửa</span> : ""})
           </h2>
-          <span className="badge badge-purple">
-            {currentVideoTime ? `${currentVideoTime.toFixed(1)}s` : "--"}
-          </span>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span className="badge badge-purple">
+              {currentVideoTime ? `${currentVideoTime.toFixed(1)}s` : "--"}
+            </span>
+            <button 
+              className="btn btn-sm btn-secondary" 
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              title={isFullscreen ? "Thu nhỏ về mặc định" : "Mở rộng toàn màn hình để dễ xem"}
+            >
+              {isFullscreen ? "↙️ Thu nhỏ" : "↗️ Toàn màn hình"}
+            </button>
+          </div>
         </div>
         <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
           {editableSegments.length === 0 ? (

@@ -499,7 +499,8 @@ export function App() {
         </div>
 
         {isSidebarOpen ? (
-          <button
+          <div style={{ padding: "16px 14px", flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
+            <button
             className="btn btn-primary"
             style={{ width: "100%", justifyContent: "center" }}
             onClick={() => setSelectedProjectId("")}
@@ -535,6 +536,7 @@ export function App() {
               </div>
             ))}
           </div>
+        </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12, alignItems: "center", paddingTop: 16 }}>
             <button

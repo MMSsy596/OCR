@@ -1028,12 +1028,27 @@ def export_project_to_capcut(
     dub_path: str | None = None
     if payload.include_dub:
         project_dir = settings.storage_path / project_id
-        for ext in (".wav", ".mp3", ".m4a", ".aac"):
-            candidate = project_dir / f"dub_output{ext}"
-            if not candidate.exists():
-                candidate = project_dir / f"output_dub{ext}"
-            if candidate.exists():
-                dub_path = str(candidate)
+        candidate_patterns = [
+            "dub_output.*",
+            "output_dub.*",
+            "dub.output.*",
+            "dub.*",
+            "output*.wav",
+            "output*.mp3",
+            "output*.m4a",
+            "output*.aac",
+        ]
+        audio_exts = {".wav", ".mp3", ".m4a", ".aac"}
+        seen_candidates: set[Path] = set()
+        for pattern in candidate_patterns:
+            for candidate in sorted(project_dir.glob(pattern), key=lambda path: path.stat().st_mtime, reverse=True):
+                if candidate in seen_candidates:
+                    continue
+                seen_candidates.add(candidate)
+                if candidate.is_file() and candidate.suffix.lower() in audio_exts:
+                    dub_path = str(candidate)
+                    break
+            if dub_path:
                 break
 
     result = export_to_capcut(

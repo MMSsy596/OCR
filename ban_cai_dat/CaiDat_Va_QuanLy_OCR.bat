@@ -136,14 +136,16 @@ echo       - DATABASE_URL=sqlite+pysqlite:////data/ocr.db>> docker-compose.yml
 echo       - REDIS_URL=redis://redis:6379/0>> docker-compose.yml
 echo       - STORAGE_ROOT=/data/projects>> docker-compose.yml
 echo       - CAPCUT_DRAFT_DIR=/capcut-data>> docker-compose.yml
+rem Ghi HOST_STORAGE_ROOT = duong dan Windows thuc cua thu muc luu du lieu
+set "HOST_STORAGE_WIN=%CD%\ocr-data\projects"
+set "HOST_STORAGE_FWD=%HOST_STORAGE_WIN:\=/%"
+echo       - HOST_STORAGE_ROOT=%HOST_STORAGE_FWD%>> docker-compose.yml
 echo     volumes:>> docker-compose.yml
-echo       - app_data:/data>> docker-compose.yml
+rem Bind mount thay vi named volume, CapCut moi doc duoc file video
+echo       - ./ocr-data:/data>> docker-compose.yml
 echo       - %CAPCUT_HOST_PATH%:/capcut-data>> docker-compose.yml
 echo     depends_on:>> docker-compose.yml
 echo       - redis>> docker-compose.yml
-echo.>> docker-compose.yml
-echo volumes:>> docker-compose.yml
-echo   app_data:>> docker-compose.yml
 
 if "%CAPCUT_FOUND%"=="1" (
     echo.

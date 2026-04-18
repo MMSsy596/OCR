@@ -21,6 +21,24 @@ from pathlib import Path
 
 logger = logging.getLogger("solar.ocr.capcut_export")
 
+def _to_host_path(path: str | None) -> str:
+    """Chuyen duong dan container (/data/projects/...) sang duong dan
+    Windows host de CapCut co the doc duoc.
+
+    Dung bien moi truong HOST_STORAGE_ROOT (dat qua docker-compose) de map.
+    Neu khong dat bien, tra ve path goc nguyen.
+    """
+    if not path:
+        return ""
+    host_storage = os.environ.get("HOST_STORAGE_ROOT", "").strip().replace("\\", "/")
+    container_storage = os.environ.get("STORAGE_ROOT", "/data/projects").rstrip("/")
+    path_fwd = str(path).replace("\\", "/")
+    if host_storage and path_fwd.startswith(container_storage):
+        rel = path_fwd[len(container_storage):]
+        return host_storage.rstrip("/") + rel
+    return path_fwd
+
+
 _BUNDLED_CAPCUT_TEMPLATE_DIR = Path(__file__).resolve().parent / "capcut_template" / "0416"
 
 
@@ -711,10 +729,10 @@ def _export_to_capcut_from_reference(
     video_fps = float(video_info["fps"])
     total_end_sec = max((seg.get("end_sec", 0) for seg in segments), default=0) if segments else 0
     video_duration_us = int(video_info["duration_us"]) or _sec_to_us(total_end_sec) or 30_000_000
-    video_path_fwd = str(video_path).replace("\\", "/") if video_path else ""
+    video_path_fwd = _to_host_path(video_path)
     video_name = Path(video_path).name if video_path else "source.mp4"
     include_dub = bool(dub_audio_path and Path(dub_audio_path).exists())
-    dub_path_fwd = str(dub_audio_path).replace("\\", "/") if include_dub and dub_audio_path else ""
+    dub_path_fwd = _to_host_path(dub_audio_path) if include_dub and dub_audio_path else ""
     dub_name = Path(dub_audio_path).name if include_dub and dub_audio_path else ""
 
     type0 = next((item for item in (draft_meta.get("draft_materials") or []) if item.get("type") == 0), None)
@@ -1262,7 +1280,7 @@ def export_to_capcut(
     meta_video_id = str(uuid.uuid4()).lower()
     video_library_material_id = uuid.uuid4().hex
 
-    video_path_fwd = str(video_path).replace("\\", "/") if video_path else ""
+    video_path_fwd = _to_host_path(video_path)
     video_name     = Path(video_path).name if video_path else "source.mp4"
     video_info = _probe_video_metadata(video_path)
     video_width = int(video_info["width"])
@@ -1347,7 +1365,7 @@ def export_to_capcut(
     audio_material = None
     if dub_audio_path and Path(dub_audio_path).exists():
         audio_mat_id = _new_uuid()
-        dub_path_fwd = str(dub_audio_path).replace("\\", "/")
+        dub_path_fwd = _to_host_path(dub_audio_path)
         dub_name = Path(dub_audio_path).name
         audio_material = {
             "app_id": 0, "category_id": "", "category_name": "",

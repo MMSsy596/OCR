@@ -1,4 +1,4 @@
-﻿"""
+"""
 CapCut Exporter â€” Táº¡o dá»± Ã¡n CapCut draft tá»« segments OCR Ä‘Ã£ dá»‹ch.
 
 Luá»“ng hoáº¡t Ä‘á»™ng:
@@ -50,19 +50,85 @@ def _sec_to_us(sec: float) -> int:
 
 
 def _get_capcut_root() -> Path | None:
-    """Tráº£ vá» thÆ° má»¥c gá»‘c CapCut draft."""
+    """Tim thu muc goc CapCut draft.
+
+    Thu tu uu tien:
+    1. Bien moi truong CAPCUT_DRAFT_DIR (danh cho Docker / may khach custom)
+    2. /capcut-data  (thu muc mount mac dinh trong Docker)
+    3. %LOCALAPPDATA% / home - khi chay native tren Windows
+    4. Quet tat ca o dia Windows (C:..Z:)
+    """
+    import string
+
+    _SUFFIX = Path("CapCut") / "User Data" / "Projects" / "com.lveditor.draft"
+
+    candidates: list[Path] = []
+
+    # --- 1. Env var CAPCUT_DRAFT_DIR ---
+    env_dir = os.environ.get("CAPCUT_DRAFT_DIR", "").strip()
+    if env_dir:
+        p = Path(env_dir)
+        if p.exists():
+            logger.info("CAPCUT_DRAFT_DIR: %s", p)
+            return p
+        # nguoi dung co the chi tro den thu muc CapCut (chua co com.lveditor.draft)
+        sub = p / "User Data" / "Projects" / "com.lveditor.draft"
+        if sub.exists():
+            logger.info("CAPCUT_DRAFT_DIR (sub): %s", sub)
+            return sub
+        logger.warning("CAPCUT_DRAFT_DIR duoc dat (%s) nhung khong ton tai!", env_dir)
+
+    # --- 2. /capcut-data - thu muc Docker volume mac dinh ---
+    docker_path = Path("/capcut-data")
+    if docker_path.exists():
+        candidates.append(docker_path)
+
+    # --- 3. %LOCALAPPDATA% / home (Windows native) ---
     local_app_data = os.environ.get("LOCALAPPDATA", "")
     if local_app_data:
-        candidate = Path(local_app_data) / "CapCut" / "User Data" / "Projects" / "com.lveditor.draft"
-        if candidate.exists():
-            return candidate
+        candidates.append(Path(local_app_data) / _SUFFIX)
+
     home = Path.home()
-    fallback = home / "AppData" / "Local" / "CapCut" / "User Data" / "Projects" / "com.lveditor.draft"
-    if fallback.exists():
-        return fallback
+    candidates.append(home / "AppData" / "Local" / _SUFFIX)
+
+    app_data = os.environ.get("APPDATA", "")
+    if app_data:
+        candidates.append(Path(app_data) / _SUFFIX)
+
+    # --- 4. Quet tat ca o dia (C:..Z:) ---
+    for drive_letter in string.ascii_uppercase:
+        drive = Path(f"{drive_letter}:\\")
+        if not drive.exists():
+            continue
+        users_dir = drive / "Users"
+        if users_dir.exists():
+            try:
+                for user_dir in users_dir.iterdir():
+                    if user_dir.is_dir():
+                        candidates.append(user_dir / "AppData" / "Local" / _SUFFIX)
+            except PermissionError:
+                pass
+        candidates.append(drive / _SUFFIX)
+
+    seen: set[str] = set()
+    for c in candidates:
+        try:
+            key = str(c).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            if c.exists():
+                logger.info("Tim thay CapCut tai: %s", c)
+                return c
+        except Exception:
+            continue
+
+    logger.warning(
+        "Khong tim thay thu muc CapCut. Da quet %d vi tri. "
+        "Hay dat bien moi truong CAPCUT_DRAFT_DIR.",
+        len(candidates),
+    )
     return None
-
-
 def _get_bundled_reference_draft() -> Path | None:
     if _BUNDLED_CAPCUT_TEMPLATE_DIR.exists():
         return _BUNDLED_CAPCUT_TEMPLATE_DIR

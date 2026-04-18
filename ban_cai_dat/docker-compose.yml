@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7
+    container_name: nanbao-ocr-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  app:
+    image: nanbao/ocr:latest
+    container_name: nanbao-ocr-app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_NAME=NanBao OCR Studio
+      - PORT=8000
+      - WEB_ORIGIN=http://localhost:8000
+      - ALLOWED_HOSTS=localhost,127.0.0.1
+      - ENABLE_DOCS=true
+      - DATABASE_URL=sqlite+pysqlite:////data/ocr.db
+      - REDIS_URL=redis://redis:6379/0
+      - STORAGE_ROOT=/data/projects
+      # - GEMINI_API_KEYS=your_api_key_here
+    volumes:
+      - app_data:/data
+    depends_on:
+      - redis
+
+volumes:
+  app_data:

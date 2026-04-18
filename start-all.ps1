@@ -42,9 +42,9 @@ function Stop-ByPidFile([string]$PidFile, [string]$Name) {
             Stop-Process -Id $targetPid -Force -ErrorAction Stop
             # Chờ Windows release handle file log (tối đa 3 giây)
             $proc.WaitForExit(3000) | Out-Null
-            Write-Info "Stopped old process of $Name (PID $targetPid)."
+            Write-Info "Đã dừng tiến trình cũ của $Name, PID $targetPid."
         } catch {
-            Write-Info "Cannot stop old process of $Name (PID $targetPid): $($_.Exception.Message)"
+            Write-Info "Không dừng được tiến trình cũ của $Name, PID $targetPid: $($_.Exception.Message)"
         }
     }
 }
@@ -71,7 +71,7 @@ function Start-DetachedCmd(
 
     $proc = [System.Diagnostics.Process]::Start($psi)
     Set-Content -Path $PidFile -Value $proc.Id -Encoding ascii
-    Write-Info "Started $Name (PID $($proc.Id))."
+    Write-Info "Đã khởi động $Name, PID $($proc.Id)."
 }
 
 
@@ -79,28 +79,28 @@ function Ensure-ApiEnv {
     if (Test-Path $ApiPython) {
         try {
             & $ApiPython -c "import fastapi, uvicorn, sqlalchemy" | Out-Null
-            Write-Info "Backend venv is ready."
+            Write-Info "Môi trường ảo backend đã sẵn sàng."
             return
         } catch {
-            Write-Info "Backend venv missing dependencies, installing..."
+            Write-Info "Môi trường ảo backend còn thiếu gói, đang cài lại..."
         }
     } else {
-        Write-Info "Creating backend venv..."
+        Write-Info "Đang tạo môi trường ảo backend..."
         if (Test-Path "C:\\Python312\\python.exe") {
             & "C:\\Python312\\python.exe" -m venv (Join-Path $ApiDir ".venv")
         } elseif (Get-Command py -ErrorAction SilentlyContinue) {
             & py -3.12 -m venv (Join-Path $ApiDir ".venv")
         } else {
-            throw "Python 3.12 not found."
+            throw "Không tìm thấy Python 3.12."
         }
     }
 
     if ($SkipInstall) {
-        Write-Info "Skip backend dependency install because -SkipInstall is set."
+        Write-Info "Bỏ qua cài gói backend vì đang dùng tùy chọn -SkipInstall."
         return
     }
 
-    Write-Info "Installing backend dependencies..."
+    Write-Info "Đang cài gói phụ thuộc cho backend..."
     try {
         & $ApiPython -m ensurepip --upgrade | Out-Null
     } catch {
@@ -115,14 +115,14 @@ function Wait-Http([string]$Name, [string]$Url, [int]$TimeoutSec = 20) {
         try {
             $res = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2
             if ($res.StatusCode -ge 200 -and $res.StatusCode -lt 500) {
-                Write-Info "$Name is reachable at $Url"
+                Write-Info "$Name đã sẵn sàng tại $Url"
                 return
             }
         } catch {
         }
         Start-Sleep -Milliseconds 600
     }
-    Write-Info "$Name did not respond in $TimeoutSec seconds: $Url"
+    Write-Info "$Name chưa phản hồi sau $TimeoutSec giây: $Url"
 }
 
 if (-not $NoBackend) { Stop-ByPidFile -PidFile $ApiPidFile -Name "backend" }
@@ -142,17 +142,17 @@ if (-not $NoFrontend) {
 }
 
 Write-Host ""
-Write-Info "Startup done."
+Write-Info "Khởi động xong."
 if (-not $NoFrontend) {
     Write-Host "  Web: http://localhost:$FrontendPort"
-    Write-Host "  Web log: $WebOutLog"
+    Write-Host "  Log web: $WebOutLog"
 }
 if (-not $NoBackend) {
     Write-Host "  API: http://localhost:$BackendPort"
     Write-Host "  Health: http://localhost:$BackendPort/health"
-    Write-Host "  API log: $ApiOutLog"
+    Write-Host "  Log API: $ApiOutLog"
 }
 Write-Host ""
-Write-Host "Quick stop commands:"
+Write-Host "Lệnh dừng nhanh:"
 Write-Host "  Stop-Process -Id (Get-Content `"$ApiPidFile`") -Force"
 Write-Host "  Stop-Process -Id (Get-Content `"$WebPidFile`") -Force"

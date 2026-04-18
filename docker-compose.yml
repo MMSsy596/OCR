@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   app:
     build:
@@ -11,8 +9,6 @@ services:
     container_name: nanbao-ocr-app
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_started
       redis:
         condition: service_started
     environment:
@@ -22,7 +18,7 @@ services:
       WEB_ORIGIN: http://localhost:8000
       ALLOWED_HOSTS: localhost,127.0.0.1
       ENABLE_DOCS: "true"
-      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/ocr
+      DATABASE_URL: sqlite+pysqlite:////data/ocr.db
       REDIS_URL: redis://redis:6379/0
       STORAGE_ROOT: /data/projects
       GEMINI_API_KEYS: ${GEMINI_API_KEYS:-}
@@ -35,19 +31,6 @@ services:
     volumes:
       - app_data:/data
 
-  postgres:
-    image: postgres:16
-    container_name: nanbao-ocr-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ocr
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5434:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
   redis:
     image: redis:7
     container_name: nanbao-ocr-redis
@@ -55,22 +38,6 @@ services:
     ports:
       - "6379:6379"
 
-  minio:
-    image: minio/minio:latest
-    container_name: nanbao-ocr-minio
-    command: server /data --console-address ":9001"
-    restart: unless-stopped
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - minio_data:/data
-
 volumes:
   app_data:
-  postgres_data:
-  minio_data:
 

@@ -229,27 +229,37 @@ export function NotificationIsland({ liveActivities, liveActivity, notices, onDi
           from { transform: rotate(0deg); }
           to { transform: rotate(360deg); }
         }
+        @keyframes islandPop {
+          0% { transform: scale(0.95); opacity: 0; }
+          100% { transform: scale(1); opacity: 1; }
+        }
       `}</style>
       {primary ? (
-        <div ref={containerRef} style={{ pointerEvents: "auto" }}>
+        <div ref={containerRef} style={{ pointerEvents: "auto", animation: "islandPop 0.4s cubic-bezier(0.32, 0.72, 0, 1) forwards" }}>
           <button
             type="button"
-            onClick={() => setExpanded((v) => !v)}
+            onClick={() => activities.length > 0 && setExpanded((v) => !v)}
             style={{
-              width: expanded ? 420 : 320,
-              maxWidth: "calc(100vw - 24px)",
-              border: "1px solid rgba(255,255,255,0.1)",
-              borderRadius: expanded ? 24 : 999,
-              background: "rgba(0,0,0,0.88)",
-              backdropFilter: "blur(20px) saturate(180%)",
-              boxShadow: "0 18px 48px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.08)",
-              padding: expanded ? 14 : "10px 14px",
+              width: expanded ? 400 : "auto",
+              minWidth: expanded ? 400 : 260,
+              maxWidth: "calc(100vw - 32px)",
+              border: "1px solid rgba(255,255,255,0.06)",
+              borderRadius: expanded ? 32 : 999,
+              background: "rgba(0,0,0,0.85)",
+              backdropFilter: "blur(24px) saturate(200%)",
+              boxShadow: "0 16px 40px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.1)",
+              padding: expanded ? "16px" : "12px 18px",
               cursor: "pointer",
-              transition: "all 320ms cubic-bezier(0.32, 0.72, 0, 1)",
+              transition: "all 0.4s cubic-bezier(0.32, 0.72, 0, 1)",
               textAlign: "left",
+              display: "flex",
+              flexDirection:expanded ? "column" : "row",
+              gap: expanded ? 12 : 10,
+              alignItems: expanded ? "stretch" : "center",
+              overflow: "hidden"
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               {primaryWaiting ? (
                 <WaitingSpinner accent={cfg.accent} />
               ) : (
@@ -280,8 +290,18 @@ export function NotificationIsland({ liveActivities, liveActivity, notices, onDi
               {primaryPct !== null ? (
                 <span style={{ color: "rgba(255,255,255,0.65)", fontSize: 12, fontWeight: 700 }}>{Math.round(primaryPct)}%</span>
               ) : null}
-              {activities.length > 1 ? (
-                <span style={{ color: "rgba(255,255,255,0.65)", fontSize: 11 }}>+{activities.length - 1}</span>
+              {activities.length > 1 && !expanded ? (
+                <div style={{ 
+                  background: "rgba(255,255,255,0.15)", 
+                  padding: "2px 6px", 
+                  borderRadius: 99, 
+                  color: "#fff", 
+                  fontSize: 11, 
+                  fontWeight: 600,
+                  flexShrink: 0
+                }}>
+                  +{activities.length - 1}
+                </div>
               ) : null}
             </div>
 

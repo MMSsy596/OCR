@@ -441,6 +441,7 @@ export function App() {
     latestPipelineJob, latestJobEvents, latestJobStats, pipelineForm, setPipelineForm,
     translationPreset, setTranslationPreset, streamState,
     retryingStuckJobs, retryStuckJobs, runtimeCapabilities,
+    onNextStep: () => setWizardStep(5),
   };
   const step5Props = {
     editableSegments, selectedProject, savingSegments, retranslating,

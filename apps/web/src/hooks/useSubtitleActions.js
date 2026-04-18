@@ -104,10 +104,10 @@ export function useSubtitleActions(deps) {
     }
   }
 
-  async function exportSubtitle() {
+  async function exportSubtitle(overrideForm) {
     if (!selectedProjectId) {
       setMessage("⚠️ Chọn dự án trước.");
-      return;
+      return null;
     }
     setExporting(true);
     setMessage("⏳ Đang xuất file phụ đề...");
@@ -115,12 +115,15 @@ export function useSubtitleActions(deps) {
       const out = await jsonFetch(`${apiBase}/projects/${selectedProjectId}/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(exportForm),
+        body: JSON.stringify(overrideForm || exportForm),
       });
-      setLastExport({ ...out, url: appendApiToken(`${apiBase}${out.download_url}`) });
-      setMessage(`✅ Đã xuất ${exportForm.export_format.toUpperCase()} (${exportForm.content_mode}).`);
+      const exportData = { ...out, url: appendApiToken(`${apiBase}${out.download_url}`) };
+      setLastExport(exportData);
+      setMessage(`✅ Đã xuất ${(overrideForm?.export_format || exportForm.export_format).toUpperCase()} (${overrideForm?.content_mode || exportForm.content_mode}).`);
+      return exportData;
     } catch (err) {
       setMessage(`❌ Lỗi xuất tệp: ${await normalizeApiError(err, "export_failed")}`);
+      return null;
     } finally {
       setExporting(false);
     }

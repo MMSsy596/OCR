@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 const PRESET_LABELS = {
   historical:    "Phim cổ trang",
@@ -31,14 +31,26 @@ export function Step4Run({
   retryingStuckJobs,
   retryStuckJobs,
   runtimeCapabilities,
+  onNextStep,
 }) {
   const [showLog, setShowLog] = useState(false);
+  const [wasRunning, setWasRunning] = useState(false);
+
   const status = latestPipelineJob?.status;
   const progress = latestPipelineJob?.progress ?? 0;
   const isRunning = status === "running";
   const isQueued  = status === "queued";
   const isDone    = status === "done";
   const isFailed  = status === "failed";
+
+  useEffect(() => {
+    if (isRunning || isQueued) {
+      setWasRunning(true);
+    } else if (isDone && wasRunning) {
+      setWasRunning(false);
+      onNextStep?.();
+    }
+  }, [isRunning, isQueued, isDone, wasRunning, onNextStep]);
 
 
   const statusColor = isDone ? "var(--success)" : isFailed ? "var(--danger)" : "var(--accent-2)";

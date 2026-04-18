@@ -69,7 +69,7 @@ export function Step7Result({
   const [capCutLoading, setCapCutLoading] = useState(false);
   const [capCutResult, setCapCutResult]   = useState(null);
   const [capCutError, setCapCutError]     = useState("");
-  const [includeDub, setIncludeDub]       = useState(false);
+  const [includeDub, setIncludeDub]       = useState(true);
 
   const segCount = editableSegments.length;
   const totalDuration = editableSegments.length
@@ -88,7 +88,16 @@ export function Step7Result({
 
   async function handleExportAndDownload(fmt) {
     setExportForm((p) => ({ ...p, export_format: fmt }));
-    setTimeout(exportSubtitle, 50);
+    const payload = { ...exportForm, export_format: fmt };
+    const result = await exportSubtitle(payload);
+    if (result && result.url) {
+      const link = document.createElement("a");
+      link.href = result.url;
+      link.download = `subtitle.${fmt}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    }
   }
 
   async function exportToCapcut() {

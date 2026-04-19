@@ -735,17 +735,38 @@ def _call_gemini_translate_batch(
         return [], f"gemini_batch_exception:{str(ex)[:300]}"
 
 
+def _load_persistent_gemini_keys() -> list[str]:
+    """Load Gemini keys từ file persistent /data/config/gemini_keys.txt."""
+    try:
+        from pathlib import Path as _Path
+        storage_root = _Path(get_settings().storage_root).resolve()
+        key_file = storage_root.parent / "config" / "gemini_keys.txt"
+        if key_file.exists():
+            raw = key_file.read_text(encoding="utf-8").strip()
+            return [k.strip() for k in raw.split(",") if k.strip()]
+    except Exception:
+        pass
+    return []
+
+
 def _resolve_gemini_keys_list(runtime_key: str | None) -> list[str]:
     """Trả về danh sách tất cả Gemini API key theo thứ tự ưu tiên.
-    Runtime key (từ form, có thể cách nhau bởi dấu phẩy) được đặt lên đầu, tiếp theo là các key trong .env."""
+    Runtime key (từ form) được đặt lên đầu, tiếp theo là persistent file, rồi .env."""
     runtime_raw = (runtime_key or "").strip()
     runtime_keys = [item.strip() for item in runtime_raw.split(",") if item.strip()]
     
+    # Đọc từ persistent file trước
+    persistent_keys = _load_persistent_gemini_keys()
+    
+    # Fallback .env
     env_raw = (get_settings().gemini_api_keys or "").strip()
     env_keys = [item.strip() for item in env_raw.split(",") if item.strip()]
     
     all_keys: list[str] = []
     for k in runtime_keys:
+        if k not in all_keys:
+            all_keys.append(k)
+    for k in persistent_keys:
         if k not in all_keys:
             all_keys.append(k)
     for k in env_keys:

@@ -1069,42 +1069,113 @@ def export_project_to_capcut(
 # Gemini Key Management
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _get_persistent_keys_path() -> Path:
+    from .settings import get_settings as _gs
+    storage_root = Path(_gs().storage_root).resolve()
+    data_dir = storage_root.parent
+    config_dir = data_dir / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir / "gemini_keys.txt"
+
+
 def _load_gemini_keys_from_env() -> list[str]:
-    """Đọc danh sách Gemini keys từ settings (reload cache)."""
+    """Đọc danh sách Gemini keys từ file persistent (fallback .env)."""
+    # 1. Thử đọc từ persistent file
+    p_path = _get_persistent_keys_path()
+    try:
+        if p_path.exists():
+            raw = p_path.read_text(encoding="utf-8").strip()
+            return [k.strip() for k in raw.split(",") if k.strip()]
+    except Exception:
+        pass
+        
+    # 2. Fallback .env qua settings
     try:
         from .settings import get_settings as _gs
         _gs.cache_clear()
     except Exception:
         pass
+    from .settings import get_settings
     raw = (get_settings().gemini_api_keys or "").strip()
     return [k.strip() for k in raw.split(",") if k.strip()]
 
 
 def _save_gemini_keys_to_env(keys: list[str]) -> None:
-    """Lưu danh sách keys vào file .env."""
-    env_path = Path(__file__).resolve().parents[3] / ".env"
+    """Lưu danh sách keys vào persistent file."""
     keys_value = ",".join(keys)
-    lines: list[str] = []
-    found = False
-    if env_path.exists():
-        lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
-    new_lines: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("GEMINI_API_KEYS=") or stripped.startswith("GEMINI_API_KEYS ="):
+    
+    # 1. Ghi vào persistent file
+    try:
+        p_path = _get_persistent_keys_path()
+        p_path.write_text(keys_value, encoding="utf-8")
+    except Exception as e:
+        print(f"Warning: Could not save keys to persistent path: {e}")
+        
+    # 2. Vẫn cố gắng ghi vào .env cho tương thích ngược (nếu có thể)
+    env_path = Path(__file__).resolve().parents[3] / ".env"
+    try:
+        lines: list[str] = []
+        found = False
+        if env_path.exists():
+            lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
+        new_lines: list[str] = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("GEMINI_API_KEYS=") or stripped.startswith("GEMINI_API_KEYS ="):
+                new_lines.append(f"GEMINI_API_KEYS={keys_value}\n")
+                found = True
+            else:
+                new_lines.append(line)
+        if not found:
             new_lines.append(f"GEMINI_API_KEYS={keys_value}\n")
-            found = True
-        else:
-            new_lines.append(line)
-    if not found:
-        new_lines.append(f"GEMINI_API_KEYS={keys_value}\n")
-    env_path.write_text("".join(new_lines), encoding="utf-8")
-    # Invalidate settings cache sau khi ghi
+        env_path.write_text("".join(new_lines), encoding="utf-8")
+    except Exception:
+        pass
+        
+    # Invalidate settings cache
     try:
         from .settings import get_settings as _gs
         _gs.cache_clear()
     except Exception:
         pass
+
+
+class UISettingsRequest(BaseModel):
+    settings: dict
+
+@app.get("/admin/ui-settings")
+def get_ui_settings():
+    """Lấy các cấu hình giao diện (prompts, presets, forms) được lưu persistent."""
+    from .settings import get_settings as _gs
+    import json
+    
+    config_file = Path(_gs().storage_root).resolve().parent / "config" / "ui_settings.json"
+    if config_file.exists():
+        try:
+            return json.loads(config_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+@app.post("/admin/ui-settings")
+def save_ui_settings(payload: UISettingsRequest):
+    """Lưu trữ thêm cấu hình giao diện (prompts, presets, ...) vào data storage persistent."""
+    from .settings import get_settings as _gs
+    import json
+    
+    config_file = Path(_gs().storage_root).resolve().parent / "config" / "ui_settings.json"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    existing = {}
+    if config_file.exists():
+        try:
+            existing = json.loads(config_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+            
+    existing.update(payload.settings)
+    config_file.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"ok": True, "settings": existing}
 
 
 def _mask_key(key: str) -> str:

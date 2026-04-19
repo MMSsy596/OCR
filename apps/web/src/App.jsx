@@ -271,12 +271,29 @@ export function App() {
   async function loadProjectsSafe() {
     beginSync();
     try {
-      const [data, cap] = await Promise.all([
+      const [data, cap, uiSettings] = await Promise.all([
         jsonFetch(`${API_BASE}/projects`),
         jsonFetch(`${API_BASE}/runtime/capabilities`).catch(() => null),
+        jsonFetch(`${API_BASE}/admin/ui-settings`).catch(() => ({})),
       ]);
       setProjects(data);
       setRuntimeCapabilities(cap);
+      
+      // Khôi phục uiSettings từ backend (ghi đè localStorage nếu có)
+      if (uiSettings && Object.keys(uiSettings).length > 0) {
+        if (uiSettings.pipeline_form_saved) {
+           setPipelineForm((prev) => ({...prev, ...uiSettings.pipeline_form_saved}));
+           if (uiSettings.pipeline_form_saved.translationPreset) {
+               setTranslationPreset(uiSettings.pipeline_form_saved.translationPreset);
+           }
+        }
+        if (uiSettings.translation_context_custom_presets) {
+           localStorage.setItem("translation_context_custom_presets", JSON.stringify(uiSettings.translation_context_custom_presets));
+           // Dispatch event context
+           window.dispatchEvent(new Event("storage"));
+        }
+      }
+      
       setApiStatus("online");
       if (!selectedProjectId && data.length) setSelectedProjectId(data[0].id);
     } catch {

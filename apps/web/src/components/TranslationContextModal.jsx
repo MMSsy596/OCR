@@ -29,6 +29,13 @@ function saveCustomPresets(presets) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(presets));
   } catch(_) {}
+  
+  const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+  fetch(`${API_BASE}/admin/ui-settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ settings: { translation_context_custom_presets: presets } }),
+  }).catch(() => {});
 }
 
 export function TranslationContextModal({

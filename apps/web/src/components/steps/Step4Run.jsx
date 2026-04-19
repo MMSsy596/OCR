@@ -193,15 +193,24 @@ export function Step4Run({
   const keySwitchLog  = translateStat.key_switch_log || [];
   const totalKeysAvail = translateStat.total_keys_available ?? 0;
 
-  // Lưu settings vào localStorage trước khi chạy
+  // Lưu settings vào localStorage và backend đồng bộ trước khi chạy
   function handleStartPipeline() {
+    const savedConfig = {
+      ...pipelineForm,
+      translationPreset,
+      savedAt: Date.now(),
+    };
     try {
-      localStorage.setItem("pipeline_form_saved", JSON.stringify({
-        ...pipelineForm,
-        translationPreset,
-        savedAt: Date.now(),
-      }));
+      localStorage.setItem("pipeline_form_saved", JSON.stringify(savedConfig));
     } catch(_) {}
+    
+    const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+    fetch(`${API_BASE}/admin/ui-settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings: { pipeline_form_saved: savedConfig } }),
+    }).catch(() => {});
+    
     startPipeline();
   }
 

@@ -733,6 +733,33 @@ def _call_gemini_translate_batch(
         return [], f"gemini_batch_exception:{str(ex)[:300]}"
 
 
+def _resolve_gemini_keys_list(runtime_key: str | None) -> list[str]:
+    """Trả về danh sách tất cả Gemini API key theo thứ tự ưu tiên.
+    Runtime key (từ form, có thể cách nhau bởi dấu phẩy) được đặt lên đầu, tiếp theo là các key trong .env."""
+    runtime_raw = (runtime_key or "").strip()
+    runtime_keys = [item.strip() for item in runtime_raw.split(",") if item.strip()]
+    
+    env_raw = (get_settings().gemini_api_keys or "").strip()
+    env_keys = [item.strip() for item in env_raw.split(",") if item.strip()]
+    
+    all_keys: list[str] = []
+    for k in runtime_keys:
+        if k not in all_keys:
+            all_keys.append(k)
+    for k in env_keys:
+        if k not in all_keys:
+            all_keys.append(k)
+    return all_keys
+
+
+def _resolve_gemini_keys(runtime_key: str | None) -> tuple[str | None, str | None]:
+    """Backward-compat: trả về (primary, backup) từ danh sách đầy đủ."""
+    all_keys = _resolve_gemini_keys_list(runtime_key)
+    primary = all_keys[0] if len(all_keys) >= 1 else None
+    backup = all_keys[1] if len(all_keys) >= 2 else None
+    return primary, backup
+
+
 def _translate_with_fallback(
     text: str,
     prompt: str,
@@ -743,18 +770,33 @@ def _translate_with_fallback(
     target_lang: str,
     context_before: str = "",
     context_after: str = "",
+    all_keys: list[str] | None = None,
+    key_switch_log: list[dict] | None = None,
 ) -> tuple[str, str, str]:
+    """Dịch với fallback qua tất cả key có sẵn. Log chi tiết từng bước rollback."""
     invalid_keys = invalid_keys or set()
-    candidate_keys: list[str] = []
-    if api_key and api_key not in candidate_keys:
-        candidate_keys.append(api_key)
-    if backup_api_key and backup_api_key not in candidate_keys:
-        candidate_keys.append(backup_api_key)
+    # Xây dựng danh sách key ứng viên: all_keys ưu tiên nếu có, else dùng api_key+backup
+    if all_keys:
+        candidate_keys = [k for k in all_keys if k]
+    else:
+        candidate_keys = []
+        if api_key:
+            candidate_keys.append(api_key)
+        if backup_api_key and backup_api_key not in candidate_keys:
+            candidate_keys.append(backup_api_key)
 
     err = ""
+    tried_count = 0
     for idx, candidate in enumerate(candidate_keys):
         if candidate in invalid_keys:
+            if key_switch_log is not None:
+                key_switch_log.append({
+                    "action": "skip_invalid",
+                    "key_index": idx,
+                    "key_suffix": candidate[-6:] if len(candidate) > 6 else "***",
+                })
             continue
+        tried_count += 1
         translated, err = _call_gemini_translate(
             text,
             prompt,
@@ -765,35 +807,54 @@ def _translate_with_fallback(
             context_after=context_after,
         )
         if translated:
+            if key_switch_log is not None and tried_count > 1:
+                key_switch_log.append({
+                    "action": "success_on_fallback",
+                    "key_index": idx,
+                    "key_suffix": candidate[-6:] if len(candidate) > 6 else "***",
+                })
             return translated, "gemini", ""
-        # Retry with fallback key only when current key is invalid.
+        # Key lỗi → đánh dấu invalid và thử key tiếp theo
         if _is_gemini_key_error(err):
             invalid_keys.add(candidate)
+            if key_switch_log is not None:
+                next_key = next((k for k in candidate_keys[idx+1:] if k not in invalid_keys), None)
+                key_switch_log.append({
+                    "action": "key_invalid_switching",
+                    "key_index": idx,
+                    "key_suffix": candidate[-6:] if len(candidate) > 6 else "***",
+                    "error": err[:200],
+                    "switching_to_index": candidate_keys.index(next_key) if next_key else None,
+                    "switching_to_suffix": next_key[-6:] if next_key and len(next_key) > 6 else None,
+                })
             continue
-        if idx == 0:
-            break
+        # Lỗi không phải do key (rate limit, nghẽn mạng...) → chỉ thử key tiếp nếu còn
+        if key_switch_log is not None:
+            key_switch_log.append({
+                "action": "non_key_error",
+                "key_index": idx,
+                "key_suffix": candidate[-6:] if len(candidate) > 6 else "***",
+                "error": err[:200],
+            })
+        if idx < len(candidate_keys) - 1:
+            continue  # Thử key tiếp theo
+        break
     try:
         from deep_translator import GoogleTranslator  # type: ignore
 
         translated = GoogleTranslator(source="auto", target=target_lang).translate(text)
         if translated:
+            if key_switch_log is not None:
+                key_switch_log.append({"action": "fallback_deep_translator", "result": "ok"})
             return str(translated).strip(), "deep_translator", ""
     except Exception as ex:
         dt_err = f"deep_translator_exception:{str(ex)[:300]}"
     else:
         dt_err = "deep_translator_empty"
-    final_err = err if api_key else "gemini_skipped_no_key"
+    final_err = err if (api_key or candidate_keys) else "gemini_skipped_no_key"
+    if key_switch_log is not None:
+        key_switch_log.append({"action": "all_keys_failed", "final_err": final_err[:200], "dt_err": dt_err[:200]})
     return f"[{target_lang}] {text}", "fallback_tag", f"{final_err} | {dt_err}"
-
-
-def _resolve_gemini_keys(runtime_key: str | None) -> tuple[str | None, str | None]:
-    runtime = (runtime_key or "").strip()
-    keys = (get_settings().gemini_api_keys or "").strip()
-    env_keys = [item.strip() for item in keys.split(",") if item.strip()]
-
-    primary = runtime or (env_keys[0] if env_keys else "")
-    backup = next((k for k in env_keys if k != primary), "")
-    return (primary or None), (backup or None)
 
 
 def _is_gemini_key_error(err: str) -> bool:
@@ -808,6 +869,7 @@ def _translate_project_segments(
     backup_api_key: str | None,
     voice_map: dict[str, str] | None = None,
     progress_hook: Callable[[dict[str, Any]], None] | None = None,
+    all_api_keys: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int], str, dict[str, Any]]:
     voice_map = voice_map or {}
     db_segments = list_segments(db, project.id)
@@ -823,8 +885,17 @@ def _translate_project_segments(
     gemini_batch_lines_ok = 0
     invalid_gemini_keys: set[str] = set()
     _invalid_keys_lock = threading.Lock()
+    key_switch_events: list[dict] = []  # Log rollback toàn bộ
 
-    if (primary_api_key or backup_api_key) and len(db_segments) >= 2:
+    # Xây dựng danh sách key đầy đủ
+    effective_all_keys: list[str] = all_api_keys if all_api_keys else []
+    if not effective_all_keys:
+        if primary_api_key:
+            effective_all_keys.append(primary_api_key)
+        if backup_api_key and backup_api_key not in effective_all_keys:
+            effective_all_keys.append(backup_api_key)
+
+    if effective_all_keys and len(db_segments) >= 2:
         chunk_size = 8
         # Chuẩn bị tất cả chunks để submit song song
         chunks_meta: list[tuple[int, list, str, str]] = []
@@ -840,45 +911,67 @@ def _translate_project_segments(
 
         def _translate_one_chunk(
             args: tuple[int, list, str, str],
-        ) -> tuple[int, list, list, str]:
-            """Dịch một chunk, trả về (start, chunk, translated_lines, err)."""
+        ) -> tuple[int, list, list, str, list]:
+            """Dịch một chunk, trả về (start, chunk, translated_lines, err, switch_log)."""
             start_idx, chunk, ctx_before, ctx_after = args
             lines = [seg.raw_text for seg in chunk]
+            chunk_switch_log: list[dict] = []
+
+            # Vòng lặp qua tất cả key cho đến khi thành công
             with _invalid_keys_lock:
-                batch_key = primary_api_key if (primary_api_key and primary_api_key not in invalid_gemini_keys) else backup_api_key
-            translated, err = _call_gemini_translate_batch(
-                lines,
-                project.prompt,
-                batch_key or "",
-                project.source_lang,
-                project.target_lang,
-                context_before=ctx_before,
-                context_after=ctx_after,
-            )
-            if (
-                (not translated)
-                and _is_gemini_key_error(err)
-                and batch_key
-                and backup_api_key
-                and batch_key != backup_api_key
-            ):
-                with _invalid_keys_lock:
-                    invalid_gemini_keys.add(batch_key)
+                remaining_keys = [k for k in effective_all_keys if k not in invalid_gemini_keys]
+
+            translated: list[str] = []
+            err = ""
+            for k_idx, batch_key in enumerate(remaining_keys):
+                chunk_switch_log.append({
+                    "action": "trying_key",
+                    "key_index": effective_all_keys.index(batch_key) if batch_key in effective_all_keys else k_idx,
+                    "key_suffix": batch_key[-6:] if len(batch_key) > 6 else "***",
+                    "chunk_start": start_idx,
+                })
                 translated, err = _call_gemini_translate_batch(
                     lines,
                     project.prompt,
-                    backup_api_key,
+                    batch_key,
                     project.source_lang,
                     project.target_lang,
                     context_before=ctx_before,
                     context_after=ctx_after,
                 )
-            return start_idx, chunk, translated, err
+                if translated and len(translated) == len(lines):
+                    if k_idx > 0:
+                        chunk_switch_log.append({
+                            "action": "success_on_fallback_key",
+                            "key_suffix": batch_key[-6:] if len(batch_key) > 6 else "***",
+                            "fallback_index": k_idx,
+                        })
+                    break  # Thành công, thoát vòng lặp
+                # Key lỗi
+                if _is_gemini_key_error(err):
+                    with _invalid_keys_lock:
+                        invalid_gemini_keys.add(batch_key)
+                    next_key = next((k for k in remaining_keys[k_idx+1:] if k not in invalid_gemini_keys), None)
+                    chunk_switch_log.append({
+                        "action": "key_failed_switching",
+                        "key_suffix": batch_key[-6:] if len(batch_key) > 6 else "***",
+                        "error": err[:300],
+                        "switching_to": next_key[-6:] if next_key and len(next_key) > 6 else ("none" if not next_key else "***"),
+                    })
+                else:
+                    # Lỗi khác (rate limit, parse fail...)
+                    chunk_switch_log.append({
+                        "action": "chunk_error_trying_next",
+                        "key_suffix": batch_key[-6:] if len(batch_key) > 6 else "***",
+                        "error": err[:300],
+                    })
+            return start_idx, chunk, translated, err, chunk_switch_log
 
         with ThreadPoolExecutor(max_workers=max_parallel, thread_name_prefix="gemini-batch") as pool:
             futures = {pool.submit(_translate_one_chunk, args): args for args in chunks_meta}
             for future in as_completed(futures):
-                start_idx, chunk, translated_chunk, batch_err = future.result()
+                start_idx, chunk, translated_chunk, batch_err, chunk_log = future.result()
+                key_switch_events.extend(chunk_log)
                 if translated_chunk and len(translated_chunk) == len(chunk):
                     gemini_batch_chunks_ok += 1
                     gemini_batch_lines_ok += len(chunk)
@@ -888,7 +981,7 @@ def _translate_project_segments(
                     gemini_batch_chunks_failed += 1
                     if batch_err and not first_translation_error:
                         first_translation_error = batch_err
-                    if "gemini_batch_" in batch_err:
+                    if "gemini_batch_" in batch_err or "gemini_" in batch_err:
                         gemini_error_count += 1
 
     for idx, seg in enumerate(db_segments):
@@ -899,6 +992,7 @@ def _translate_project_segments(
             provider = "gemini"
             err = ""
         else:
+            seg_switch_log: list[dict] = []
             txt, provider, err = _translate_with_fallback(
                 seg.raw_text,
                 project.prompt,
@@ -909,7 +1003,11 @@ def _translate_project_segments(
                 project.target_lang,
                 context_before=prev_text,
                 context_after=next_text,
+                all_keys=effective_all_keys if effective_all_keys else None,
+                key_switch_log=seg_switch_log,
             )
+            if seg_switch_log:
+                key_switch_events.extend(seg_switch_log)
         if provider in translation_stats:
             translation_stats[provider] += 1
         if err and not first_translation_error:
@@ -951,6 +1049,7 @@ def _translate_project_segments(
             )
     translate_detail = {
         "total_segments": len(db_segments),
+        "total_keys_available": len(effective_all_keys),
         "used_runtime_key": bool(primary_api_key),
         "fallback_key_enabled": bool(backup_api_key),
         "provider_counts": translation_stats.copy(),
@@ -960,6 +1059,7 @@ def _translate_project_segments(
         "gemini_batch_chunks_failed": gemini_batch_chunks_failed,
         "gemini_batch_lines_ok": gemini_batch_lines_ok,
         "fallback_samples": fallback_samples,
+        "key_switch_log": key_switch_events[-50:] if key_switch_events else [],  # giữ tối đa 50 sự kiện
     }
     return normalized, translation_stats, first_translation_error, translate_detail
 
@@ -970,13 +1070,16 @@ def retranslate_project_segments(project_id: str, gemini_api_key: str | None = N
         project = db.get(Project, project_id)
         if not project:
             return {"ok": False, "error": "project_not_found"}
-        primary_key, backup_key = _resolve_gemini_keys(gemini_api_key)
+        all_keys = _resolve_gemini_keys_list(gemini_api_key)
+        primary_key = all_keys[0] if all_keys else None
+        backup_key = all_keys[1] if len(all_keys) >= 2 else None
         normalized, translation_stats, first_translation_error, _ = _translate_project_segments(
             db,
             project,
             primary_key,
             backup_key,
             voice_map={},
+            all_api_keys=all_keys,
         )
         replace_segments(db, project.id, normalized)
         updated = list_segments(db, project.id)
@@ -1002,7 +1105,9 @@ def run_pipeline(
     db = SessionLocal()
     voice_map = voice_map or {}
     try:
-        primary_key, backup_key = _resolve_gemini_keys(gemini_api_key)
+        all_keys = _resolve_gemini_keys_list(gemini_api_key)
+        primary_key = all_keys[0] if all_keys else None
+        backup_key = all_keys[1] if len(all_keys) >= 2 else None
         job = db.get(PipelineJob, job_id)
         if not job:
             return {"ok": False, "error": "job_not_found"}
@@ -1065,6 +1170,7 @@ def run_pipeline(
                 "voice_map_size": len(voice_map),
                 "gemini_key_present": bool(primary_key),
                 "gemini_fallback_key_enabled": bool(backup_key),
+                "gemini_total_keys": len(all_keys),
             },
         )
         _update_job(db, job, JobStatus.running, 1, "init", artifacts=artifacts)
@@ -1203,7 +1309,7 @@ def run_pipeline(
             job,
             artifacts,
             "translate",
-            f"Bat dau dich {len(segments)} doan, gemini_key={'co' if primary_key else 'khong'}, backup_key={'co' if backup_key else 'khong'}.",
+            f"Bat dau dich {len(segments)} doan, so key Gemini={len(all_keys)}, {'co' if primary_key else 'khong co'} key chinh.",
             35,
             logger_name="pipeline",
         )
@@ -1238,6 +1344,7 @@ def run_pipeline(
             backup_key,
             voice_map=voice_map,
             progress_hook=_on_translate_progress,
+            all_api_keys=all_keys,
         )
         set_stat(
             artifacts,

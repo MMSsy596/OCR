@@ -192,7 +192,10 @@ echo ========================================================
 echo DANG CAP NHAT PHIEN BAN MOI NHAT TREN MAY CHU...
 echo ========================================================
 docker compose pull
-docker compose down
+docker compose down --remove-orphans
+rem --- Xoa container cu con sot neu docker compose down chua don het ---
+docker rm -f nanbao-ocr-redis >nul 2>&1
+docker rm -f nanbao-ocr-app >nul 2>&1
 docker compose up -d
 if %ERRORLEVEL% NEQ 0 goto error_handling
 echo.

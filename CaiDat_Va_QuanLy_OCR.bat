@@ -40,7 +40,7 @@ echo     ports:>> docker-compose.yml
 echo       - "6379:6379">> docker-compose.yml
 echo.>> docker-compose.yml
 echo   app:>> docker-compose.yml
-echo     image: nanbao/ocr:latest>> docker-compose.yml
+echo     image: nanbao/ocr:tagname>> docker-compose.yml
 echo     container_name: nanbao-ocr-app>> docker-compose.yml
 echo     restart: unless-stopped>> docker-compose.yml
 echo     ports:>> docker-compose.yml
@@ -87,7 +87,10 @@ echo ========================================================
 echo DANG CAP NHAT PHIEN BAN MOI NHAT...
 echo ========================================================
 docker compose pull
-docker compose down
+docker compose down --remove-orphans
+rem --- Xoa container cu con sot neu docker compose down chua don het ---
+docker rm -f nanbao-ocr-redis >nul 2>&1
+docker rm -f nanbao-ocr-app >nul 2>&1
 docker compose up -d
 echo.
 echo ========================================================

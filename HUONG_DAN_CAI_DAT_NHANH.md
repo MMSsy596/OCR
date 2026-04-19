@@ -23,7 +23,7 @@ services:
       - "6379:6379"
 
   app:
-    image: nanbao/ocr:latest
+    image: nanbao/ocr:tagname
     container_name: nanbao-ocr-app
     restart: unless-stopped
     ports:

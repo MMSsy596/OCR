@@ -187,3 +187,44 @@ class CapCutExportResponse(BaseModel):
     draft_folder: str = ""
     subtitle_count: int = 0
     message: str = ""
+
+
+# ── Gemini Key Management ──────────────────────────────────────
+class GeminiKeyItem(BaseModel):
+    index: int
+    key_masked: str      # Hiển thị ẩn: ****abc123
+    key_suffix: str      # 6 ký tự cuối
+    is_primary: bool
+
+
+class GeminiKeyListResponse(BaseModel):
+    keys: list[GeminiKeyItem]
+    total: int
+
+
+class GeminiKeyAddRequest(BaseModel):
+    api_key: str
+
+
+class GeminiKeyUpdateRequest(BaseModel):
+    api_key: str
+
+
+class GeminiKeyDeleteResponse(BaseModel):
+    ok: bool
+    deleted_index: int
+    remaining: int
+
+
+class GeminiKeyReorderRequest(BaseModel):
+    new_order_indices: list[int]
+
+
+class GeminiKeyTestRequest(BaseModel):
+    api_key: str
+
+
+class GeminiKeyTestResponse(BaseModel):
+    ok: bool
+    message: str
+    key_suffix: str

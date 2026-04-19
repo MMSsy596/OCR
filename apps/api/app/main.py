@@ -1061,6 +1061,176 @@ def export_project_to_capcut(
     return schemas.CapCutExportResponse(**result)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Gemini Key Management
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _load_gemini_keys_from_env() -> list[str]:
+    """Đọc danh sách Gemini keys từ settings (reload cache)."""
+    try:
+        from .settings import get_settings as _gs
+        _gs.cache_clear()
+    except Exception:
+        pass
+    raw = (get_settings().gemini_api_keys or "").strip()
+    return [k.strip() for k in raw.split(",") if k.strip()]
+
+
+def _save_gemini_keys_to_env(keys: list[str]) -> None:
+    """Lưu danh sách keys vào file .env."""
+    env_path = Path(__file__).resolve().parents[3] / ".env"
+    keys_value = ",".join(keys)
+    lines: list[str] = []
+    found = False
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    new_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("GEMINI_API_KEYS=") or stripped.startswith("GEMINI_API_KEYS ="):
+            new_lines.append(f"GEMINI_API_KEYS={keys_value}\n")
+            found = True
+        else:
+            new_lines.append(line)
+    if not found:
+        new_lines.append(f"GEMINI_API_KEYS={keys_value}\n")
+    env_path.write_text("".join(new_lines), encoding="utf-8")
+    # Invalidate settings cache sau khi ghi
+    try:
+        from .settings import get_settings as _gs
+        _gs.cache_clear()
+    except Exception:
+        pass
+
+
+def _mask_key(key: str) -> str:
+    if len(key) <= 8:
+        return "****"
+    return "****" + key[-8:]
+
+
+@app.get("/admin/gemini-keys", response_model=schemas.GeminiKeyListResponse)
+def list_gemini_keys():
+    """Lấy danh sách Gemini API keys (đã ẩn nội dung)."""
+    keys = _load_gemini_keys_from_env()
+    items = [
+        schemas.GeminiKeyItem(
+            index=i,
+            key_masked=_mask_key(k),
+            key_suffix=k[-6:] if len(k) > 6 else k,
+            is_primary=(i == 0),
+        )
+        for i, k in enumerate(keys)
+    ]
+    return schemas.GeminiKeyListResponse(keys=items, total=len(items))
+
+
+@app.post("/admin/gemini-keys", response_model=schemas.GeminiKeyListResponse)
+def add_gemini_key(payload: schemas.GeminiKeyAddRequest):
+    """Thêm một Gemini API key mới vào cuối danh sách."""
+    new_key = (payload.api_key or "").strip()
+    if not new_key:
+        raise HTTPException(status_code=400, detail="api_key_required")
+    keys = _load_gemini_keys_from_env()
+    if new_key in keys:
+        raise HTTPException(status_code=409, detail="key_already_exists")
+    keys.append(new_key)
+    _save_gemini_keys_to_env(keys)
+    items = [
+        schemas.GeminiKeyItem(index=i, key_masked=_mask_key(k), key_suffix=k[-6:] if len(k) > 6 else k, is_primary=(i == 0))
+        for i, k in enumerate(keys)
+    ]
+    return schemas.GeminiKeyListResponse(keys=items, total=len(items))
+
+
+@app.patch("/admin/gemini-keys/{key_index}", response_model=schemas.GeminiKeyListResponse)
+def update_gemini_key(key_index: int, payload: schemas.GeminiKeyUpdateRequest):
+    """Cập nhật một Gemini API key theo vị trí."""
+    new_key = (payload.api_key or "").strip()
+    if not new_key:
+        raise HTTPException(status_code=400, detail="api_key_required")
+    keys = _load_gemini_keys_from_env()
+    if key_index < 0 or key_index >= len(keys):
+        raise HTTPException(status_code=404, detail="key_not_found")
+    keys[key_index] = new_key
+    _save_gemini_keys_to_env(keys)
+    items = [
+        schemas.GeminiKeyItem(index=i, key_masked=_mask_key(k), key_suffix=k[-6:] if len(k) > 6 else k, is_primary=(i == 0))
+        for i, k in enumerate(keys)
+    ]
+    return schemas.GeminiKeyListResponse(keys=items, total=len(items))
+
+
+@app.delete("/admin/gemini-keys/{key_index}", response_model=schemas.GeminiKeyDeleteResponse)
+def delete_gemini_key(key_index: int):
+    """Xóa một Gemini API key theo vị trí."""
+    keys = _load_gemini_keys_from_env()
+    if key_index < 0 or key_index >= len(keys):
+        raise HTTPException(status_code=404, detail="key_not_found")
+    keys.pop(key_index)
+    _save_gemini_keys_to_env(keys)
+    return schemas.GeminiKeyDeleteResponse(ok=True, deleted_index=key_index, remaining=len(keys))
+
+
+@app.put("/admin/gemini-keys/reorder", response_model=schemas.GeminiKeyListResponse)
+def reorder_gemini_keys(payload: schemas.GeminiKeyReorderRequest):
+    """Đổi thứ tự các Gemini API keys."""
+    keys = _load_gemini_keys_from_env()
+    indices = payload.new_order_indices
+    if len(indices) != len(keys) or set(indices) != set(range(len(keys))):
+        raise HTTPException(status_code=400, detail="invalid_indices")
+    
+    new_keys = [keys[i] for i in indices]
+    _save_gemini_keys_to_env(new_keys)
+    
+    items = [
+        schemas.GeminiKeyItem(index=i, key_masked=_mask_key(k), key_suffix=k[-6:] if len(k) > 6 else k, is_primary=(i == 0))
+        for i, k in enumerate(new_keys)
+    ]
+    return schemas.GeminiKeyListResponse(keys=items, total=len(items))
+
+
+
+
+@app.post("/admin/gemini-keys/test", response_model=schemas.GeminiKeyTestResponse)
+def test_gemini_key(payload: schemas.GeminiKeyTestRequest):
+    """Kiểm tra tính hợp lệ của một Gemini API key."""
+    import json as _json
+    from urllib import request as _req, error as _err
+    key = (payload.api_key or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="api_key_required")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={key}"
+    body = {"contents": [{"parts": [{"text": "Say OK"}]}]}
+    data = _json.dumps(body).encode("utf-8")
+    req_obj = _req.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
+    try:
+        with _req.urlopen(req_obj, timeout=15) as resp:
+            _json.loads(resp.read().decode("utf-8"))
+            return schemas.GeminiKeyTestResponse(
+                ok=True,
+                message="Key hợp lệ ✅",
+                key_suffix=key[-6:] if len(key) > 6 else key,
+            )
+    except _err.HTTPError as ex:
+        err_body = ""
+        try:
+            err_body = ex.read().decode("utf-8", errors="ignore")[:300]
+        except Exception:
+            pass
+        return schemas.GeminiKeyTestResponse(
+            ok=False,
+            message=f"Key không hợp lệ ❌ (HTTP {ex.code}): {err_body}",
+            key_suffix=key[-6:] if len(key) > 6 else key,
+        )
+    except Exception as ex:
+        return schemas.GeminiKeyTestResponse(
+            ok=False,
+            message=f"Lỗi kiểm tra: {str(ex)[:200]}",
+            key_suffix=key[-6:] if len(key) > 6 else key,
+        )
+
+
 @app.get("/{full_path:path}", include_in_schema=False)
 def serve_web_app(full_path: str):
     if not web_index_file.exists():

@@ -1,5 +1,7 @@
 import { startTransition, useEffect, useMemo, useState } from "react";
 import { CapcutImportModal } from "./components/CapcutImportModal";
+import { GeminiKeyManager } from "./components/GeminiKeyManager";
+import { TranslationContextModal } from "./components/TranslationContextModal";
 import { NotificationIsland } from "./components/NotificationIsland";
 import { WizardNav } from "./components/WizardNav";
 import { Step1Project } from "./components/steps/Step1Project";
@@ -104,7 +106,8 @@ const TONE_PRESETS = {
   dramatic: "Giọng điệu kịch tính, đầy cảm xúc, phù hợp cảnh cao trào.",
 };
 
-function composePrompt(presetKey, toneKey) {
+function composePrompt(presetKey, toneKey, customOverride) {
+  if (customOverride) return customOverride;
   const pre  = PROMPT_PRESETS[presetKey]?.text || PROMPT_PRESETS.historical.text;
   const tone = TONE_PRESETS[toneKey] || TONE_PRESETS.accurate;
   return [
@@ -137,6 +140,9 @@ export function App() {
   const [syncPendingCount, setSyncPendingCount] = useState(0);
   const [showCapcutModal, setShowCapcutModal] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen]     = useState(true);
+  const [showKeyManager, setShowKeyManager]   = useState(false);
+  const [showContextModal, setShowContextModal] = useState(false);
+  const [customPromptOverride, setCustomPromptOverride] = useState(null);
 
   const [projectForm, setProjectForm] = useState({
     name: "", source_lang: "zh", target_lang: "vi",
@@ -144,7 +150,7 @@ export function App() {
     roi: { x: 0.05, y: 0.78, w: 0.9, h: 0.18 },
   });
   const [translationPreset, setTranslationPreset] = useState("historical");
-  const [translationTone]                         = useState("accurate");
+  const [translationTone, setTranslationTone]     = useState("accurate");
   const [videoFile, setVideoFile]         = useState(null);
   const [sourceUrl, setSourceUrl]         = useState("");
   const [autoStartAfterIngest, setAutoStartAfterIngest] = useState(true);
@@ -215,7 +221,7 @@ export function App() {
       setEditableSegments, setJobs, setMessage, setWizardStep,
       projectForm, sourceUrl, autoStartAfterIngest, pipelineForm,
       selectedProjectId, videoFile, roiDraft,
-      composePrompt: () => composePrompt(translationPreset, translationTone),
+      composePrompt: () => composePrompt(translationPreset, translationTone, customPromptOverride),
       selectedProject, setProjectForm, setRoiDraft,
     });
 
@@ -443,6 +449,7 @@ export function App() {
     translationPreset, setTranslationPreset, streamState,
     retryingStuckJobs, retryStuckJobs, runtimeCapabilities,
     onNextStep: () => setWizardStep(5),
+    onOpenContextModal: () => setShowContextModal(true),
   };
   const step5Props = {
     editableSegments, selectedProject, savingSegments, retranslating,
@@ -507,6 +514,14 @@ export function App() {
           >
             + Tạo dự án mới
           </button>
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ width: "100%", justifyContent: "center", gap: 6 }}
+            onClick={() => setShowKeyManager(true)}
+            title="Quản lý Gemini API Keys"
+          >
+            🔑 Quản lý Keys
+          </button>
           
           <div>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", padding: "8px 0" }}>
@@ -529,9 +544,9 @@ export function App() {
                 }}
               >
                 <div className="project-card-icon" style={{ width: 26, height: 26, fontSize: 13 }}>🎞️</div>
-                <div style={{ minWidth: 0 }}>
-                  <div className="project-card-title" style={{ fontSize: 12 }}>{p.name}</div>
-                  <div className="project-card-sub" style={{ fontSize: 10 }}>{p.source_lang} → {p.target_lang}</div>
+                <div style={{ minWidth: 0, overflow: "hidden" }}>
+                  <div className="project-card-title" style={{ fontSize: 12 }} title={`${p.name}\nID: ${p.id}`}>{p.name}</div>
+                  <div className="project-card-sub" style={{ fontSize: 10 }}>{p.source_lang} → {p.target_lang} · <span style={{ fontFamily: "monospace", opacity: 0.6 }}>{p.id.slice(0, 8)}</span></div>
                 </div>
               </div>
             ))}
@@ -609,6 +624,31 @@ export function App() {
         <CapcutImportModal
           onClose={() => setShowCapcutModal(false)}
           onImported={handleCapcutImported}
+        />
+      )}
+
+      {/* Gemini Key Manager */}
+      {showKeyManager && (
+        <GeminiKeyManager onClose={() => setShowKeyManager(false)} />
+      )}
+
+      {/* Translation Context Modal */}
+      {showContextModal && (
+        <TranslationContextModal
+          currentPresetKey={translationPreset}
+          currentCustomText={customPromptOverride || ""}
+          currentTone={translationTone}
+          onClose={() => setShowContextModal(false)}
+          onConfirm={(result) => {
+            setTranslationPreset(result.presetKey);
+            setTranslationTone(result.toneKey);
+            if (result.customPromptOverride) {
+              setCustomPromptOverride(result.customPromptOverride);
+            } else {
+              setCustomPromptOverride(null);
+            }
+            setShowContextModal(false);
+          }}
         />
       )}
     </div>

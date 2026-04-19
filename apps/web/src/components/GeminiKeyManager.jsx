@@ -163,18 +163,11 @@ export function GeminiKeyManager({ onClose }) {
   }
 
   async function handleTest(item) {
-    // Test bằng cách gọi endpoint riêng — cần key thực để test
-    // Ở đây ta chỉ có key_masked, nên test qua index không có key thực
-    // Frontend sẽ prompt user nhập lại key để test
-    const raw = prompt(`Nhập lại key để kiểm tra (****${item.key_suffix}):`);
-    if (!raw) return;
     setTestingIdx(item.index);
     setTestResult(null);
     try {
-      const result = await apiFetch(`${API_BASE}/admin/gemini-keys/test`, {
+      const result = await apiFetch(`${API_BASE}/admin/gemini-keys/${item.index}/test`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_key: raw.trim() }),
       });
       setTestResult({ idx: item.index, ...result });
     } catch (err) {
@@ -287,7 +280,7 @@ export function GeminiKeyManager({ onClose }) {
               </div>
               <div style={{ display: "flex", gap: 8 }}>
                 <input
-                  type="password"
+                  type="text"
                   value={inputVal}
                   onChange={(e) => setInputVal(e.target.value)}
                   placeholder="Nhập Gemini API Key (AIza...)"

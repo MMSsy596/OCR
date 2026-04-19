@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 
 const STORAGE_KEY = "translation_context_custom_presets";
 
-const BUILTIN_PRESETS = {
+export const BUILTIN_PRESETS = {
   historical:    { label: "Phim cổ trang",    icon: "🏯", text: "Dịch theo văn phong cổ trang, tự nhiên, dễ nghe, giữ thần thái hội thoại. Ưu tiên xưng hô theo quan hệ nhân vật và cấp bậc. Không dịch thô và không viết dài dòng." },
   modern_short:  { label: "Phim hiện đại",    icon: "🏙️", text: "Dịch theo văn phong hiện đại, đối thoại gọn, đời thường, tự nhiên như người Việt nói. Ưu tiên tốc độ đọc subtitle, tránh câu quá dài." },
   fantasy:       { label: "Huyền huyễn",       icon: "🔮", text: "Dịch theo phong cách huyền huyễn, tạo cảm giác kỳ ảo nhưng vẫn rõ nghĩa. Thuật ngữ sức mạnh và bối cảnh cần nhất quán." },
@@ -17,7 +17,7 @@ const TONE_OPTIONS = [
   { key: "dramatic", label: "Kịch tính", desc: "Đầy cảm xúc, phù hợp cảnh cao trào." },
 ];
 
-function loadCustomPresets() {
+export function loadCustomPresets() {
   try {
     return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
   } catch {
@@ -98,12 +98,37 @@ export function TranslationContextModal({
     if (selectedKey === key) setSelectedKey("historical");
   }
 
+  function handleUpdateCurrentPresetText(newText) {
+    if (tab === "custom") {
+      setCustomPrompt(newText);
+      return;
+    }
+    const isBuiltin = !!BUILTIN_PRESETS[selectedKey];
+    const baseLabel = isBuiltin ? BUILTIN_PRESETS[selectedKey].label : customPresets[selectedKey]?.label || selectedKey;
+    const baseIcon = isBuiltin ? BUILTIN_PRESETS[selectedKey].icon : customPresets[selectedKey]?.icon || "⭐";
+    
+    const newPresets = {
+      ...customPresets,
+      [selectedKey]: { label: baseLabel, icon: baseIcon, text: newText }
+    };
+    setCustomPresets(newPresets);
+    saveCustomPresets(newPresets);
+  }
+
+  function handleResetCurrentPreset() {
+    if (!BUILTIN_PRESETS[selectedKey]) return;
+    const { [selectedKey]: _, ...rest } = customPresets;
+    setCustomPresets(rest);
+    saveCustomPresets(rest);
+  }
+
   function handleConfirm() {
-    const finalKey = tab === "custom" ? `custom:${Date.now()}` : selectedKey;
-    const finalText = tab === "custom" ? customPrompt : activeText;
+    const isBuiltin = !!BUILTIN_PRESETS[selectedKey];
+    const needsOverride = (tab === "custom") || (!isBuiltin) || (isBuiltin && activeText !== BUILTIN_PRESETS[selectedKey].text);
+
     onConfirm({
       presetKey: tab === "custom" ? "historical" : selectedKey,
-      customPromptOverride: tab === "custom" ? customPrompt : null,
+      customPromptOverride: needsOverride ? (tab === "custom" ? customPrompt : activeText) : null,
       toneKey: selectedTone,
       label: activeLabel,
       fullPrompt: fullPromptPreview,
@@ -121,7 +146,7 @@ export function TranslationContextModal({
       padding: 16,
     }}>
       <div style={{
-        width: "100%", maxWidth: 700,
+        width: "100%", maxWidth: 900,
         background: "var(--bg-card)",
         borderRadius: "var(--radius-xl)",
         border: "1px solid var(--border)",
@@ -229,6 +254,26 @@ export function TranslationContextModal({
                   ))}
                 </>
               )}
+              
+              {/* Inline Editor for Built-in / Saved Presets */}
+              <div style={{ marginTop: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+                  <label style={{ fontSize: 13, fontWeight: 600, color: "var(--text-secondary)" }}>
+                    ✏️ Nội dung Prompt (bạn có thể sửa nội dung của tuỳ chọn này):
+                  </label>
+                  {customPresets[selectedKey] && BUILTIN_PRESETS[selectedKey] && (
+                    <button className="btn btn-ghost btn-sm" style={{fontSize: 11, color: "var(--warning)"}} onClick={handleResetCurrentPreset}>
+                      Khôi phục mặc định
+                    </button>
+                  )}
+                </div>
+                <textarea
+                  rows={4}
+                  value={activeText}
+                  onChange={(e) => handleUpdateCurrentPresetText(e.target.value)}
+                  style={{ width: "100%", padding: 12, fontFamily: "monospace", fontSize: 13, borderRadius: "var(--radius-md)", border: "1px solid var(--border)", background: "var(--bg-card)" }}
+                />
+              </div>
             </div>
           )}
 

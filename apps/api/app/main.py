@@ -124,6 +124,7 @@ def _enqueue_pipeline_job(job_id: str, payload: schemas.PipelineStartRequest) ->
         job_id,
         input_mode=payload.input_mode,
         gemini_api_key=payload.gemini_api_key,
+        gemini_models=getattr(payload, "gemini_models", None),
         voice_map=payload.voice_map,
         scan_interval_sec=payload.scan_interval_sec,
         job_id=job_id,
@@ -387,6 +388,7 @@ def start_url_ingest(project_id: str, payload: schemas.UrlIngestStartRequest, db
             job.id,
             source_url=payload.source_url,
             auto_start_pipeline=payload.auto_start_pipeline,
+            input_mode=payload.input_mode,
             gemini_api_key=payload.gemini_api_key,
             voice_map=payload.voice_map,
             scan_interval_sec=payload.scan_interval_sec,
@@ -504,6 +506,7 @@ def start_pipeline(project_id: str, payload: schemas.PipelineStartRequest, db: S
             job.id,
             input_mode=payload.input_mode,
             gemini_api_key=payload.gemini_api_key,
+            gemini_models=payload.gemini_models,
             voice_map=payload.voice_map,
             scan_interval_sec=payload.scan_interval_sec,
         )
@@ -570,7 +573,7 @@ def retranslate_segments(project_id: str, payload: schemas.RetranslateRequest, d
     project = crud.get_project(db, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="project_not_found")
-    result = retranslate_project_segments(project_id, gemini_api_key=payload.gemini_api_key)
+    result = retranslate_project_segments(project_id, gemini_api_key=payload.gemini_api_key, gemini_models=payload.gemini_models)
     if not result.get("ok"):
         raise HTTPException(status_code=500, detail=result.get("error", "retranslate_failed"))
     return schemas.RetranslateResponse(
@@ -719,6 +722,7 @@ def retry_stuck_jobs(project_id: str, db: Session = Depends(get_db)):
                     new_job.id,
                     input_mode=payload.input_mode,  # type: ignore[attr-defined]
                     gemini_api_key=payload.gemini_api_key,  # type: ignore[attr-defined]
+                    gemini_models=getattr(payload, "gemini_models", None),
                     voice_map=payload.voice_map,  # type: ignore[attr-defined]
                     scan_interval_sec=payload.scan_interval_sec,  # type: ignore[attr-defined]
                 )
@@ -1190,45 +1194,43 @@ def reorder_gemini_keys(payload: schemas.GeminiKeyReorderRequest):
     return schemas.GeminiKeyListResponse(keys=items, total=len(items))
 
 
-
-
-@app.post("/admin/gemini-keys/test", response_model=schemas.GeminiKeyTestResponse)
-def test_gemini_key(payload: schemas.GeminiKeyTestRequest):
-    """Kiểm tra tính hợp lệ của một Gemini API key."""
-    import json as _json
-    from urllib import request as _req, error as _err
-    key = (payload.api_key or "").strip()
-    if not key:
-        raise HTTPException(status_code=400, detail="api_key_required")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={key}"
-    body = {"contents": [{"parts": [{"text": "Say OK"}]}]}
-    data = _json.dumps(body).encode("utf-8")
-    req_obj = _req.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
+@app.post("/admin/gemini-keys/{key_index}/test")
+def test_gemini_key_by_index(key_index: int):
+    """Kiểm tra tính hợp lệ của một Gemini API key theo index lưu trữ."""
+    import urllib.request
+    import json
+    
+    keys = _load_gemini_keys_from_env()
+    if key_index < 0 or key_index >= len(keys):
+        raise HTTPException(status_code=404, detail="key_not_found")
+        
+    api_key = keys[key_index].strip()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={api_key}"
+    body = {"contents": [{"parts": [{"text": "Hello"}]}]}
+    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST", headers={"Content-Type": "application/json"})
+    
     try:
-        with _req.urlopen(req_obj, timeout=15) as resp:
-            _json.loads(resp.read().decode("utf-8"))
-            return schemas.GeminiKeyTestResponse(
-                ok=True,
-                message="Key hợp lệ ✅",
-                key_suffix=key[-6:] if len(key) > 6 else key,
-            )
-    except _err.HTTPError as ex:
-        err_body = ""
-        try:
-            err_body = ex.read().decode("utf-8", errors="ignore")[:300]
-        except Exception:
-            pass
-        return schemas.GeminiKeyTestResponse(
-            ok=False,
-            message=f"Key không hợp lệ ❌ (HTTP {ex.code}): {err_body}",
-            key_suffix=key[-6:] if len(key) > 6 else key,
-        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if "candidates" in data:
+                return {"ok": True, "message": "Key gọi API thành công."}
+            else:
+                return {"ok": False, "message": "Key hợp lệ nhưng phản hồi không có candidates."}
     except Exception as ex:
-        return schemas.GeminiKeyTestResponse(
-            ok=False,
-            message=f"Lỗi kiểm tra: {str(ex)[:200]}",
-            key_suffix=key[-6:] if len(key) > 6 else key,
-        )
+        err_msg = str(ex)
+        if hasattr(ex, 'code'):
+            if ex.code == 400:
+                err_msg = "Lỗi 400: API Key không hợp lệ."
+            elif ex.code == 403:
+                err_msg = "Lỗi 403: Không có quyền truy cập."
+            elif ex.code == 429:
+                err_msg = "Lỗi 429: Vượt quá giới hạn (Quota exceeded)."
+            try:
+                msg_body = ex.read().decode("utf-8", errors="ignore")
+                err_msg += f" (Chi tiết: {msg_body[:100]})"
+            except:
+                pass
+        return {"ok": False, "message": f"Thất bại: {err_msg}"}
 
 
 @app.get("/{full_path:path}", include_in_schema=False)

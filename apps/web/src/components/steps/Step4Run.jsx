@@ -391,6 +391,21 @@ export function Step4Run({
               />
             </div>
           </div>
+          
+          <div className="form-row">
+            <div className="form-group" style={{ width: "100%", marginBottom: 0 }}>
+              <label>Danh sách AI Models sẽ gọi (cách nhau bằng dấu phẩy)</label>
+              <input
+                type="text"
+                value={pipelineForm.gemini_models || ""}
+                disabled={isLocked}
+                onChange={(e) => setPipelineForm((p) => ({ ...p, gemini_models: e.target.value }))}
+                placeholder="VD: gemini-2.5-flash-lite, gemini-2.5-pro"
+                style={{ fontFamily: "monospace", fontSize: 13 }}
+              />
+              <div className="hint-text">1 key sẽ lần lượt thử gọi các model theo danh sách trước khi sang key tiếp theo.</div>
+            </div>
+          </div>
           <div className="form-row">
             <div className="form-group" style={{ marginBottom: 0, flex: 1 }}>
               <label>Phong cách dịch</label>

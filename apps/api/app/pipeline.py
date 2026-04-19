@@ -592,8 +592,9 @@ def _call_gemini_translate(
     target_lang: str,
     context_before: str = "",
     context_after: str = "",
+    model_name: str = "gemini-2.5-flash-lite",
 ) -> tuple[str, str]:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     system_prompt = (
         "You are expert subtitle translator. Keep tone natural, concise, and cinematic. "
         f"Translate from {source_lang} to {target_lang}. "
@@ -665,10 +666,11 @@ def _call_gemini_translate_batch(
     target_lang: str,
     context_before: str = "",
     context_after: str = "",
+    model_name: str = "gemini-2.5-flash-lite",
 ) -> tuple[list[str], str]:
     if not lines:
         return [], ""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     system_prompt = (
         "You are expert subtitle translator. "
         f"Translate from {source_lang} to {target_lang}. "
@@ -772,8 +774,9 @@ def _translate_with_fallback(
     context_after: str = "",
     all_keys: list[str] | None = None,
     key_switch_log: list[dict] | None = None,
+    models: list[str] | None = None,
 ) -> tuple[str, str, str]:
-    """Dịch với fallback qua tất cả key có sẵn. Log chi tiết từng bước rollback."""
+    """Dịch với fallback qua tất cả key có sẵn, với mỗi key gọi qua list models. Log chi tiết."""
     invalid_keys = invalid_keys or set()
     # Xây dựng danh sách key ứng viên: all_keys ưu tiên nếu có, else dùng api_key+backup
     if all_keys:
@@ -785,6 +788,7 @@ def _translate_with_fallback(
         if backup_api_key and backup_api_key not in candidate_keys:
             candidate_keys.append(backup_api_key)
 
+    models_to_try = [m.strip() for m in models if m.strip()] if models else ["gemini-2.5-flash-lite"]
     err = ""
     tried_count = 0
     for idx, candidate in enumerate(candidate_keys):
@@ -796,49 +800,53 @@ def _translate_with_fallback(
                     "key_suffix": candidate[-6:] if len(candidate) > 6 else "***",
                 })
             continue
-        tried_count += 1
-        translated, err = _call_gemini_translate(
-            text,
-            prompt,
-            candidate,
-            source_lang,
-            target_lang,
-            context_before=context_before,
-            context_after=context_after,
-        )
-        if translated:
-            if key_switch_log is not None and tried_count > 1:
-                key_switch_log.append({
-                    "action": "success_on_fallback",
-                    "key_index": idx,
-                    "key_suffix": candidate[-6:] if len(candidate) > 6 else "***",
-                })
-            return translated, "gemini", ""
-        # Key lỗi → đánh dấu invalid và thử key tiếp theo
-        if _is_gemini_key_error(err):
-            invalid_keys.add(candidate)
+        
+        for m_idx, model_name in enumerate(models_to_try):
+            tried_count += 1
+            translated, err = _call_gemini_translate(
+                text,
+                prompt,
+                candidate,
+                source_lang,
+                target_lang,
+                context_before=context_before,
+                context_after=context_after,
+                model_name=model_name,
+            )
+            if translated:
+                if key_switch_log is not None and tried_count > 1:
+                    key_switch_log.append({
+                        "action": "success_on_fallback",
+                        "key_index": idx,
+                        "key_suffix": candidate[-6:] if len(candidate) > 6 else "***",
+                        "model": model_name,
+                    })
+                return translated, "gemini", ""
+            
+            # Key lỗi → đánh dấu invalid và break để thử key tiếp theo
+            if _is_gemini_key_error(err):
+                invalid_keys.add(candidate)
+                if key_switch_log is not None:
+                    next_key = next((k for k in candidate_keys[idx+1:] if k not in invalid_keys), None)
+                    key_switch_log.append({
+                        "action": "key_invalid_switching",
+                        "key_index": idx,
+                        "key_suffix": candidate[-6:] if len(candidate) > 6 else "***",
+                        "error": err[:200],
+                        "switching_to_index": candidate_keys.index(next_key) if next_key else None,
+                        "switching_to_suffix": next_key[-6:] if next_key and len(next_key) > 6 else None,
+                    })
+                break  # Không thử model tiếp theo cho key này
+            
+            # Lỗi không phải do key (rate limit, nghẽn mạng...) → thử model tiếp theo
             if key_switch_log is not None:
-                next_key = next((k for k in candidate_keys[idx+1:] if k not in invalid_keys), None)
                 key_switch_log.append({
-                    "action": "key_invalid_switching",
+                    "action": "non_key_error",
                     "key_index": idx,
                     "key_suffix": candidate[-6:] if len(candidate) > 6 else "***",
+                    "model": model_name,
                     "error": err[:200],
-                    "switching_to_index": candidate_keys.index(next_key) if next_key else None,
-                    "switching_to_suffix": next_key[-6:] if next_key and len(next_key) > 6 else None,
                 })
-            continue
-        # Lỗi không phải do key (rate limit, nghẽn mạng...) → chỉ thử key tiếp nếu còn
-        if key_switch_log is not None:
-            key_switch_log.append({
-                "action": "non_key_error",
-                "key_index": idx,
-                "key_suffix": candidate[-6:] if len(candidate) > 6 else "***",
-                "error": err[:200],
-            })
-        if idx < len(candidate_keys) - 1:
-            continue  # Thử key tiếp theo
-        break
     try:
         from deep_translator import GoogleTranslator  # type: ignore
 
@@ -870,6 +878,7 @@ def _translate_project_segments(
     voice_map: dict[str, str] | None = None,
     progress_hook: Callable[[dict[str, Any]], None] | None = None,
     all_api_keys: list[str] | None = None,
+    models: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int], str, dict[str, Any]]:
     voice_map = voice_map or {}
     db_segments = list_segments(db, project.id)
@@ -923,31 +932,41 @@ def _translate_project_segments(
 
             translated: list[str] = []
             err = ""
+            models_to_try = [m.strip() for m in models if m.strip()] if models else ["gemini-2.5-flash-lite"]
             for k_idx, batch_key in enumerate(remaining_keys):
-                chunk_switch_log.append({
-                    "action": "trying_key",
-                    "key_index": effective_all_keys.index(batch_key) if batch_key in effective_all_keys else k_idx,
-                    "key_suffix": batch_key[-6:] if len(batch_key) > 6 else "***",
-                    "chunk_start": start_idx,
-                })
-                translated, err = _call_gemini_translate_batch(
-                    lines,
-                    project.prompt,
-                    batch_key,
-                    project.source_lang,
-                    project.target_lang,
-                    context_before=ctx_before,
-                    context_after=ctx_after,
-                )
+                for model_name in models_to_try:
+                    chunk_switch_log.append({
+                        "action": "trying_key",
+                        "key_index": effective_all_keys.index(batch_key) if batch_key in effective_all_keys else k_idx,
+                        "key_suffix": batch_key[-6:] if len(batch_key) > 6 else "***",
+                        "model": model_name,
+                        "chunk_start": start_idx,
+                    })
+                    translated, err = _call_gemini_translate_batch(
+                        lines,
+                        project.prompt,
+                        batch_key,
+                        project.source_lang,
+                        project.target_lang,
+                        context_before=ctx_before,
+                        context_after=ctx_after,
+                        model_name=model_name,
+                    )
+                    if translated and len(translated) == len(lines):
+                        if k_idx > 0 or model_name != models_to_try[0]:
+                            chunk_switch_log.append({
+                                "action": "success_on_fallback_key",
+                                "key_suffix": batch_key[-6:] if len(batch_key) > 6 else "***",
+                                "model": model_name,
+                                "fallback_index": k_idx,
+                            })
+                        break  # Thành công, thoát vòng lặp models
+
                 if translated and len(translated) == len(lines):
-                    if k_idx > 0:
-                        chunk_switch_log.append({
-                            "action": "success_on_fallback_key",
-                            "key_suffix": batch_key[-6:] if len(batch_key) > 6 else "***",
-                            "fallback_index": k_idx,
-                        })
-                    break  # Thành công, thoát vòng lặp
+                    break  # Thành công, thoát vòng lặp keys
+
                 # Key lỗi
+
                 if _is_gemini_key_error(err):
                     with _invalid_keys_lock:
                         invalid_gemini_keys.add(batch_key)
@@ -1005,6 +1024,7 @@ def _translate_project_segments(
                 context_after=next_text,
                 all_keys=effective_all_keys if effective_all_keys else None,
                 key_switch_log=seg_switch_log,
+                models=models,
             )
             if seg_switch_log:
                 key_switch_events.extend(seg_switch_log)
@@ -1064,7 +1084,7 @@ def _translate_project_segments(
     return normalized, translation_stats, first_translation_error, translate_detail
 
 
-def retranslate_project_segments(project_id: str, gemini_api_key: str | None = None) -> dict[str, Any]:
+def retranslate_project_segments(project_id: str, gemini_api_key: str | None = None, gemini_models: str | None = None) -> dict[str, Any]:
     db = SessionLocal()
     try:
         project = db.get(Project, project_id)
@@ -1073,6 +1093,7 @@ def retranslate_project_segments(project_id: str, gemini_api_key: str | None = N
         all_keys = _resolve_gemini_keys_list(gemini_api_key)
         primary_key = all_keys[0] if all_keys else None
         backup_key = all_keys[1] if len(all_keys) >= 2 else None
+        models = [m.strip() for m in (gemini_models or "").split(",")] if gemini_models else None
         normalized, translation_stats, first_translation_error, _ = _translate_project_segments(
             db,
             project,
@@ -1080,6 +1101,7 @@ def retranslate_project_segments(project_id: str, gemini_api_key: str | None = N
             backup_key,
             voice_map={},
             all_api_keys=all_keys,
+            models=models,
         )
         replace_segments(db, project.id, normalized)
         updated = list_segments(db, project.id)
@@ -1099,6 +1121,7 @@ def run_pipeline(
     job_id: str,
     input_mode: str = "video_ocr",
     gemini_api_key: str | None = None,
+    gemini_models: str | None = None,
     voice_map: dict[str, str] | None = None,
     scan_interval_sec: float = 1.5,
 ) -> dict[str, Any]:
@@ -1337,6 +1360,7 @@ def run_pipeline(
             )
             _update_job(db, job, JobStatus.running, progress, "translate", artifacts=artifacts)
 
+        models = [m.strip() for m in (gemini_models or "").split(",")] if gemini_models else None
         normalized, translation_stats, first_translation_error, translate_detail = _translate_project_segments(
             db,
             project,

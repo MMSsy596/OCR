@@ -155,10 +155,24 @@ export function App() {
   const [sourceUrl, setSourceUrl]         = useState("");
   const [autoStartAfterIngest, setAutoStartAfterIngest] = useState(true);
   const [srtUploadFile, setSrtUploadFile] = useState(null);
-  const [pipelineForm, setPipelineForm]   = useState({
-    input_mode: "video_ocr", gemini_api_key: "",
-    voiceMapText: "character_a=male-deep\ncharacter_b=female-bright\nnarrator=narrator-neutral",
-    scan_interval_sec: 1.5,
+  const [pipelineForm, setPipelineForm]   = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("pipeline_form_saved") || "{}");
+      return {
+        input_mode: saved.input_mode || "video_ocr",
+        gemini_api_key: saved.gemini_api_key || "",
+        gemini_models: saved.gemini_models || "gemini-2.5-flash-lite, gemini-2.5-flash, gemini-2.5-pro",
+        voiceMapText: saved.voiceMapText || "character_a=male-deep\ncharacter_b=female-bright\nnarrator=narrator-neutral",
+        scan_interval_sec: saved.scan_interval_sec || 1.5,
+      };
+    } catch {
+      return {
+        input_mode: "video_ocr", gemini_api_key: "",
+        gemini_models: "gemini-2.5-flash-lite, gemini-2.5-flash, gemini-2.5-pro",
+        voiceMapText: "character_a=male-deep\ncharacter_b=female-bright\nnarrator=narrator-neutral",
+        scan_interval_sec: 1.5,
+      };
+    }
   });
   const [exportForm, setExportForm]       = useState({ export_format: "srt", content_mode: "translated" });
   const [dubForm, setDubForm]             = useState({
@@ -430,8 +444,10 @@ export function App() {
     projects, selectedProjectId, setSelectedProjectId,
     projectForm, setProjectForm, creating, createProject,
     clearOldSessions, clearingSessions, translationPreset, setTranslationPreset,
+    customPromptOverride,
     statusLabel,
     onOpenCapcutModal: () => setShowCapcutModal(true),
+    onOpenContextModal: () => setShowContextModal(true),
   };
   const step2Props = {
     selectedProject, videoFile, setVideoFile, loading, uploadVideo,

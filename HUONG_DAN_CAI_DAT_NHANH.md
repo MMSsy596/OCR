@@ -12,8 +12,6 @@ Nếu máy bạn chưa có Docker, hãy tải và cài đặt [Docker Desktop](h
 3. Copy và dán toàn bộ nội dung sau vào file `docker-compose.yml`:
 
 ```yaml
-version: '3.8'
-
 services:
   redis:
     image: redis:7

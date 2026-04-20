@@ -1,8 +1,18 @@
 @echo off
-rem Su dung ma hoa tieu chuan de tranh loi CMD
-chcp 65001 >nul
 cd /d "%~dp0"
 title Phan Mem Quan Ly OCR Studio
+
+rem === Giu nguyen font Consolas, tranh bi doi font khi chay Docker ===
+set "REG_CON=HKCU\Console\Phan Mem Quan Ly OCR Studio"
+reg query "%REG_CON%" /v FaceName 2>nul | findstr /i "Consolas" >nul
+if %ERRORLEVEL% NEQ 0 (
+    reg add "%REG_CON%" /v FaceName    /t REG_SZ    /d "Consolas"  /f >nul 2>&1
+    reg add "%REG_CON%" /v FontSize    /t REG_DWORD /d 0x000E0000  /f >nul 2>&1
+    reg add "%REG_CON%" /v FontWeight  /t REG_DWORD /d 400         /f >nul 2>&1
+    reg add "%REG_CON%" /v FontFamily  /t REG_DWORD /d 54          /f >nul 2>&1
+    start "" "%~f0"
+    exit
+)
 
 rem === URL tai ban cap nhat file quan ly nay ===
 set "BAT_UPDATE_URL=https://raw.githubusercontent.com/nanbao/ocr/main/ban_cai_dat/CaiDat_Va_QuanLy_OCR.bat"
@@ -107,7 +117,11 @@ goto menu
 
 
 :create_file
-if exist "docker-compose.yml" goto :eof
+rem --- Neu file da ton tai, chi cap nhat dong image tag, khong tao lai toan bo ---
+if exist "docker-compose.yml" (
+    powershell -NoProfile -Command "(Get-Content 'docker-compose.yml') -replace 'image: (nanbao/ocr|nanbao-ocr-app):.*', 'image: nanbao/ocr:latest' | Set-Content 'docker-compose.yml'"
+    goto :eof
+)
 echo.
 echo Dang tu dong tao file cau hinh (docker-compose.yml)...
 
@@ -131,7 +145,7 @@ echo     ports:>> docker-compose.yml
 echo       - "6379:6379">> docker-compose.yml
 echo.>> docker-compose.yml
 echo   app:>> docker-compose.yml
-echo     image: nanbao/ocr:lastest>> docker-compose.yml
+echo     image: nanbao/ocr:latest>> docker-compose.yml
 echo     restart: unless-stopped>> docker-compose.yml
 echo     ports:>> docker-compose.yml
 echo       - "8000:8000">> docker-compose.yml

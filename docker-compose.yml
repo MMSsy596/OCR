@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_BASE: ""
-    image: nanbao-ocr-app:latest
+    image: nanbao/ocr:latest
     container_name: nanbao-ocr-app
     restart: unless-stopped
     depends_on:

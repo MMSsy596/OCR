@@ -42,17 +42,18 @@ def ensure_runtime_indexes() -> None:
         for stmt in statements:
             conn.execute(text(stmt))
         # Migration: thêm cột folder_name nếu chưa có (tương thích ngược với DB cũ)
+        # Lưu ý: SQLite KHÔNG cho phép ADD COLUMN ... UNIQUE trong một lệnh,
+        # nên phải tách thành 2 bước: ADD COLUMN rồi CREATE UNIQUE INDEX riêng.
         try:
             conn.execute(text(
-                "ALTER TABLE projects ADD COLUMN folder_name VARCHAR(220) UNIQUE"
+                "ALTER TABLE projects ADD COLUMN folder_name VARCHAR(220)"
             ))
         except Exception:
-            # Cột đã tồn tại hoặc DB không phải SQLite → bỏ qua
-            pass
-        # Tạo index cho folder_name nếu chưa có
+            pass  # Cột đã tồn tại → bỏ qua
+        # Tạo unique index cho folder_name
         try:
             conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_projects_folder_name ON projects (folder_name)"
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_projects_folder_name ON projects (folder_name)"
             ))
         except Exception:
             pass

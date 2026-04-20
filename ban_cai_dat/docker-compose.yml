@@ -7,7 +7,7 @@ services:
       - "6379:6379"
 
   app:
-    image: nanbao/ocr:tagname
+    image: nanbao/ocr:lastest
     restart: unless-stopped
     ports:
       - "8000:8000"

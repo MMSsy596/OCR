@@ -131,7 +131,7 @@ echo     ports:>> docker-compose.yml
 echo       - "6379:6379">> docker-compose.yml
 echo.>> docker-compose.yml
 echo   app:>> docker-compose.yml
-echo     image: nanbao/ocr:tagname>> docker-compose.yml
+echo     image: nanbao/ocr:lastest>> docker-compose.yml
 echo     restart: unless-stopped>> docker-compose.yml
 echo     ports:>> docker-compose.yml
 echo       - "8000:8000">> docker-compose.yml

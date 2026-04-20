@@ -17,15 +17,15 @@ if "%TAG%"=="" (
     echo ========================================================
     echo Image: %DOCKER_IMAGE%
     echo.
-    echo Vi du tag: latest / tagname / v1.0.2 / 20260418
+    echo Vi du tag: latest / lastest / v1.0.2 / 20260418
     echo.
-    set /p TAG="Nhap tag (Enter de dung mac dinh 'tagname'): "
-    if "!TAG!"=="" set "TAG=tagname"
+    set /p TAG="Nhap tag (Enter de dung mac dinh 'lastest'): "
+    if "!TAG!"=="" set "TAG=lastest"
 )
 
 rem setlocal enabledelayedexpansion can thiet cho check tren
 setlocal enabledelayedexpansion
-if "!TAG!"=="" set "TAG=tagname"
+if "!TAG!"=="" set "TAG=lastest"
 set "FULL_TAG=%DOCKER_IMAGE%:!TAG!"
 
 cls

@@ -1244,7 +1244,7 @@ def check_update():
         from datetime import datetime, timezone
         
         # 1. Fetch remote image info
-        url = "https://hub.docker.com/v2/repositories/nanbao/ocr/tags/tagname"
+        url = "https://hub.docker.com/v2/repositories/nanbao/ocr/tags/lastest"
         req = urllib.request.Request(url, headers={"User-Agent": "OCR-Studio"})
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))

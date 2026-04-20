@@ -33,7 +33,7 @@ Cần:
 ### Nếu chạy từ image đã build sẵn
 
 Không cần mã nguồn. Chỉ cần:
-- image Docker, ví dụ `nanbao/ocr:tagname`
+- image Docker, ví dụ `nanbao/ocr:lastest`
 - 1 volume hoặc thư mục mount vào `/data`
 
 Trong `/data`, ứng dụng sẽ tự dùng:
@@ -133,7 +133,7 @@ docker run -d --name nanbao-ocr-app `
   -e REDIS_URL=redis://host.docker.internal:6379/0 `
   -e STORAGE_ROOT=/data/projects `
   -v nanbao_ocr_data:/data `
-  nanbao/ocr:tagname
+  nanbao/ocr:lastest
 ```
 
 3. Mở ứng dụng:
@@ -285,8 +285,8 @@ docker run --rm -p 8000:8000 `
 Ví dụ:
 
 ```powershell
-docker tag nanbao-ocr-app:latest nanbao/ocr:tagname
-docker push nanbao/ocr:tagname
+docker tag nanbao-ocr-app:latest nanbao/ocr:lastest
+docker push nanbao/ocr:lastest
 ```
 
 ## 9. Ghi chú vận hành

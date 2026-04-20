@@ -143,6 +143,22 @@ export function App() {
   const [showKeyManager, setShowKeyManager]   = useState(false);
   const [showContextModal, setShowContextModal] = useState(false);
   const [customPromptOverride, setCustomPromptOverride] = useState(null);
+  const [appUpdateInfo, setAppUpdateInfo]     = useState(null);
+
+  async function checkAppUpdate() {
+    try {
+      const res = await jsonFetch(`${API_BASE}/admin/check-update`);
+      if (res?.has_update) {
+        const snoozeUntil = localStorage.getItem("update_snooze_until");
+        if (snoozeUntil && Date.now() < parseInt(snoozeUntil, 10)) return;
+        setAppUpdateInfo(res);
+      } else {
+        setAppUpdateInfo(null);
+      }
+    } catch (e) {
+      console.warn("Failed to check app update", e);
+    }
+  }
 
   const [projectForm, setProjectForm] = useState({
     name: "", source_lang: "zh", target_lang: "vi",
@@ -296,6 +312,7 @@ export function App() {
       
       setApiStatus("online");
       if (!selectedProjectId && data.length) setSelectedProjectId(data[0].id);
+      checkAppUpdate();
     } catch {
       setApiStatus("offline");
       setMessage(`Không kết nối được API. Hãy chạy backend.`);
@@ -624,6 +641,34 @@ export function App() {
 
       {/* Main Area */}
       <div className="main-wrapper">
+        
+        {/* Update Banner */}
+        {appUpdateInfo && (
+          <div style={{ background: "var(--accent-2)", color: "var(--bg-base)", padding: "10px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, zIndex: 10 }}>
+            <div>
+              <strong>🚀 Bản cập nhật mới đã sẵn sàng!</strong> Phiên bản mới đã được đẩy lên Docker Hub. Hãy vào bảng quản lý (.bat) và chọn "Cập nhật ứng dụng" để nhận tính năng mới.
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button 
+                onClick={() => {
+                  // Snooze 4 hours
+                  localStorage.setItem("update_snooze_until", Date.now() + 4 * 3600 * 1000);
+                  setAppUpdateInfo(null);
+                }}
+                style={{ background: "rgba(0,0,0,0.15)", border: "none", color: "inherit", padding: "4px 12px", borderRadius: "100px", cursor: "pointer", fontWeight: 600 }}
+              >
+                Nhắc lại sau 4h
+              </button>
+              <button 
+                onClick={() => setAppUpdateInfo(null)}
+                style={{ background: "transparent", border: "none", color: "inherit", fontSize: 18, cursor: "pointer", display: "flex", alignItems: "center" }}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+
         <header className="app-header">
           {selectedProjectId ? (
             <WizardNav

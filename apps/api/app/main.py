@@ -1141,6 +1141,47 @@ def _save_gemini_keys_to_env(keys: list[str]) -> None:
         pass
 
 
+@app.get("/admin/check-update")
+def check_update():
+    """Kiểm tra có bản cập nhật Docker image mới hay không."""
+    try:
+        import urllib.request
+        from datetime import datetime, timezone
+        
+        # 1. Fetch remote image info
+        url = "https://hub.docker.com/v2/repositories/nanbao/ocr/tags/tagname"
+        req = urllib.request.Request(url, headers={"User-Agent": "OCR-Studio"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            last_updated_str = data.get("last_updated")
+            if not last_updated_str:
+                return {"has_update": False, "error": "No last_updated field"}
+            
+            # strptime compatibility fix: replace Z with +00:00 (Python 3.11 supports ISO 8601 with fromisoformat)
+            remote_time = datetime.fromisoformat(last_updated_str.replace("Z", "+00:00"))
+            
+        # 2. Get local container build time (dựa vào file web_dist/index.html của quá trình build)
+        local_build_path = Path(__file__).parent.parent / "web_dist" / "index.html"
+        if not local_build_path.exists():
+            return {"has_update": False, "message": "Dev env, no update needed"}
+            
+        mtime = local_build_path.stat().st_mtime
+        local_time = datetime.fromtimestamp(mtime, timezone.utc)
+        
+        # 3. So sánh: cho phép dung sai 30 phút vì push mất thời gian
+        diff_seconds = (remote_time - local_time).total_seconds()
+        has_update = diff_seconds > 1800 # 30 mins
+        
+        return {
+            "has_update": has_update,
+            "remote_time": remote_time.isoformat(),
+            "local_time": local_time.isoformat(),
+            "diff_seconds": diff_seconds
+        }
+    except Exception as e:
+        return {"has_update": False, "error": str(e)}
+
+
 class UISettingsRequest(BaseModel):
     settings: dict
 

@@ -160,6 +160,48 @@ def _resolve_storage_artifact(path_text: str) -> Path:
     return artifact_path
 
 
+def _slugify(text: str, max_len: int = 80) -> str:
+    """Chuyển tên project thành slug an toàn cho filesystem.
+    Dùng unicodedata để tách dấu ra, giữ lại ký tự Latin và số."""
+    import unicodedata
+    import re as _re
+    # Normalize NFD: tách dấu khỏi ký tự cơ sở
+    nfkd = unicodedata.normalize("NFKD", text or "")
+    # Chỉ giữ ký tự không phải combining mark (category Mn)
+    no_marks = "".join(ch for ch in nfkd if unicodedata.category(ch) != "Mn")
+    # Giữ chữ/số/space/gạch, thay ký tự khác bằng space
+    cleaned = "".join(
+        ch if (ch.isalnum() or ch in " -_") else " "
+        for ch in no_marks
+    )
+    # Gộp nhiều space/gạch thành một gạch ngang
+    slug = _re.sub(r"[\s\-]+", "-", cleaned.strip()).strip("-")
+    slug = slug[:max_len].strip("-")
+    return slug or "project"
+
+
+def _project_folder(project: models.Project) -> Path:
+    """Trả về thư mục storage của project.
+    - Nếu có folder_name → dùng folder_name (slug tên thật).
+    - Không có (project cũ trước migration) → fallback về UUID."""
+    folder = project.folder_name if project.folder_name else project.id
+    return settings.storage_path / folder
+
+
+def _make_unique_slug(db, base_slug: str, exclude_id: str | None = None) -> str:
+    """Tạo slug unique: nếu base_slug đã tồn tại thì thêm suffix -2, -3, ..."""
+    slug = base_slug
+    counter = 2
+    while crud.get_project_by_folder(db, slug, exclude_id=exclude_id):
+        slug = f"{base_slug[:75]}-{counter}"
+        counter += 1
+        if counter > 999:
+            break
+    return slug
+
+
+
+
 def _enqueue_dub_job(job_id: str, payload: schemas.DubStartRequest) -> None:
     import os
     if os.name == "nt":
@@ -282,7 +324,16 @@ def _mark_stale_queued_jobs(db: Session, jobs: list[models.PipelineJob]) -> bool
 
 @app.post("/projects", response_model=schemas.ProjectRead)
 def create_project(payload: schemas.ProjectCreate, db: Session = Depends(get_db)):
-    project = crud.create_project(db, payload)
+    # Kiểm tra trùng tên project
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="project_name_required")
+    if crud.get_project_by_name(db, name):
+        raise HTTPException(status_code=409, detail="project_name_already_exists")
+    # Tạo folder_name (slug unique)
+    base_slug = _slugify(name)
+    folder_name = _make_unique_slug(db, base_slug)
+    project = crud.create_project(db, payload, folder_name=folder_name)
     return _to_project_read(project)
 
 
@@ -294,27 +345,37 @@ def list_projects(db: Session = Depends(get_db)):
 
 @app.post("/projects/clear-sessions", response_model=schemas.ClearSessionsResponse)
 def clear_sessions(payload: schemas.ClearSessionsRequest, db: Session = Depends(get_db)):
-    deleted_ids, skipped_processing = crud.clear_sessions(
+    deleted_rows, skipped_processing = crud.clear_sessions(
         db,
         include_processing=payload.include_processing,
     )
+    deleted_ids = [pid for pid, _ in deleted_rows]
     removed_storage_dirs = 0
     failed_storage_dirs: list[str] = []
     if payload.delete_storage:
         storage_root = settings.storage_path.resolve()
-        for project_id in deleted_ids:
-            candidate = (settings.storage_path / project_id).resolve()
-            try:
-                candidate.relative_to(storage_root)
-            except ValueError:
-                failed_storage_dirs.append(str(candidate))
-                continue
-            if candidate.exists():
+        for project_id, folder_name in deleted_rows:
+            # Ưu tiên xóa theo folder_name (tên thật), fallback UUID
+            candidates = []
+            if folder_name:
+                candidates.append((settings.storage_path / folder_name).resolve())
+            candidates.append((settings.storage_path / project_id).resolve())
+            deleted_this = False
+            for candidate in candidates:
+                if deleted_this:
+                    break
                 try:
-                    shutil.rmtree(candidate)
-                    removed_storage_dirs += 1
-                except Exception:
+                    candidate.relative_to(storage_root)
+                except ValueError:
                     failed_storage_dirs.append(str(candidate))
+                    continue
+                if candidate.exists():
+                    try:
+                        shutil.rmtree(candidate)
+                        removed_storage_dirs += 1
+                        deleted_this = True
+                    except Exception:
+                        failed_storage_dirs.append(str(candidate))
     return schemas.ClearSessionsResponse(
         deleted_projects=len(deleted_ids),
         deleted_project_ids=deleted_ids,
@@ -337,6 +398,33 @@ def update_project(project_id: str, payload: schemas.ProjectUpdate, db: Session 
     project = crud.get_project(db, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="project_not_found")
+    # Kiểm tra trùng tên khi đổi tên
+    new_name = (payload.name or "").strip() if payload.name is not None else None
+    if new_name and new_name != project.name:
+        if crud.get_project_by_name(db, new_name, exclude_id=project_id):
+            raise HTTPException(status_code=409, detail="project_name_already_exists")
+        # Đổi tên → tạo slug mới và rename thư mục trên disk
+        old_dir = _project_folder(project)
+        new_slug = _slugify(new_name)
+        new_slug = _make_unique_slug(db, new_slug, exclude_id=project_id)
+        new_dir = settings.storage_path / new_slug
+        if old_dir.exists() and old_dir != new_dir:
+            try:
+                old_dir.rename(new_dir)
+                # Cập nhật video_path nếu đang trỏ vào thư mục cũ
+                if project.video_path:
+                    old_video = Path(project.video_path)
+                    try:
+                        rel = old_video.relative_to(old_dir)
+                        project.video_path = str(new_dir / rel)
+                    except ValueError:
+                        pass
+            except Exception as exc:
+                logger.warning("Rename thư mục project thất bại: %s", exc)
+        project.folder_name = new_slug
+        db.add(project)
+        db.commit()
+        db.refresh(project)
     project = crud.update_project(db, project, payload)
     return _to_project_read(project)
 
@@ -347,7 +435,7 @@ def upload_video(project_id: str, request: Request, file: UploadFile = File(...)
     if not project:
         raise HTTPException(status_code=404, detail="project_not_found")
     _enforce_upload_constraints(file, dict(request.headers))
-    project_dir = settings.storage_path / project_id
+    project_dir = _project_folder(project)
     project_dir.mkdir(parents=True, exist_ok=True)
     ext = Path(file.filename or "video.mp4").suffix or ".mp4"
     target = project_dir / f"source{ext}"
@@ -402,7 +490,7 @@ def upload_srt_file(project_id: str, file: UploadFile = File(...), db: Session =
     project = crud.get_project(db, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="project_not_found")
-    project_dir = settings.storage_path / project_id
+    project_dir = _project_folder(project)
     project_dir.mkdir(parents=True, exist_ok=True)
 
     src_name = Path(file.filename or "manual.external.srt")
@@ -966,17 +1054,24 @@ def import_capcut_draft(payload: schemas.CapCutImportRequest, db: Session = Depe
 
     project_name = (payload.project_name or draft_info.draft_name or draft_folder.name).strip() or "CapCut Import"
 
-    # Tạo project trong DB
+    # Kiểm tra trùng tên
+    if crud.get_project_by_name(db, project_name):
+        import time as _time
+        project_name = f"{project_name} ({int(_time.time()) % 10000})"
+
+    # Tạo project trong DB với folder_name slug
+    base_slug = _slugify(project_name)
+    folder_name = _make_unique_slug(db, base_slug)
     project_payload = schemas.ProjectCreate(
         name=project_name,
         source_lang=payload.source_lang,
         target_lang=payload.target_lang,
         roi=schemas.ROI(x=0.05, y=0.78, w=0.9, h=0.18),
     )
-    project = crud.create_project(db, project_payload)
+    project = crud.create_project(db, project_payload, folder_name=folder_name)
 
     # Tạo thư mục storage
-    project_dir = settings.storage_path / project.id
+    project_dir = _project_folder(project)
     project_dir.mkdir(parents=True, exist_ok=True)
 
     # Copy video
@@ -1032,7 +1127,7 @@ def export_project_to_capcut(
     # Xác định đường dẫn audio dub (nếu có)
     dub_path: str | None = None
     if payload.include_dub:
-        project_dir = settings.storage_path / project_id
+        project_dir = _project_folder(project)
         candidate_patterns = [
             "dub_output.*",
             "output_dub.*",

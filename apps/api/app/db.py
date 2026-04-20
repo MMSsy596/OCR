@@ -41,3 +41,19 @@ def ensure_runtime_indexes() -> None:
     with engine.begin() as conn:
         for stmt in statements:
             conn.execute(text(stmt))
+        # Migration: thêm cột folder_name nếu chưa có (tương thích ngược với DB cũ)
+        try:
+            conn.execute(text(
+                "ALTER TABLE projects ADD COLUMN folder_name VARCHAR(220) UNIQUE"
+            ))
+        except Exception:
+            # Cột đã tồn tại hoặc DB không phải SQLite → bỏ qua
+            pass
+        # Tạo index cho folder_name nếu chưa có
+        try:
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_projects_folder_name ON projects (folder_name)"
+            ))
+        except Exception:
+            pass
+

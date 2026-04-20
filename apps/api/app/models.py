@@ -27,6 +27,7 @@ class Project(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+    folder_name: Mapped[str | None] = mapped_column(String(220), nullable=True, unique=True, index=True)
     source_lang: Mapped[str] = mapped_column(String(12), default="zh")
     target_lang: Mapped[str] = mapped_column(String(12), default="vi")
     status: Mapped[ProjectStatus] = mapped_column(Enum(ProjectStatus), default=ProjectStatus.draft, nullable=False)

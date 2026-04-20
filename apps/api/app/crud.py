@@ -7,9 +7,10 @@ from .models import PipelineJob, Project, ProjectStatus, SubtitleSegment
 from .schemas import ProjectCreate, ProjectUpdate
 
 
-def create_project(db: Session, payload: ProjectCreate) -> Project:
+def create_project(db: Session, payload: ProjectCreate, folder_name: str | None = None) -> Project:
     obj = Project(
         name=payload.name,
+        folder_name=folder_name,
         source_lang=payload.source_lang,
         target_lang=payload.target_lang,
         roi_x=payload.roi.x,
@@ -31,6 +32,22 @@ def list_projects(db: Session) -> list[Project]:
 
 def get_project(db: Session, project_id: str) -> Project | None:
     return db.get(Project, project_id)
+
+
+def get_project_by_name(db: Session, name: str, exclude_id: str | None = None) -> Project | None:
+    """Tìm project theo tên (case-insensitive). exclude_id dùng khi update để bỏ qua chính nó."""
+    stmt = select(Project).where(Project.name == name)
+    if exclude_id:
+        stmt = stmt.where(Project.id != exclude_id)
+    return db.scalars(stmt).first()
+
+
+def get_project_by_folder(db: Session, folder_name: str, exclude_id: str | None = None) -> Project | None:
+    """Tìm project theo folder_name slug."""
+    stmt = select(Project).where(Project.folder_name == folder_name)
+    if exclude_id:
+        stmt = stmt.where(Project.id != exclude_id)
+    return db.scalars(stmt).first()
 
 
 def attach_video(db: Session, project: Project, saved_path: Path) -> Project:
@@ -159,24 +176,25 @@ def list_jobs(db: Session, project_id: str) -> list[PipelineJob]:
     return list(db.scalars(stmt).all())
 
 
-def clear_sessions(db: Session, include_processing: bool = False) -> tuple[list[str], int]:
-    all_projects = list(db.scalars(select(Project.id, Project.status)).all())
+def clear_sessions(db: Session, include_processing: bool = False) -> tuple[list[tuple[str, str | None]], int]:
+    all_projects = list(db.scalars(select(Project.id, Project.status, Project.folder_name)).all())
 
-    # Bóc tách dạng tuple (id, status)
-    to_delete: list[str] = []
+    # Bóc tách dạng tuple (id, status, folder_name)
+    to_delete: list[tuple[str, str | None]] = []
     skipped_processing = 0
     for row in all_projects:
-        pid, status = row[0], row[1]
+        pid, status, folder_name = row[0], row[1], row[2] if len(row) > 2 else None
         if status == ProjectStatus.processing and not include_processing:
             skipped_processing += 1
             continue
-        to_delete.append(pid)
+        to_delete.append((pid, folder_name))
 
     if to_delete:
+        delete_ids = [pid for pid, _ in to_delete]
         # Bulk delete — 3 câu SQL thay vì N câu
-        db.execute(delete(SubtitleSegment).where(SubtitleSegment.project_id.in_(to_delete)))
-        db.execute(delete(PipelineJob).where(PipelineJob.project_id.in_(to_delete)))
-        db.execute(delete(Project).where(Project.id.in_(to_delete)))
+        db.execute(delete(SubtitleSegment).where(SubtitleSegment.project_id.in_(delete_ids)))
+        db.execute(delete(PipelineJob).where(PipelineJob.project_id.in_(delete_ids)))
+        db.execute(delete(Project).where(Project.id.in_(delete_ids)))
         db.commit()
 
     return to_delete, skipped_processing

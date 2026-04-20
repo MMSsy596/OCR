@@ -1,9 +1,0 @@
-{
-  "frames_sampled": 20,
-  "estimated_samples": 20,
-  "estimated_samples_known": true,
-  "progress_pct": 100.0,
-  "ocr_hit_frames": 6,
-  "duplicate_extend_count": 10,
-  "skipped_similar_frame_count": 9
-}

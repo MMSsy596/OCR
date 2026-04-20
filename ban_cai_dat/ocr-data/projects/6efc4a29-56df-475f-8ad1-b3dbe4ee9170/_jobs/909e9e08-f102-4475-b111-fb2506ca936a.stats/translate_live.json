@@ -1,9 +1,0 @@
-{
-  "done": 5,
-  "total": 5,
-  "provider_counts": {
-    "gemini": 5,
-    "deep_translator": 0,
-    "fallback_tag": 0
-  }
-}

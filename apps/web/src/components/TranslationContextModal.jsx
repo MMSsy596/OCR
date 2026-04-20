@@ -3,13 +3,34 @@ import { useState, useEffect } from "react";
 const STORAGE_KEY = "translation_context_custom_presets";
 
 export const BUILTIN_PRESETS = {
-  historical:    { label: "Phim cổ trang",    icon: "🏯", text: "Dịch theo văn phong cổ trang, tự nhiên, dễ nghe, giữ thần thái hội thoại. Ưu tiên xưng hô theo quan hệ nhân vật và cấp bậc. Không dịch thô và không viết dài dòng." },
-  modern_short:  { label: "Phim hiện đại",    icon: "🏙️", text: "Dịch theo văn phong hiện đại, đối thoại gọn, đời thường, tự nhiên như người Việt nói. Ưu tiên tốc độ đọc subtitle, tránh câu quá dài." },
-  fantasy:       { label: "Huyền huyễn",       icon: "🔮", text: "Dịch theo phong cách huyền huyễn, tạo cảm giác kỳ ảo nhưng vẫn rõ nghĩa. Thuật ngữ sức mạnh và bối cảnh cần nhất quán." },
-  cultivation:   { label: "Tu tiên",           icon: "⚔️", text: "Dịch đúng văn mạch tu tiên, giữ tinh thần cấp bậc tu vi, công pháp, linh căn, cảnh giới. Ưu tiên nhất quán thuật ngữ theo glossary." },
-  reincarnation: { label: "Chuyển sinh",       icon: "♻️", text: "Dịch rõ cấu trúc kể chuyện chuyển sinh, giữ logic thời gian trước/sau chuyển sinh. Hạn chế lặp lại và tạo nhịp kể chuyện mạch lạc." },
-  review:        { label: "Review phim",       icon: "🎬", text: "Dịch theo văn review phim, rõ ý, dễ hiểu, liên kết nguyên nhân-kết quả. Khi cần, diễn đạt thành câu nhận xét tự nhiên cho người xem Việt." },
+  // ── Phim / Drama ──────────────────────────────────────────────────────────
+  historical:    { label: "Phim cổ trang",       icon: "🏯", group: "Phim & Drama", text: "Dịch theo văn phong cổ trang, tự nhiên, dễ nghe, giữ thần thái hội thoại. Ưu tiên xưng hô theo quan hệ nhân vật và cấp bậc. Không dịch thô và không viết dài dòng." },
+  modern_short:  { label: "Phim hiện đại",        icon: "🏙️", group: "Phim & Drama", text: "Dịch theo văn phong hiện đại, đối thoại gọn, đời thường, tự nhiên như người Việt nói. Ưu tiên tốc độ đọc subtitle, tránh câu quá dài." },
+  romance:       { label: "Phim tình cảm",        icon: "💕", group: "Phim & Drama", text: "Dịch theo văn phong tình cảm, lãng mạn, cảm xúc tinh tế. Giữ lại sắc thái ngập ngừng, e thẹn. Không dịch quá thẳng tuột cảm xúc nhân vật." },
+  action:        { label: "Phim hành động",       icon: "💥", group: "Phim & Drama", text: "Dịch súc tích, mạnh mẽ, khẩn trương. Câu ngắn, dứt khoát. Giữ nhịp độ nhanh, tránh diễn đạt dài dòng khi nhân vật đang hành động." },
+  horror:        { label: "Phim kinh dị",         icon: "👻", group: "Phim & Drama", text: "Dịch tạo cảm giác căng thẳng, rùng rợn. Dùng từ ngữ ám ảnh, bí ẩn. Câu văn có thể ngắt quãng, không liền mạch để tạo hiệu ứng." },
+  comedy:        { label: "Phim hài",             icon: "😂", group: "Phim & Drama", text: "Dịch tự nhiên, vui vẻ, giữ yếu tố hài hước Việt hóa nếu phù hợp. Không dịch cứng nhắc, có thể điều chỉnh từ để tạo tiếng cười tự nhiên." },
+  review:        { label: "Review / Thuyết minh", icon: "🎬", group: "Phim & Drama", text: "Dịch theo văn review phim, rõ ý, dễ hiểu, liên kết nguyên nhân-kết quả. Khi cần, diễn đạt thành câu nhận xét tự nhiên cho người xem Việt." },
+
+  // ── Tiểu thuyết / Web truyện ──────────────────────────────────────────────
+  fantasy:       { label: "Huyền huyễn",          icon: "🔮", group: "Tiểu thuyết", text: "Dịch theo phong cách huyền huyễn, tạo cảm giác kỳ ảo nhưng vẫn rõ nghĩa. Thuật ngữ sức mạnh và bối cảnh cần nhất quán." },
+  cultivation:   { label: "Tu tiên / Luyện khí",  icon: "⚔️", group: "Tiểu thuyết", text: "Dịch đúng văn mạch tu tiên, giữ tinh thần cấp bậc tu vi, công pháp, linh căn, cảnh giới. Ưu tiên nhất quán thuật ngữ theo glossary." },
+  reincarnation: { label: "Chuyển sinh / Isekai", icon: "♻️", group: "Tiểu thuyết", text: "Dịch rõ cấu trúc kể chuyện chuyển sinh, giữ logic thời gian trước/sau chuyển sinh. Hạn chế lặp lại và tạo nhịp kể chuyện mạch lạc." },
+  wuxia:         { label: "Võ hiệp / Kiếm hiệp",  icon: "🗡️", group: "Tiểu thuyết", text: "Dịch theo văn phong võ hiệp cổ điển, khí phách, hào sảng. Giữ tên chiêu thức, phái võ không dịch hoặc phiên âm nhất quán. Câu văn có nhịp điệu phóng khoáng." },
+  danmei:        { label: "Danmei / BL",           icon: "🌸", group: "Tiểu thuyết", text: "Dịch tinh tế cảm xúc, giữ sắc thái tình cảm giữa các nhân vật nam. Không dịch thô, ưu tiên cảm xúc ngầm ẩn, ánh mắt, hành động thay lời nói." },
+
+  // ── Kỹ thuật / Hướng dẫn ─────────────────────────────────────────────────
+  tutorial:      { label: "Hướng dẫn / Tutorial", icon: "📖", group: "Kỹ thuật", text: "Dịch rõ ràng, chính xác theo thuật ngữ kỹ thuật. Giữ tên nút, menu, lệnh bằng tiếng Anh nếu phổ biến. Câu hướng dẫn ngắn gọn, dễ làm theo." },
+  tech_review:   { label: "Review công nghệ",      icon: "💻", group: "Kỹ thuật", text: "Dịch dùng thuật ngữ công nghệ chuẩn tiếng Việt. Giữ tên sản phẩm, thông số kỹ thuật nguyên bản. Phong cách nhận xét khách quan, rõ ràng." },
+  cooking:       { label: "Ẩm thực / Nấu ăn",     icon: "🍜", group: "Kỹ thuật", text: "Dịch dùng từ ẩm thực Việt Nam, các bước nấu ăn rõ ràng theo trình tự. Tên nguyên liệu Việt hóa khi có thể. Câu ngắn gọn dễ làm theo." },
+  sports:        { label: "Thể thao",              icon: "⚽", group: "Kỹ thuật", text: "Dịch dùng thuật ngữ thể thao Việt Nam. Giữ tên cầu thủ, đội, giải đấu nguyên bản. Câu bình luận ngắn, năng động, phản ánh nhịp độ trận đấu." },
+
+  // ── Hoạt hình / Game ──────────────────────────────────────────────────────
+  anime:         { label: "Anime / Hoạt hình",    icon: "🎌", group: "Anime & Game", text: "Dịch anime tự nhiên, giữ moe expressions và từ đặc trưng Nhật nếu phổ biến (senpai, nani...). Câu thoại nhân vật rõ cá tính, không dịch đơn điệu." },
+  game:          { label: "Game / Gaming",          icon: "🎮", group: "Anime & Game", text: "Dịch dùng thuật ngữ gaming Việt phổ biến. Giữ tên skill, item, class không dịch hoặc phiên âm nhất quán. Lời thoại nhân vật game giữ phong cách đặc trưng." },
+  documentary:   { label: "Tài liệu / Documentary",icon: "🌍", group: "Anime & Game", text: "Dịch nghiêm túc, chính xác theo phong cách tài liệu. Câu văn rõ ràng, mang tính thông tin. Không thêm ý kiến cá nhân, giữ giọng điệu khách quan trung lập." },
 };
+
 
 const TONE_OPTIONS = [
   { key: "accurate", label: "Chính xác", desc: "Trung lập, sát nghĩa, ưu tiên rõ ý." },
@@ -199,32 +220,47 @@ export function TranslationContextModal({
           {tab === "builtin" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>
-                Chọn thể loại phim để AI tối ưu phong cách dịch phù hợp
+                Chọn thể loại để AI tối ưu phong cách dịch phù hợp
               </div>
 
-              {/* Builtin presets */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
-                {allBuiltinEntries.map(([key, meta]) => (
-                  <button
-                    key={key}
-                    onClick={() => handleSelectBuiltin(key)}
-                    style={{
-                      display: "flex", alignItems: "center", gap: 10,
-                      padding: "12px 14px", borderRadius: "var(--radius-md)",
-                      background: selectedKey === key && tab === "builtin" ? "rgba(99,102,241,0.12)" : "var(--bg-elevated)",
-                      border: `1px solid ${selectedKey === key && tab === "builtin" ? "var(--border-focus)" : "var(--border)"}`,
-                      cursor: "pointer", textAlign: "left",
-                      transition: "all 0.15s",
-                    }}
-                  >
-                    <span style={{ fontSize: 20 }}>{meta.icon}</span>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>{meta.label}</div>
-                      <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>{meta.text.slice(0, 50)}…</div>
+              {/* Builtin presets — grouped */}
+              {(() => {
+                const groups = {};
+                allBuiltinEntries.forEach(([key, meta]) => {
+                  const g = meta.group || "Khác";
+                  if (!groups[g]) groups[g] = [];
+                  groups[g].push([key, meta]);
+                });
+                return Object.entries(groups).map(([groupName, items]) => (
+                  <div key={groupName}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent-2)", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 6, marginTop: 4 }}>
+                      {groupName}
                     </div>
-                  </button>
-                ))}
-              </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 6 }}>
+                      {items.map(([key, meta]) => (
+                        <button
+                          key={key}
+                          onClick={() => handleSelectBuiltin(key)}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 10,
+                            padding: "10px 14px", borderRadius: "var(--radius-md)",
+                            background: selectedKey === key && tab === "builtin" ? "rgba(99,102,241,0.12)" : "var(--bg-elevated)",
+                            border: `1px solid ${selectedKey === key && tab === "builtin" ? "var(--border-focus)" : "var(--border)"}`,
+                            cursor: "pointer", textAlign: "left",
+                            transition: "all 0.15s",
+                          }}
+                        >
+                          <span style={{ fontSize: 18, flexShrink: 0 }}>{meta.icon}</span>
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>{meta.label}</div>
+                            <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>{meta.text.slice(0, 45)}…</div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ));
+              })()}
 
               {/* Custom saved presets */}
               {allCustomEntries.length > 0 && (

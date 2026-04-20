@@ -1,0 +1,15 @@
+{
+  "project_id": "6efc4a29-56df-475f-8ad1-b3dbe4ee9170",
+  "source_lang": "zh",
+  "target_lang": "vi",
+  "input_mode": "video_ocr",
+  "scan_interval_sec": 1.5,
+  "effective_scan_interval_sec": 1.5,
+  "estimated_samples": 19,
+  "video_fps": 30.0,
+  "video_frames": 887,
+  "voice_map_size": 3,
+  "gemini_key_present": false,
+  "gemini_fallback_key_enabled": false,
+  "gemini_total_keys": 0
+}

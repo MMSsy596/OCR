@@ -1,0 +1,13 @@
+{"time": "2026-04-19T13:25:25.612391+00:00", "phase": "pipeline", "level": "info", "progress": 1, "message": "Bat dau pipeline mode=video_ocr, interval OCR yeu cau=1.50s, hieu dung=1.50s, voice_map=3."}
+{"time": "2026-04-19T13:25:25.790749+00:00", "phase": "ocr", "level": "info", "progress": 5, "message": "Dang tach video thanh frame va OCR..."}
+{"time": "2026-04-19T13:25:29.256555+00:00", "phase": "ocr", "level": "info", "progress": 12, "message": "OCR dang chay: da tach 6/20 frame (30.0%), frame co text=3, bo qua tuong tu=2, noi doan=2."}
+{"time": "2026-04-19T13:25:32.001493+00:00", "phase": "ocr", "level": "info", "progress": 30, "message": "OCR dang chay: da tach 20/20 frame (100.0%), frame co text=6, bo qua tuong tu=9, noi doan=10."}
+{"time": "2026-04-19T13:25:32.036565+00:00", "phase": "ocr", "level": "info", "progress": 28, "message": "OCR xong: 5 doan text (source=rapidocr)."}
+{"time": "2026-04-19T13:25:32.062280+00:00", "phase": "ocr", "level": "info", "progress": 34, "message": "Sau merge OCR: 5 doan."}
+{"time": "2026-04-19T13:25:32.236550+00:00", "phase": "translate", "level": "info", "progress": 35, "message": "Bat dau dich 5 doan, so key Gemini=1, co key chinh."}
+{"time": "2026-04-19T13:25:35.157909+00:00", "phase": "translate", "level": "info", "progress": 64, "message": "Dich xong: gemini=5, deep_translator=0, fallback=0."}
+{"time": "2026-04-19T13:25:35.169838+00:00", "phase": "dedupe_merge", "level": "info", "progress": 65, "message": "Dang merge subtitle trung lap lan cuoi..."}
+{"time": "2026-04-19T13:25:35.396452+00:00", "phase": "dedupe_merge", "level": "info", "progress": 78, "message": "Merge xong: 5 -> 5 doan."}
+{"time": "2026-04-19T13:25:35.531554+00:00", "phase": "tts", "level": "info", "progress": 80, "message": "Dang tao tts_lines.txt cho long tieng..."}
+{"time": "2026-04-19T13:25:35.754086+00:00", "phase": "export", "level": "info", "progress": 90, "message": "Dang xuat SRT + JSON..."}
+{"time": "2026-04-19T13:25:35.996370+00:00", "phase": "done", "level": "info", "progress": 100, "message": "Pipeline hoan tat."}

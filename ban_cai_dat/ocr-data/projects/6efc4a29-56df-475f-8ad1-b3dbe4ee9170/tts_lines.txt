@@ -1,0 +1,5 @@
+1.50-2.96 [narrator-neutral] Kích hoạt ô nốt nhạc để phát
+3.00-7.46 [narrator-neutral] Nhấp chuột phải vào hộp nhạc để mở GUI và điều chỉnh
+7.50-14.96 [narrator-neutral] Thêm âm sắc bên ngoài thông qua gói tài nguyên và mod
+15.00-20.40 [narrator-neutral] Sau đó nghe thử bộ gõ
+24.00-27.00 [narrator-neutral] Sau đó, kết nối các ô nốt nhạc bằng bộ lặp để có giai điệu

@@ -1,0 +1,11 @@
+{
+  "pipeline_form_saved": {
+    "input_mode": "video_ocr",
+    "gemini_api_key": "",
+    "gemini_models": "gemini-2.5-flash-lite, gemini-2.5-flash, gemini-2.5-pro",
+    "voiceMapText": "character_a=male-deep\ncharacter_b=female-bright\nnarrator=narrator-neutral",
+    "scan_interval_sec": 1.5,
+    "translationPreset": "reincarnation",
+    "savedAt": 1776605123834
+  }
+}

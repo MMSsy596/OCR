@@ -94,7 +94,7 @@ def _get_capcut_root() -> Path | None:
         if sub.exists():
             logger.info("CAPCUT_DRAFT_DIR (sub): %s", sub)
             return sub
-        logger.warning("CAPCUT_DRAFT_DIR duoc dat (%s) nhung khong ton tai!", env_dir)
+        logger.warning("CAPCUT_DRAFT_DIR được đặt (%s) nhưng không tồn tại!", env_dir)
 
     # --- 2. /capcut-data - thu muc Docker volume mac dinh ---
     docker_path = Path("/capcut-data")
@@ -136,14 +136,14 @@ def _get_capcut_root() -> Path | None:
                 continue
             seen.add(key)
             if c.exists():
-                logger.info("Tim thay CapCut tai: %s", c)
+                logger.info("Tìm thấy CapCut tại: %s", c)
                 return c
         except Exception:
             continue
 
     logger.warning(
-        "Khong tim thay thu muc CapCut. Da quet %d vi tri. "
-        "Hay dat bien moi truong CAPCUT_DRAFT_DIR.",
+        "Không tìm thấy thư mục CapCut. Đã quét %d vị trí. "
+        "Hãy đặt biến môi trường CAPCUT_DRAFT_DIR.",
         len(candidates),
     )
     return None
@@ -236,7 +236,7 @@ def _probe_video_metadata(video_path: str | None) -> dict:
             "duration_us": max(0, duration_us),
         }
     except Exception:
-        logger.warning("Khong probe duoc metadata video %s", video_path, exc_info=True)
+        logger.warning("Không probe được metadata video %s", video_path, exc_info=True)
     try:
         import cv2  # type: ignore
 
@@ -255,7 +255,7 @@ def _probe_video_metadata(video_path: str | None) -> dict:
                 "duration_us": max(0, duration_us),
             }
     except Exception:
-        logger.warning("Khong fallback probe bang cv2 duoc cho %s", video_path, exc_info=True)
+        logger.warning("Không fallback probe bằng cv2 được cho %s", video_path, exc_info=True)
     return default
 
 
@@ -339,7 +339,7 @@ def _pick_reference_draft(capcut_root: Path, exclude_names: set[str] | None = No
                 best_score = score
                 best_path = entry
         except Exception:
-            logger.warning("Khong doc duoc draft tham chieu %s", entry, exc_info=True)
+            logger.warning("Không đọc được draft tham chiếu %s", entry, exc_info=True)
     return best_path
 
 
@@ -683,7 +683,7 @@ def _upsert_root_meta(
         root_meta["draft_ids"] = len(store)
         _write_json(root_meta_path, root_meta)
     except Exception:
-        logger.warning("Khong cap nhat duoc root_meta_info.json", exc_info=True)
+        logger.warning("Không cập nhật được root_meta_info.json", exc_info=True)
 
 
 def _export_to_capcut_from_reference(
@@ -981,7 +981,7 @@ def _export_to_capcut_from_reference(
         "draft_folder": str(draft_folder),
         "draft_name": draft_name,
         "subtitle_count": len(text_materials),
-        "message": f"Da tao du an CapCut '{draft_name}' thanh cong!",
+        "message": f"Đã tạo dự án CapCut '{draft_name}' thành công!",
     }
 
 

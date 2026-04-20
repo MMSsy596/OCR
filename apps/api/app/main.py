@@ -137,7 +137,7 @@ def _run_job_in_background(label: str, target, *args, **kwargs) -> None:
         try:
             target(*args, **kwargs)
         except Exception:
-            logger.exception("Background fallback job failed: %s", label)
+            logger.exception("Trình xử lý nền thất bại: %s", label)
 
     threading.Thread(target=_runner, name=f"solar-{label}", daemon=True).start()
 
@@ -309,7 +309,7 @@ def _mark_stale_queued_jobs(db: Session, jobs: list[models.PipelineJob]) -> bool
             "phase": "queue",
             "level": "warning",
             "progress": int(job.progress or 0),
-            "message": f"Job queued qua han {timeout_sec}s, danh dau stale_queue_timeout.",
+            "message": f"Job hàng đợi quá hạn {timeout_sec}s, đánh dấu stale_queue_timeout.",
         }
         job.artifacts = artifacts
         job.status = JobStatus.failed

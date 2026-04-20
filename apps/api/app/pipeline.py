@@ -78,13 +78,13 @@ def _update_job(db: Session, job: PipelineJob, status: JobStatus, progress: int,
 
 
 def _fake_ocr_segments(project: Project) -> list[dict[str, Any]]:
-    # MVP fallback: tao subtitle mau de co pipeline end-to-end.
+    # MVP fallback: tạo subtitle mẫu để có pipeline end-to-end.
     lines = [
-        "Nhan vat A: Ta se tro lai.",
-        "Nhan vat B: Chung ta khong con thoi gian.",
-        "Narrator: Troi toi dan, gio mua bat dau.",
-        "Nhan vat A: Ke hoach bat dau ngay bay gio.",
-        "Nhan vat B: Hay tin vao ta.",
+        "Nhân vật A: Ta sẽ trở lại.",
+        "Nhân vật B: Chúng ta không còn thời gian.",
+        "Narrator: Trời tối dần, gió mưa bắt đầu.",
+        "Nhân vật A: Kế hoạch bắt đầu ngay bây giờ.",
+        "Nhân vật B: Hãy tin vào ta.",
     ]
     output = []
     current = 0.0
@@ -1219,7 +1219,7 @@ def run_pipeline(
         )
         _update_job(db, job, JobStatus.running, 1, "init", artifacts=artifacts)
         if pipeline_input_mode == "video_ocr":
-            push_event(job, artifacts, "ocr", "Dang tach video thanh frame va OCR...", 5, logger_name="pipeline")
+            push_event(job, artifacts, "ocr", "Đang tách video thành frame và OCR...", 5, logger_name="pipeline")
             _update_job(db, job, JobStatus.running, 5, "ocr", artifacts=artifacts)
             last_ocr_progress = 5
             last_ocr_event_sample = 0
@@ -1297,7 +1297,7 @@ def run_pipeline(
                     job,
                     artifacts,
                     "ocr",
-                    "OCR that khong co ket qua, fallback sang mau subtitle gia lap.",
+                    "OCR thật không có kết quả, fallback sang mẫu subtitle giả lập.",
                     12,
                     level="warning",
                     logger_name="pipeline",
@@ -1345,7 +1345,7 @@ def run_pipeline(
                     "after": len(segments),
                 },
             )
-            push_event(job, artifacts, "ocr", f"Sau merge OCR: {len(segments)} doan.", 34, logger_name="pipeline")
+            push_event(job, artifacts, "ocr", f"Sau merge OCR: {len(segments)} đoạn.", 34, logger_name="pipeline")
 
         replace_segments(db, project.id, segments)
 
@@ -1427,7 +1427,7 @@ def run_pipeline(
             logger_name="pipeline",
         )
 
-        push_event(job, artifacts, "dedupe_merge", "Dang merge subtitle trung lap lan cuoi...", 65, logger_name="pipeline")
+        push_event(job, artifacts, "dedupe_merge", "Đang merge subtitle trùng lặp lần cuối...", 65, logger_name="pipeline")
         _update_job(db, job, JobStatus.running, 65, "dedupe_merge", artifacts=artifacts)
         # MVP: bo qua merge nang cao, chi loai dong trung lien tiep.
         deduped = _merge_adjacent_similar_segments(
@@ -1452,10 +1452,10 @@ def run_pipeline(
                 "removed": max(0, len(normalized) - len(deduped)),
             },
         )
-        push_event(job, artifacts, "dedupe_merge", f"Merge xong: {len(normalized)} -> {len(deduped)} doan.", 78, logger_name="pipeline")
+        push_event(job, artifacts, "dedupe_merge", f"Merge xong: {len(normalized)} -> {len(deduped)} đoạn.", 78, logger_name="pipeline")
         replace_segments(db, project.id, deduped)
 
-        push_event(job, artifacts, "tts", "Dang tao tts_lines.txt cho long tieng...", 80, logger_name="pipeline")
+        push_event(job, artifacts, "tts", "Đang tạo tts_lines.txt cho lồng tiếng...", 80, logger_name="pipeline")
         _update_job(db, job, JobStatus.running, 80, "tts", artifacts=artifacts)
         project_dir = Path(project.video_path).parent if project.video_path else Path.cwd()
         tts_script = project_dir / "tts_lines.txt"
@@ -1471,7 +1471,7 @@ def run_pipeline(
             },
         )
 
-        push_event(job, artifacts, "export", "Dang xuat SRT + JSON...", 90, logger_name="pipeline")
+        push_event(job, artifacts, "export", "Đang xuất SRT + JSON...", 90, logger_name="pipeline")
         _update_job(db, job, JobStatus.running, 90, "export", artifacts=artifacts)
         srt_path = project_dir / "output.vi.srt"
         json_path = project_dir / "output.project.json"
@@ -1515,7 +1515,7 @@ def run_pipeline(
                 "segments": len(deduped),
             },
         )
-        push_event(job, artifacts, "done", "Pipeline hoan tat.", 100, logger_name="pipeline")
+        push_event(job, artifacts, "done", "Pipeline hoàn tất.", 100, logger_name="pipeline")
         _update_job(db, job, JobStatus.done, 100, "done", artifacts=artifacts)
         project.status = ProjectStatus.ready
         db.add(project)

@@ -1,19 +1,19 @@
 @echo off
 chcp 65001 >nul
-title Phan Mem Quan Ly OCR Studio
+title Phần Mềm Quản Lý OCR Studio
 
 :menu
 cls
 echo ========================================================
-echo          MENU QUAN LY OCR STUDIO
+echo          MENU QUẢN LÝ OCR STUDIO
 echo ========================================================
-echo 1. Cai dat lan dau
-echo 2. Cap nhat phien ban
-echo 3. Chay ung dung
-echo 4. Dung ung dung
-echo 5. Thoat
+echo 1. Cài đặt lần đầu
+echo 2. Cập nhật phiên bản
+echo 3. Chạy ứng dụng
+echo 4. Dừng ứng dụng
+echo 5. Thoát
 echo ========================================================
-set /p choice="Moi ban nhap lua chon (1-5): "
+set /p choice="Mời bạn nhập lựa chọn (1-5): "
 
 if "%choice%"=="1" goto install
 if "%choice%"=="2" goto update
@@ -21,14 +21,14 @@ if "%choice%"=="3" goto run
 if "%choice%"=="4" goto stop
 if "%choice%"=="5" goto end
 
-echo Lua chon cua ban khong hop le, vui long thu lai!
+echo Lựa chọn của bạn không hợp lệ, vui lòng thử lại!
 pause
 goto menu
 
 :create_file
 if exist "docker-compose.yml" goto :eof
 echo.
-echo Dang tu dong tao file cau hinh he thong (docker-compose.yml)...
+echo Đang tự động tạo file cấu hình hệ thống (docker-compose.yml)...
 echo version: '3.8'> docker-compose.yml
 echo.>> docker-compose.yml
 echo services:>> docker-compose.yml
@@ -67,15 +67,15 @@ goto :eof
 call :create_file
 echo.
 echo ========================================================
-echo DANG TAI VA CAI DAT UNG DUNG...
-echo Vui long doi Docker tai du lieu trong it phut...
+echo ĐANG TẢI VÀ CÀI ĐẶT ỨNG DỤNG...
+echo Vui lòng đợi Docker tải dữ liệu trong ít phút...
 echo ========================================================
 docker compose pull
 docker compose up -d
 echo.
 echo ========================================================
-echo KHOI VA CAI DAT HOAN TAT! Ung dung dang chay ngam.
-echo Vui long mo trinh duyet va truy cap: http://localhost:8000
+echo KHỞI TẠO VÀ CÀI ĐẶT HOÀN TẤT! Ứng dụng đang chạy ngầm.
+echo Vui lòng mở trình duyệt và truy cập: http://localhost:8000
 echo ========================================================
 pause
 goto menu
@@ -84,7 +84,7 @@ goto menu
 call :create_file
 echo.
 echo ========================================================
-echo DANG CAP NHAT PHIEN BAN MOI NHAT...
+echo ĐANG CẬP NHẬT PHIÊN BẢN MỚI NHẤT...
 echo ========================================================
 docker compose pull
 docker compose down --remove-orphans
@@ -94,8 +94,8 @@ docker rm -f nanbao-ocr-app >nul 2>&1
 docker compose up -d
 echo.
 echo ========================================================
-echo HOAN TAT DE CAP NHAT! He thong da khoi dong lai.
-echo Vui long mo trinh duyet va truy cap: http://localhost:8000
+echo HOÀN TẤT CẬP NHẬT! Hệ thống đã khởi động lại.
+echo Vui lòng mở trình duyệt và truy cập: http://localhost:8000
 echo ========================================================
 pause
 goto menu
@@ -104,13 +104,13 @@ goto menu
 call :create_file
 echo.
 echo ========================================================
-echo DANG KHOI DONG UNG DUNG...
+echo ĐANG KHỞI ĐỘNG ỨNG DỤNG...
 echo ========================================================
 docker compose up -d
 echo.
 echo ========================================================
-echo HOAN TAT! Ung dung da san sang.
-echo Vui long mo trinh duyet va truy cap: http://localhost:8000
+echo HOÀN TẤT! Ứng dụng đã sẵn sàng.
+echo Vui lòng mở trình duyệt và truy cập: http://localhost:8000
 echo ========================================================
 pause
 goto menu
@@ -118,18 +118,18 @@ goto menu
 :stop
 if not exist "docker-compose.yml" (
     echo.
-    echo He thong chua tung duoc cai dat. Khong co gi de dung!
+    echo Hệ thống chưa từng được cài đặt. Không có gì để dừng!
     pause
     goto menu
 )
 echo.
 echo ========================================================
-echo DANG DUNG UNG DUNG AN TOAN...
+echo ĐANG DỪNG ỨNG DỤNG AN TOÀN...
 echo ========================================================
 docker compose down
 echo.
 echo ========================================================
-echo DA DUNG AN TOAN! Du lieu cua ban van duoc giu nguyen.
+echo ĐÃ DỪNG AN TOÀN! Dữ liệu của bạn vẫn được giữ nguyên.
 echo ========================================================
 pause
 goto menu

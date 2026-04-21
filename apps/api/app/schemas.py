@@ -96,6 +96,33 @@ class PipelineStartRequest(BaseModel):
     scan_interval_sec: float = Field(default=1.5, ge=0.1, le=10.0)
 
 
+class UrlCheckRequest(BaseModel):
+    source_url: str
+
+
+class VideoFormatItem(BaseModel):
+    format_id: str
+    label: str        # "1080p 60fps (MP4) · 250MB"
+    height: int
+    fps: int
+    ext: str
+    filesize: int | None
+    filesize_human: str
+    vcodec: str
+    acodec: str
+
+
+class UrlCheckResponse(BaseModel):
+    ok: bool
+    platform: str
+    host: str
+    title: str
+    thumbnail: str | None
+    duration_sec: float | None
+    formats: list[VideoFormatItem]
+    error: str | None = None
+
+
 class UrlIngestStartRequest(BaseModel):
     source_url: str
     auto_start_pipeline: bool = True
@@ -104,6 +131,7 @@ class UrlIngestStartRequest(BaseModel):
     gemini_models: str | None = None
     voice_map: dict[str, str] = Field(default_factory=dict)
     scan_interval_sec: float = Field(default=1.5, ge=0.1, le=10.0)
+    format_id: str | None = None  # Chất lượng video do người dùng chọn
 
 
 class DubStartRequest(BaseModel):

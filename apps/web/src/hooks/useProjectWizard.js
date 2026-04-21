@@ -25,12 +25,14 @@ export function useProjectWizard({
   const requiresRoi = true;
 
   const hasOcrProgress = useMemo(() => {
+    // Chỉ dùng dữ liệu job thực — KHÔNG dùng editableSegments để tránh báo
+    // "pipeline hoàn tất" giả sau khi upload video mới (segments cũ vẫn còn trong DB).
+    if (latestPipelineJob?.status === "done" || latestPipelineJob?.status === "failed") return true;
     if ((latestPipelineJob?.progress || 0) > 0) return true;
     if ((latestJobEvents || []).length > 0) return true;
     if (Object.keys(latestJobStats || {}).length > 0) return true;
-    if ((editableSegments || []).length > 0) return true;
     return false;
-  }, [latestPipelineJob, latestJobEvents, latestJobStats, editableSegments]);
+  }, [latestPipelineJob, latestJobEvents, latestJobStats]);
 
   const hasDubActivity = useMemo(
     () =>

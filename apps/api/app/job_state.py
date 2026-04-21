@@ -46,20 +46,21 @@ def _sanitize_phase_name(phase: str) -> str:
 
 
 def _compact_value(value: Any, depth: int = 0) -> Any:
-    if depth >= 3:
+    if depth >= 5:  # tăng từ 3 lên 5 — tránh cắt key_switch_log (depth 3)
         return f"<truncated:{type(value).__name__}>"
     if isinstance(value, dict):
         compact: dict[str, Any] = {}
         for idx, (key, item) in enumerate(value.items()):
-            if idx >= 12:
-                compact["_extra_keys"] = max(0, len(value) - 12)
+            if idx >= 24:  # tăng từ 12 lên 24
+                compact["_extra_keys"] = max(0, len(value) - 24)
                 break
             compact[str(key)] = _compact_value(item, depth + 1)
         return compact
     if isinstance(value, list):
-        preview = [_compact_value(item, depth + 1) for item in value[:5]]
-        if len(value) > 5:
-            preview.append(f"<+{len(value) - 5} items>")
+        limit = 60 if depth <= 1 else 30  # list lồng sâu giới hạn ít hơn
+        preview = [_compact_value(item, depth + 1) for item in value[:limit]]
+        if len(value) > limit:
+            preview.append(f"<+{len(value) - limit} items>")
         return preview
     if isinstance(value, str):
         limit = max(80, int(settings.job_event_message_limit or 220))

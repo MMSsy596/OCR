@@ -162,9 +162,24 @@ export function Step4Run({
   onNextStep,
   onOpenContextModal,
 }) {
-  const [showLog, setShowLog] = useState(false);
-  const [showKeyLog, setShowKeyLog] = useState(false);
+  const [showLog, setShowLog] = useState(true);
+  const [showKeyLog, setShowKeyLog] = useState(true);
   const [wasRunning, setWasRunning] = useState(false);
+  const [ocrCheckResult, setOcrCheckResult] = useState(null);
+  const [checkingOcr, setCheckingOcr] = useState(false);
+
+  async function checkOcrStatus() {
+    setCheckingOcr(true);
+    setOcrCheckResult(null);
+    try {
+      const res = await apiFetch(`${API_BASE}/admin/check-ocr`);
+      setOcrCheckResult(res);
+    } catch (err) {
+      setOcrCheckResult({ error: err.message, overall_ok: false });
+    } finally {
+      setCheckingOcr(false);
+    }
+  }
 
   const status = latestPipelineJob?.status;
   const progress = latestPipelineJob?.progress ?? 0;
@@ -302,6 +317,81 @@ export function Step4Run({
           {!hasSavedRoi && (
             <div className="hint-text" style={{ textAlign: "center", color: "var(--warning)" }}>
               ⚠️ Chưa lưu vùng OCR — quay lại Bước 3
+            </div>
+          )}
+
+          {/* OCR Diagnostics — hiển thị khi failed hoặc khi có lỗi ocr_empty */}
+          {isFailed && (
+            <div style={{
+              padding: "12px 14px",
+              background: "rgba(239,68,68,0.07)",
+              border: "1px solid rgba(239,68,68,0.3)",
+              borderRadius: "var(--radius-md)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--danger)" }}>
+                ❌ Pipeline thất bại — Kiểm tra nguyên nhân OCR
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                Nếu lỗi "OCR trả về 0 đoạn" hoặc "rapidocr_unavailable", hãy nhấn nút bên dưới để kiểm tra thư viện OCR trong container.
+              </div>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={checkOcrStatus}
+                disabled={checkingOcr}
+                style={{ alignSelf: "flex-start" }}
+              >
+                {checkingOcr ? "⏳ Đang kiểm tra..." : "🔍 Kiểm tra thư viện OCR"}
+              </button>
+              {ocrCheckResult && (
+                <div style={{
+                  background: "var(--bg-elevated)",
+                  borderRadius: "var(--radius-sm)",
+                  padding: "10px 12px",
+                  fontSize: 12,
+                  fontFamily: "monospace",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                }}>
+                  {ocrCheckResult.error ? (
+                    <div style={{ color: "var(--danger)" }}>Lỗi kết nối: {ocrCheckResult.error}</div>
+                  ) : (
+                    <>
+                      <div style={{ fontWeight: 700, color: ocrCheckResult.overall_ok ? "var(--success)" : "var(--danger)", marginBottom: 4 }}>
+                        {ocrCheckResult.overall_ok ? "✅ OCR sẵn sàng" : "❌ OCR có vấn đề"}
+                      </div>
+                      {[
+                        { key: "cv2",         label: "OpenCV (cv2)" },
+                        { key: "onnxruntime", label: "ONNX Runtime" },
+                        { key: "rapidocr",    label: "RapidOCR Engine" },
+                        { key: "models",      label: "Model Files" },
+                      ].map(({ key, label }) => {
+                        const info = ocrCheckResult[key] || {};
+                        const ok = info.ok !== false;
+                        return (
+                          <div key={key} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                            <span style={{ color: ok ? "var(--success)" : "var(--danger)", minWidth: 16 }}>{ok ? "✅" : "❌"}</span>
+                            <span style={{ color: "var(--text-muted)", minWidth: 120 }}>{label}:</span>
+                            <span style={{ color: ok ? "var(--text-primary)" : "var(--danger)", flex: 1, wordBreak: "break-word" }}>
+                              {info.ok !== false
+                                ? (info.version || (info.found !== undefined ? `${info.found} files` : "OK"))
+                                : (info.error || "Không tìm thấy")}
+                            </span>
+                          </div>
+                        );
+                      })}
+                      {!ocrCheckResult.overall_ok && (
+                        <div style={{ marginTop: 6, padding: "8px", background: "rgba(251,191,36,0.1)", borderRadius: 4, color: "var(--warning)", fontSize: 11 }}>
+                          💡 Cần rebuild Docker image hoặc kiểm tra requirements.txt để cài đủ: opencv-python, rapidocr-onnxruntime, onnxruntime
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

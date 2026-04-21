@@ -15,7 +15,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 rem === URL tai ban cap nhat file quan ly nay ===
-set "BAT_UPDATE_URL=https://raw.githubusercontent.com/nanbao/ocr/main/ban_cai_dat/CaiDat_Va_QuanLy_OCR.bat"
+set "BAT_UPDATE_URL=https://raw.githubusercontent.com/MMSsy596/OCR/main/CaiDat_Va_QuanLy_OCR.bat"
 
 :menu
 cls

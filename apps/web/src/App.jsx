@@ -220,12 +220,14 @@ export function App() {
 
   const latestPipelineJob  = useMemo(() => pickLatestByKind(jobs, "pipeline"), [jobs]);
   const latestDubJob       = useMemo(() => pickLatestByKind(jobs, "dub"), [jobs]);
+  const latestIngestJob    = useMemo(() => pickLatestByKind(jobs, "url_ingest"), [jobs]);
   const latestDubAudioJob  = useMemo(() => pickDubAudioJob(jobs), [jobs]);
   const latestDubAudioUrl  = useMemo(() => latestDubAudioJob?.artifacts?.dubbed_audio ? `${API_BASE}/jobs/${latestDubAudioJob.id}/artifact/dubbed_audio` : "", [latestDubAudioJob]);
   const latestDubAudioName = useMemo(() => latestDubAudioJob?.artifacts?.dub_output_key || "dub-output.wav", [latestDubAudioJob]);
   const latestJobEvents    = useMemo(() => [...(latestPipelineJob?.artifacts?.events || [])].slice(-30).reverse(), [latestPipelineJob]);
   const latestJobStats     = useMemo(() => latestPipelineJob?.artifacts?.stats || {}, [latestPipelineJob]);
   const latestDubEvents    = useMemo(() => [...(latestDubJob?.artifacts?.events || [])].slice(-20).reverse(), [latestDubJob]);
+  const latestIngestEvents = useMemo(() => [...(latestIngestJob?.artifacts?.events || [])].slice(-40).reverse(), [latestIngestJob]);
 
   /* ── hooks ── */
   const { editableSegments, setEditableSegments, isEditingSegments, setIsEditingSegments, currentVideoTime, setCurrentVideoTime, activeSegment, resetHistory, updateEditableSegment, mergeAdjacentDuplicateSegments, undoSegments, redoSegments, setUndoStack, setRedoStack } =
@@ -486,7 +488,9 @@ export function App() {
   const step2Props = {
     selectedProject, videoFile, setVideoFile, loading, uploadVideo,
     sourceUrl, setSourceUrl, autoStartAfterIngest, setAutoStartAfterIngest,
-    ingestVideoFromUrl, ingestingUrl,
+    ingestVideoFromUrl, ingestingUrl, setWizardStep,
+    latestIngestJob, latestIngestEvents,
+    apiBase: API_BASE,
   };
   const step3Props = {
     selectedProject, videoSrc, stageRef, roiDraft, roiEditMode,

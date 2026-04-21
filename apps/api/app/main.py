@@ -21,7 +21,7 @@ from . import crud, models, schemas
 from .auth import require_api_auth
 from .capcut_exporter import export_to_capcut
 from .db import Base, SessionLocal, engine, ensure_runtime_indexes, get_db
-from .downloader import run_url_ingest_job
+from .downloader import fetch_url_formats, run_url_ingest_job
 from .exporter import export_subtitle_file
 from .models import JobStatus
 from .pipeline import retranslate_project_segments, run_pipeline
@@ -451,6 +451,18 @@ def upload_video(project_id: str, request: Request, file: UploadFile = File(...)
     return _to_project_read(project)
 
 
+@app.post("/ingest-url/check")
+def check_url_formats(payload: schemas.UrlCheckRequest):
+    """Kiểm tra URL và lấy danh sách chất lượng có thể tải (không tải file)."""
+    from .downloader import _validate_source_url
+    try:
+        url = _validate_source_url((payload.source_url or "").strip())
+    except ValueError as ex:
+        raise HTTPException(status_code=400, detail=str(ex))
+    result = fetch_url_formats(url)
+    return result
+
+
 @app.post("/projects/{project_id}/ingest-url/start", response_model=schemas.JobRead)
 def start_url_ingest(project_id: str, payload: schemas.UrlIngestStartRequest, db: Session = Depends(get_db)):
     project = crud.get_project(db, project_id)
@@ -481,6 +493,7 @@ def start_url_ingest(project_id: str, payload: schemas.UrlIngestStartRequest, db
             gemini_api_key=payload.gemini_api_key,
             voice_map=payload.voice_map,
             scan_interval_sec=payload.scan_interval_sec,
+            format_id=payload.format_id,
         )
     return job
 
@@ -1234,6 +1247,52 @@ def _save_gemini_keys_to_env(keys: list[str]) -> None:
         _gs.cache_clear()
     except Exception:
         pass
+
+
+@app.get("/admin/check-ocr")
+def check_ocr_status():
+    """Chẩn đoán trạng thái thư viện OCR trong container."""
+    result: dict = {}
+    # Kiểm tra cv2
+    try:
+        import cv2  # type: ignore
+        result["cv2"] = {"ok": True, "version": cv2.__version__}
+    except Exception as ex:
+        result["cv2"] = {"ok": False, "error": str(ex)[:200]}
+    # Kiểm tra onnxruntime
+    try:
+        import onnxruntime as ort  # type: ignore
+        result["onnxruntime"] = {
+            "ok": True,
+            "version": ort.__version__,
+            "providers": list(ort.get_available_providers()),
+        }
+    except Exception as ex:
+        result["onnxruntime"] = {"ok": False, "error": str(ex)[:200]}
+    # Kiểm tra rapidocr
+    try:
+        from rapidocr_onnxruntime import RapidOCR  # type: ignore
+        engine = RapidOCR()
+        result["rapidocr"] = {"ok": True, "engine_init": "default"}
+    except Exception as ex:
+        result["rapidocr"] = {"ok": False, "error": str(ex)[:400]}
+    # Kiểm tra model files
+    try:
+        import rapidocr_onnxruntime as _ro
+        model_dir = Path(_ro.__file__).parent / "models"
+        if model_dir.exists():
+            models = [f.name for f in model_dir.glob("*.onnx")]
+            result["models"] = {"found": len(models), "files": models[:10]}
+        else:
+            result["models"] = {"found": 0, "note": "models dir not found"}
+    except Exception as ex:
+        result["models"] = {"error": str(ex)[:200]}
+    result["overall_ok"] = (
+        result.get("cv2", {}).get("ok", False)
+        and result.get("onnxruntime", {}).get("ok", False)
+        and result.get("rapidocr", {}).get("ok", False)
+    )
+    return result
 
 
 @app.get("/admin/check-update")

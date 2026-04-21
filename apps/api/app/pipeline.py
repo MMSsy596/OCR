@@ -77,31 +77,7 @@ def _update_job(db: Session, job: PipelineJob, status: JobStatus, progress: int,
     job._solar_last_flush_progress = int(progress)
 
 
-def _fake_ocr_segments(project: Project) -> list[dict[str, Any]]:
-    # MVP fallback: tạo subtitle mẫu để có pipeline end-to-end.
-    lines = [
-        "Nhân vật A: Ta sẽ trở lại.",
-        "Nhân vật B: Chúng ta không còn thời gian.",
-        "Narrator: Trời tối dần, gió mưa bắt đầu.",
-        "Nhân vật A: Kế hoạch bắt đầu ngay bây giờ.",
-        "Nhân vật B: Hãy tin vào ta.",
-    ]
-    output = []
-    current = 0.0
-    for i, line in enumerate(lines, start=1):
-        output.append(
-            {
-                "start_sec": current,
-                "end_sec": current + 2.8,
-                "raw_text": line,
-                "translated_text": "",
-                "speaker": "character_a" if i in (1, 4) else ("character_b" if i in (2, 5) else "narrator"),
-                "voice": "male-deep" if i in (1, 4) else ("female-bright" if i in (2, 5) else "narrator-neutral"),
-                "confidence": 0.87 + (i * 0.01),
-            }
-        )
-        current += 3.0
-    return output
+
 
 
 def _build_ocr_variants(cv2: Any, gray: Any, profile: str = "balanced") -> list[tuple[str, Any]]:
@@ -221,24 +197,6 @@ def _parse_srt_segments(
     return segments
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def _ocr_segments_from_video(
     project: Project,
     scan_interval_sec: float = 1.0,
@@ -291,8 +249,56 @@ def _ocr_segments_from_video(
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
-        meta["engine"] = "video_open_failed"
-        return [], meta
+        # cv2 không decode được codec gốc (HEVC, MKV, VP9, AV1...)
+        # Thử transcode sang H.264 MP4 tạm bằng ffmpeg rồi retry.
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if not ffmpeg_bin:
+            meta["engine"] = "video_open_failed"
+            meta["video_open_detail"] = "cv2 failed and ffmpeg not found"
+            return [], meta
+        tmp_path = video_path.parent / f"_ocr_tmp_{video_path.stem}.mp4"
+        try:
+            logger.info("cv2 không mở được %s — transcode sang H.264 tạm: %s", video_path.name, tmp_path.name)
+            result = subprocess.run(
+                [
+                    ffmpeg_bin,
+                    "-y",
+                    "-i", str(video_path),
+                    "-c:v", "libx264",
+                    "-preset", "ultrafast",
+                    "-crf", "23",
+                    "-an",          # bỏ âm thanh để nhanh hơn
+                    str(tmp_path),
+                ],
+                capture_output=True,
+                timeout=600,
+            )
+            if result.returncode != 0:
+                meta["engine"] = "video_open_failed"
+                meta["video_open_detail"] = (
+                    f"ffmpeg transcode failed (code {result.returncode}): "
+                    + result.stderr.decode("utf-8", errors="ignore")[-300:]
+                )
+                return [], meta
+            cap = cv2.VideoCapture(str(tmp_path))
+            if not cap.isOpened():
+                tmp_path.unlink(missing_ok=True)
+                meta["engine"] = "video_open_failed"
+                meta["video_open_detail"] = "cv2 failed even after ffmpeg transcode to H.264"
+                return [], meta
+            meta["ffmpeg_transcode"] = True
+            meta["transcode_tmp"] = str(tmp_path)
+            video_path = tmp_path   # dùng file tạm cho phần còn lại
+        except subprocess.TimeoutExpired:
+            tmp_path.unlink(missing_ok=True)
+            meta["engine"] = "video_open_failed"
+            meta["video_open_detail"] = "ffmpeg transcode timeout (>600s)"
+            return [], meta
+        except Exception as ex:
+            tmp_path.unlink(missing_ok=True)
+            meta["engine"] = "video_open_failed"
+            meta["video_open_detail"] = f"ffmpeg exception: {str(ex)[:200]}"
+            return [], meta
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 24
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
@@ -490,6 +496,13 @@ def _ocr_segments_from_video(
 
     producer.join(timeout=1.0)
     cap.release()
+    # Dọn file tạm nếu đã transcode bằng ffmpeg
+    transcode_tmp = meta.get("transcode_tmp")
+    if transcode_tmp:
+        try:
+            Path(transcode_tmp).unlink(missing_ok=True)
+        except Exception:
+            pass
     if producer_error:
         meta["producer_error"] = producer_error[0][:240]
     meta["segments_before_merge"] = len(segments)
@@ -1007,11 +1020,14 @@ def _translate_project_segments(
                     })
             return start_idx, chunk, translated, err, chunk_switch_log
 
+        batch_chunks_done = 0
+        batch_total_segs = len(db_segments)
         with ThreadPoolExecutor(max_workers=max_parallel, thread_name_prefix="gemini-batch") as pool:
             futures = {pool.submit(_translate_one_chunk, args): args for args in chunks_meta}
             for future in as_completed(futures):
                 start_idx, chunk, translated_chunk, batch_err, chunk_log = future.result()
                 key_switch_events.extend(chunk_log)
+                batch_chunks_done += len(chunk)
                 if translated_chunk and len(translated_chunk) == len(chunk):
                     gemini_batch_chunks_ok += 1
                     gemini_batch_lines_ok += len(chunk)
@@ -1023,6 +1039,16 @@ def _translate_project_segments(
                         first_translation_error = batch_err
                     if "gemini_batch_" in batch_err or "gemini_" in batch_err:
                         gemini_error_count += 1
+                # Cập nhật UI sau mỗi chunk hoàn thành — tránh đứng ở 35%
+                if progress_hook:
+                    try:
+                        progress_hook({
+                            "done": min(batch_chunks_done, batch_total_segs),
+                            "total": batch_total_segs,
+                            "provider_counts": translation_stats.copy(),
+                        })
+                    except Exception:
+                        pass
 
     for idx, seg in enumerate(db_segments):
         prev_text = db_segments[idx - 1].raw_text if idx > 0 else ""
@@ -1293,22 +1319,60 @@ def run_pipeline(
             )
             ocr_source = "rapidocr"
             if not segments:
+                # Xây dựng thông điệp chẩn đoán cụ thể dựa vào engine meta
+                ocr_engine = ocr_meta.get("engine", "unknown")
+                diag_hints = {
+                    "rapidocr_unavailable": (
+                        "Thư viện OCR (rapidocr-onnxruntime / cv2) chưa được cài đặt "
+                        "trong container. Kiểm tra Dockerfile hoặc requirements.txt."
+                    ),
+                    "missing_video": "Dự án chưa có đường dẫn video. Vui lòng tải lên video trước khi chạy pipeline.",
+                    "missing_video_file": (
+                        f"File video không tồn tại trên đĩa: {ocr_meta.get('video_path', '')}. "
+                        "Có thể video chưa tải xong hoặc đã bị xóa."
+                    ),
+                    "video_open_failed": (
+                        "cv2 không mở được file video (codec không được hỗ trợ). "
+                        "ffmpeg đã được thử nhưng cũng thất bại. "
+                        "Kiểm tra chi tiết bên dưới hoặc thử upload lại video dạng .mp4 H.264."
+                    ),
+                }
+                diag_msg = diag_hints.get(ocr_engine, f"OCR trả về 0 đoạn (engine={ocr_engine}).")
+                # Bổ sung chi tiết ffmpeg/transcode nếu có
+                video_open_detail = ocr_meta.get("video_open_detail", "")
+                if video_open_detail and ocr_engine == "video_open_failed":
+                    diag_msg = f"{diag_msg} Chi tiết: {video_open_detail[:200]}"
+                frames_sampled = int(ocr_meta.get("frames_sampled", 0) or 0)
+                frames_total = int(ocr_meta.get("frames_total", 0) or 0)
+                producer_error = ocr_meta.get("producer_error", "")
+                full_msg = (
+                    f"Lỗi OCR: {diag_msg} "
+                    f"[frames: {frames_sampled}/{frames_total}"
+                    + (f", producer_error={producer_error[:120]}" if producer_error else "")
+                    + "]"
+                )
+                set_stat(
+                    artifacts,
+                    "ocr",
+                    {
+                        **ocr_meta,
+                        "source": "ocr_empty",
+                        "segments_raw": 0,
+                        "diag": diag_msg,
+                    },
+                )
                 push_event(
                     job,
                     artifacts,
                     "ocr",
-                    "OCR thật không có kết quả, fallback sang mẫu subtitle giả lập.",
+                    full_msg,
                     12,
-                    level="warning",
+                    level="error",
                     logger_name="pipeline",
                 )
-                segments = _fake_ocr_segments(project)
-                ocr_source = "fake_fallback"
-                ocr_meta = {
-                    **ocr_meta,
-                    "engine": "fake_fallback",
-                    "segments_before_merge": len(segments),
-                }
+                _update_job(db, job, JobStatus.failed, 12, "ocr_empty", full_msg, artifacts=artifacts)
+                return {"ok": False, "job_id": job_id, "error": full_msg}
+
             set_stat(
                 artifacts,
                 "ocr",
@@ -1322,7 +1386,7 @@ def run_pipeline(
                 job,
                 artifacts,
                 "ocr",
-                f"OCR xong: {len(segments)} doan text (source={ocr_source}).",
+                f"OCR xong: {len(segments)} đoạn text (source={ocr_source}).",
                 28,
                 logger_name="pipeline",
             )

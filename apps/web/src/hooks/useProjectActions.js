@@ -142,15 +142,15 @@ export function useProjectActions(deps) {
     }
   }
 
-  async function ingestVideoFromUrl() {
+  async function ingestVideoFromUrl(formatId = null) {
     if (!selectedProjectId || !sourceUrl.trim()) {
       setMessage("⚠️ Chọn dự án và dán link trước.");
-      return;
+      return null;
     }
     setIngestingUrl(true);
     setMessage("⏳ Đang gửi yêu cầu tải video từ đường dẫn...");
     try {
-      await jsonFetch(`${apiBase}/projects/${selectedProjectId}/ingest-url/start`, {
+      const job = await jsonFetch(`${apiBase}/projects/${selectedProjectId}/ingest-url/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -160,6 +160,7 @@ export function useProjectActions(deps) {
           gemini_api_key: pipelineForm.gemini_api_key || null,
           voice_map: parseVoiceMap(pipelineForm.voiceMapText),
           scan_interval_sec: Number(pipelineForm.scan_interval_sec) || 1.5,
+          format_id: formatId || null,
         }),
       });
       await loadProjectData(selectedProjectId);
@@ -168,9 +169,11 @@ export function useProjectActions(deps) {
           ? "✅ Đã nhận link, đang tải và sẽ tự chạy pipeline."
           : "✅ Đã nhận link, đang tự tải video vào dự án.",
       );
-      setWizardStep(3); // Chuyển sang bước 3: Vùng OCR
+      // Không tự chuyển bước — để Step2Upload handle
+      return job;
     } catch (err) {
       setMessage(`❌ Lỗi nhận link: ${await normalizeApiError(err, "ingest_url_failed")}`);
+      return null;
     } finally {
       setIngestingUrl(false);
     }

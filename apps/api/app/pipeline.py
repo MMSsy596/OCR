@@ -1207,6 +1207,37 @@ def retranslate_project_segments(project_id: str, gemini_api_key: str | None = N
         primary_key = all_keys[0] if all_keys else None
         backup_key = all_keys[1] if len(all_keys) >= 2 else None
         models = [m.strip() for m in (gemini_models or "").split(",")] if gemini_models else None
+
+        # Thu thập key events realtime
+        key_events: list[dict] = []
+        _log_lock = threading.Lock()
+
+        def _on_key_event(ev: dict) -> None:
+            action = ev.get("action", "")
+            if action in ("trying_key",):
+                return  # bỏ qua noise
+            key_suffix = ev.get("key_suffix", "???")
+            model = ev.get("model", "")
+            err = (ev.get("error") or "")[:200]
+            if action in ("key_failed_switching", "key_invalid_switching"):
+                msg = f"⚠️ Key ***{key_suffix} lỗi → ***{ev.get('switching_to', '?')} | {err}"
+                level = "warning"
+            elif action in ("success_on_fallback", "success_on_fallback_key"):
+                msg = f"✅ Key dự phòng ***{key_suffix} thành công (model={model})"
+                level = "success"
+            elif action in ("non_key_error", "chunk_error_trying_next", "model_error_trying_next"):
+                model_info = f" [{ev.get('model', '?')}]" if ev.get("model") else ""
+                msg = f"⚡ Key ***{key_suffix}{model_info} lỗi: {err}"
+                level = "warning"
+            elif action == "all_keys_failed":
+                msg = f"❌ Tất cả key thất bại: {err}"
+                level = "error"
+            else:
+                return
+            from datetime import datetime, timezone
+            with _log_lock:
+                key_events.append({"time": datetime.now(timezone.utc).isoformat(), "level": level, "message": msg})
+
         normalized, translation_stats, first_translation_error, _ = _translate_project_segments(
             db,
             project,
@@ -1215,6 +1246,7 @@ def retranslate_project_segments(project_id: str, gemini_api_key: str | None = N
             voice_map={},
             all_api_keys=all_keys,
             models=models,
+            key_event_hook=_on_key_event,
         )
         replace_segments(db, project.id, normalized)
         updated = list_segments(db, project.id)
@@ -1222,6 +1254,7 @@ def retranslate_project_segments(project_id: str, gemini_api_key: str | None = N
             "ok": True,
             "translation_stats": translation_stats,
             "translation_error_hint": first_translation_error,
+            "key_switch_log": key_events,
             "segments": updated,
         }
     except Exception as ex:

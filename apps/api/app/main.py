@@ -685,6 +685,7 @@ def retranslate_segments(project_id: str, payload: schemas.RetranslateRequest, d
     return schemas.RetranslateResponse(
         translation_stats=result.get("translation_stats", {"gemini": 0, "deep_translator": 0, "fallback_tag": 0}),
         translation_error_hint=result.get("translation_error_hint", ""),
+        key_switch_log=result.get("key_switch_log", []),
         segments=result.get("segments", []),
     )
 

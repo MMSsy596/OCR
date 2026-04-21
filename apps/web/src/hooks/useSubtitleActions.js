@@ -29,6 +29,7 @@ export function useSubtitleActions(deps) {
 
   const [savingSegments, setSavingSegments] = useState(false);
   const [retranslating, setRetranslating] = useState(false);
+  const [retranslateLog, setRetranslateLog] = useState(null); // { stats, errorHint, keyLog }
   const [exporting, setExporting] = useState(false);
   const [dubbing, setDubbing] = useState(false);
   const [uploadingSrt, setUploadingSrt] = useState(false);
@@ -96,7 +97,13 @@ export function useSubtitleActions(deps) {
       setUndoStack([]);
       setRedoStack([]);
       setIsEditingSegments(false);
-      setMessage(`✅ Đã dịch lại. Thống kê: ${JSON.stringify(out.translation_stats || {})}`);
+      // Lưu log để hiển thị trong Step5
+      const stats = out.translation_stats || {};
+      const keyLog = out.key_switch_log || [];
+      const errorHint = out.translation_error_hint || "";
+      setRetranslateLog({ stats, errorHint, keyLog });
+      const statStr = Object.entries(stats).map(([k, v]) => `${k}: ${v}`).join(", ");
+      setMessage(`✅ Đã dịch lại xong. Thống kê: ${statStr || "(không có)"}`);
     } catch (err) {
       setMessage(`❌ Lỗi dịch lại: ${await normalizeApiError(err, "retranslate_failed")}`);
     } finally {
@@ -222,6 +229,7 @@ export function useSubtitleActions(deps) {
   return {
     savingSegments,
     retranslating,
+    retranslateLog,
     exporting,
     dubbing,
     uploadingSrt,

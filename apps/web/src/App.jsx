@@ -257,7 +257,7 @@ export function App() {
       selectedProject, setProjectForm, setRoiDraft,
     });
 
-  const { savingSegments, retranslating, exporting, dubbing, uploadingSrt, retryingStuckJobs,
+  const { savingSegments, retranslating, retranslateLog, exporting, dubbing, uploadingSrt, retryingStuckJobs,
     saveSegments, retranslateOnly, exportSubtitle, startDubAudio, uploadExternalSrt, downloadDubAudio, retryStuckJobs } =
     useSubtitleActions({
       apiBase: API_BASE, jsonFetch, selectedProjectId, editableSegments,
@@ -506,7 +506,7 @@ export function App() {
     onOpenContextModal: () => setShowContextModal(true),
   };
   const step5Props = {
-    editableSegments, selectedProject, savingSegments, retranslating,
+    editableSegments, selectedProject, savingSegments, retranslating, retranslateLog,
     exporting, uploadingSrt, exportForm, setExportForm,
     srtUploadFile, setSrtUploadFile, saveSegments,
     retranslateOnly, exportSubtitle, uploadExternalSrt,

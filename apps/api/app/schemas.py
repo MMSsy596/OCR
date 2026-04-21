@@ -85,6 +85,7 @@ class RetranslateRequest(BaseModel):
 class RetranslateResponse(BaseModel):
     translation_stats: dict[str, int]
     translation_error_hint: str
+    key_switch_log: list[dict] = Field(default_factory=list)
     segments: list[SegmentRead]
 
 

@@ -5,6 +5,7 @@ export function Step5Export({
   selectedProject,
   savingSegments,
   retranslating,
+  retranslateLog,
   exporting,
   exportForm,
   setExportForm,
@@ -152,6 +153,57 @@ export function Step5Export({
             >
               {retranslating ? "⏳ Đang dịch…" : "🔄 Dịch lại"}
             </button>
+
+            {/* Log key switch sau khi dịch lại */}
+            {retranslateLog && (
+              <div style={{ width: "100%", marginTop: 2 }}>
+                {/* Thống kê provider */}
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 11, color: "var(--text-muted)", marginBottom: retranslateLog.keyLog?.length ? 6 : 0 }}>
+                  {Object.entries(retranslateLog.stats || {}).map(([k, v]) => (
+                    <span key={k} style={{
+                      padding: "2px 8px", borderRadius: "var(--radius-pill)",
+                      background: k === "gemini" ? "rgba(99,102,241,0.12)" : k === "deep_translator" ? "rgba(251,146,60,0.12)" : "rgba(239,68,68,0.12)",
+                      color: k === "gemini" ? "var(--accent-2)" : k === "deep_translator" ? "var(--warning)" : "var(--danger)",
+                      fontWeight: 600,
+                    }}>
+                      {k === "gemini" ? "🤖" : k === "deep_translator" ? "🌐" : "⚠️"} {k}: {v}
+                    </span>
+                  ))}
+                  {retranslateLog.errorHint && (
+                    <span style={{ color: "var(--danger)", fontSize: 11 }} title={retranslateLog.errorHint}>
+                      ⚠️ {retranslateLog.errorHint.slice(0, 80)}
+                    </span>
+                  )}
+                </div>
+                {/* Key switch log */}
+                {retranslateLog.keyLog?.length > 0 && (
+                  <div style={{
+                    maxHeight: 160, overflowY: "auto",
+                    background: "var(--bg-elevated)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius-md)",
+                    padding: "6px 8px",
+                    display: "flex", flexDirection: "column", gap: 2,
+                    fontSize: 11, fontFamily: "monospace",
+                  }}>
+                    {retranslateLog.keyLog.map((entry, i) => (
+                      <div key={i} style={{
+                        color: entry.level === "error" ? "var(--danger)"
+                             : entry.level === "warning" ? "var(--warning)"
+                             : entry.level === "success" ? "var(--success)"
+                             : "var(--text-secondary)",
+                        lineHeight: 1.5,
+                      }}>
+                        <span style={{ opacity: 0.5, marginRight: 6 }}>
+                          [{new Date(entry.time).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}]
+                        </span>
+                        {entry.message}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <button className="btn btn-secondary btn-sm" onClick={mergeAdjacentDuplicateSegments}>
               🔗 Gộp trùng
             </button>

@@ -922,7 +922,9 @@ def _translate_project_segments(
     all_api_keys: list[str] | None = None,
     models: list[str] | None = None,
     key_event_hook: Callable[[dict], None] | None = None,
+    wait_for_key_hook: Callable[[str, str], list[str]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int], str, dict[str, Any]]:
+    """Dịch toàn bộ segment. wait_for_key_hook(error_msg, last_err) → list key mới nếu user cấp, [] nếu bỏ qua."""
     voice_map = voice_map or {}
     db_segments = list_segments(db, project.id)
     normalized = []
@@ -986,6 +988,7 @@ def _translate_project_segments(
             err = ""
             models_to_try = [m.strip() for m in models if m.strip()] if models else ["gemini-2.5-flash-lite"]
             for k_idx, batch_key in enumerate(remaining_keys):
+                key_is_invalid = False
                 for model_name in models_to_try:
                     _log_key_event({
                         "action": "trying_key",
@@ -1014,11 +1017,24 @@ def _translate_project_segments(
                             })
                         break  # Thành công, thoát vòng lặp models
 
+                    # KEY bị lỗi (403/invalid) → không có ích gì thử tiếp model khác
+                    if _is_gemini_key_error(err):
+                        key_is_invalid = True
+                        break  # Thoát models loop sớm — đãnh dấu kiểm tra nhóm key bên ngoài
+
+                    # Lỗi khác (429 rate-limit, network...) → thử model tiếp theo trong cùng key
+                    _log_key_event({
+                        "action": "model_error_trying_next",
+                        "key_suffix": batch_key[-6:] if len(batch_key) > 6 else "***",
+                        "model": model_name,
+                        "error": err[:200],
+                    })
+
                 if translated and len(translated) == len(lines):
                     break  # Thành công, thoát vòng lặp keys
 
-                # Key lỗi
-                if _is_gemini_key_error(err):
+                # Xử lý sau khi hết models của key này
+                if key_is_invalid or _is_gemini_key_error(err):
                     with _invalid_keys_lock:
                         invalid_gemini_keys.add(batch_key)
                     next_key = next((k for k in remaining_keys[k_idx+1:] if k not in invalid_gemini_keys), None)
@@ -1029,7 +1045,7 @@ def _translate_project_segments(
                         "switching_to": next_key[-6:] if next_key and len(next_key) > 6 else ("none" if not next_key else "***"),
                     })
                 else:
-                    # Lỗi khác (rate limit, nghẽn mạng, parse fail...)
+                    # Đã thử hết model của key này, chuyển sang key tiếp
                     _log_key_event({
                         "action": "chunk_error_trying_next",
                         "key_suffix": batch_key[-6:] if len(batch_key) > 6 else "***",
@@ -1066,6 +1082,39 @@ def _translate_project_segments(
                         })
                     except Exception:
                         pass
+
+    # --- PAUSE và hỏi user trước khi fallback sang per-segment / deep_translator ---
+    failed_chunks = sum(1 for s_id in [seg.id for seg in db_segments] if s_id not in batch_prefill)
+    if failed_chunks > 0 and wait_for_key_hook and gemini_batch_chunks_failed > 0:
+        last_err = first_translation_error or ""
+        new_keys = wait_for_key_hook(
+            f"{gemini_batch_chunks_failed} chunk bị thất bại, có {len(invalid_gemini_keys)} key lỗi.",
+            last_err,
+        )
+        if new_keys:
+            # User cấp key mới → cập nhật và retry cách chunk chưa dịch
+            for nk in new_keys:
+                if nk not in effective_all_keys:
+                    effective_all_keys.append(nk)
+            with _invalid_keys_lock:
+                # Xóa các key lỗi khỏi tập invalid nếu user cấp key mới
+                invalid_gemini_keys.clear()
+            # Retry lại các chunk chưa dịch
+            retry_chunks = [args for args in chunks_meta if args[1][0].id not in batch_prefill]
+            if retry_chunks:
+                with ThreadPoolExecutor(max_workers=min(4, len(retry_chunks)), thread_name_prefix="gemini-retry") as retry_pool:
+                    retry_futures = {retry_pool.submit(_translate_one_chunk, args): args for args in retry_chunks}
+                    for f in as_completed(retry_futures):
+                        r_start, r_chunk, r_translated, r_err, r_log = f.result()
+                        key_switch_events.extend(r_log)
+                        if r_translated and len(r_translated) == len(r_chunk):
+                            gemini_batch_chunks_ok += 1
+                            gemini_batch_lines_ok += len(r_chunk)
+                            for seg_item, out_text in zip(r_chunk, r_translated):
+                                batch_prefill[seg_item.id] = out_text
+                        else:
+                            if r_err and not first_translation_error:
+                                first_translation_error = r_err
 
     for idx, seg in enumerate(db_segments):
         prev_text = db_segments[idx - 1].raw_text if idx > 0 else ""
@@ -1483,9 +1532,10 @@ def run_pipeline(
             elif action in ("success_on_fallback", "success_on_fallback_key"):
                 level = "success"
                 msg = f"✅ Key dự phòng ***{key_suffix} thành công (model={model})"
-            elif action in ("non_key_error", "chunk_error_trying_next"):
+            elif action in ("non_key_error", "chunk_error_trying_next", "model_error_trying_next"):
                 level = "warning"
-                msg = f"⚡ key ***{key_suffix} lỗi mạng/parse: {err}"
+                model_info = f" [{ev.get('model', '?')}]" if ev.get("model") else ""
+                msg = f"⚡ key ***{key_suffix}{model_info} lỗi: {err}"
             elif action == "all_keys_failed":
                 level = "error"
                 msg = f"❌ Tất cả key thất bại: {(ev.get('final_err') or '')[:200]}"
@@ -1493,6 +1543,57 @@ def run_pipeline(
                 return  # skip_invalid và các action ít quan trọng
             with _key_event_lock:
                 push_event(job, artifacts, "key_switch", msg, last_translate_progress, level=level, logger_name="pipeline")
+
+        # Hook TẠM DỮNG: hiển thị dialog hỏi user trước khi fallback deep_translator
+        def _on_wait_for_key(summary: str, last_err: str) -> list[str]:
+            """Set job = waiting_for_key, poll tềi đa 90 giây chờ key mới từ user."""
+            nonlocal artifacts
+            # Phân tích mã lỗi rõ ràng
+            err_code = ""
+            err_detail = ""
+            if "http_429" in last_err:
+                err_code = "429 - Hết quota"
+                err_detail = "Key đã vượt giới hạn sử dụng (billing quota). Vui lòng thêm key khác."
+            elif "http_403" in last_err:
+                err_code = "403 - Key lộ/Không có quyền"
+                err_detail = "Key bị báo cáo lộ hoặc không có quyền truy cập model này."
+            elif "http_400" in last_err:
+                err_code = "400 - Key không hợp lệ"
+                err_detail = "API key sai định dạng hoặc không hợp lệ."
+            elif "url_error" in last_err:
+                err_code = "Lỗi mạng"
+                err_detail = "Không thể kết nối tới Gemini API. Kiểm tra mạng của container."
+            else:
+                err_code = "Lỗi không xác định"
+                err_detail = last_err[:200]
+
+            notice = (
+                f"⚠️ Tất cả Gemini key đã thất bại [{err_code}]: {err_detail} | {summary} "
+                f"| Hệ thống sẽ dùng dịch local (chất lượng thấp) nếu không có key mới trong 90 giây."
+            )
+            push_event(job, artifacts, "key_switch", notice, last_translate_progress, level="error", logger_name="pipeline")
+            _update_job(db, job, JobStatus.waiting_for_key, last_translate_progress, "waiting_for_key",
+                        error_message=notice[:300], artifacts=artifacts)
+
+            # Poll tềi đa 90s — kiểm tra file key mới mỗi 3 giây
+            wait_deadline = time.monotonic() + 90
+            old_key_count = len(all_keys)
+            while time.monotonic() < wait_deadline:
+                time.sleep(3)
+                fresh_keys = _resolve_gemini_keys_list(None)  # reload từ file
+                new_found = [k for k in fresh_keys if k not in all_keys]
+                if new_found:
+                    push_event(job, artifacts, "key_switch",
+                               f"🔑 Phát hiện {len(new_found)} key mới — tiếp tục dịch!",
+                               last_translate_progress, level="success", logger_name="pipeline")
+                    _update_job(db, job, JobStatus.running, last_translate_progress, "translate", artifacts=artifacts)
+                    return new_found
+            # Hết timeout
+            push_event(job, artifacts, "key_switch",
+                       "⏱ Đến giời — tiếp tục với bản dịch local (chất lượng có thể thấp hơn).",
+                       last_translate_progress, level="warning", logger_name="pipeline")
+            _update_job(db, job, JobStatus.running, last_translate_progress, "translate", artifacts=artifacts)
+            return []
 
         models = [m.strip() for m in (gemini_models or "").split(",")] if gemini_models else None
         normalized, translation_stats, first_translation_error, translate_detail = _translate_project_segments(
@@ -1505,6 +1606,7 @@ def run_pipeline(
             all_api_keys=all_keys,
             models=models,
             key_event_hook=_on_key_event,
+            wait_for_key_hook=_on_wait_for_key,
         )
         set_stat(
             artifacts,

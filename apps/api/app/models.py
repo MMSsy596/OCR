@@ -18,6 +18,7 @@ class ProjectStatus(str, enum.Enum):
 class JobStatus(str, enum.Enum):
     queued = "queued"
     running = "running"
+    waiting_for_key = "waiting_for_key"  # Dừng chờ user cấp key mới
     done = "done"
     failed = "failed"
 

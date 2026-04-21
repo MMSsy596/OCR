@@ -1,0 +1,39 @@
+services:
+  redis:
+    image: redis:7
+    container_name: nanbao-ocr-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  app:
+    image: nanbao/ocr:lastest
+    container_name: nanbao-ocr-app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_NAME=NanBao OCR Studio
+      - PORT=8000
+      - WEB_ORIGIN=http://localhost:8000
+      - ALLOWED_HOSTS=localhost,127.0.0.1
+      - ENABLE_DOCS=true
+      - DATABASE_URL=sqlite+pysqlite:////data/ocr.db
+      - REDIS_URL=redis://redis:6379/0
+      - STORAGE_ROOT=/data/projects
+      # Duong dan host Windows tuong ung voi /data/projects trong container
+      # Script .bat se tu dong dien gia tri nay khi cai dat
+      - HOST_STORAGE_ROOT=C:/Users/ADMIN/AppData/Local/ocr-data/projects
+      # Thu muc CapCut mount vao container
+      - CAPCUT_DRAFT_DIR=/capcut-data
+      # - GEMINI_API_KEYS=your_api_key_here
+    volumes:
+      # Bind mount de co the doc file video/audio tu Windows
+      - ./ocr-data:/data
+      # Mount thu muc CapCut (thay ADMIN bang ten user thuc)
+      - C:/Users/ADMIN/AppData/Local/CapCut/User Data/Projects/com.lveditor.draft:/capcut-data
+    depends_on:
+      - redis
+
+volumes:
+  app_data:

@@ -77,31 +77,7 @@ def _update_job(db: Session, job: PipelineJob, status: JobStatus, progress: int,
     job._solar_last_flush_progress = int(progress)
 
 
-def _fake_ocr_segments(project: Project) -> list[dict[str, Any]]:
-    # MVP fallback: tao subtitle mau de co pipeline end-to-end.
-    lines = [
-        "Nhan vat A: Ta se tro lai.",
-        "Nhan vat B: Chung ta khong con thoi gian.",
-        "Narrator: Troi toi dan, gio mua bat dau.",
-        "Nhan vat A: Ke hoach bat dau ngay bay gio.",
-        "Nhan vat B: Hay tin vao ta.",
-    ]
-    output = []
-    current = 0.0
-    for i, line in enumerate(lines, start=1):
-        output.append(
-            {
-                "start_sec": current,
-                "end_sec": current + 2.8,
-                "raw_text": line,
-                "translated_text": "",
-                "speaker": "character_a" if i in (1, 4) else ("character_b" if i in (2, 5) else "narrator"),
-                "voice": "male-deep" if i in (1, 4) else ("female-bright" if i in (2, 5) else "narrator-neutral"),
-                "confidence": 0.87 + (i * 0.01),
-            }
-        )
-        current += 3.0
-    return output
+
 
 
 def _build_ocr_variants(cv2: Any, gray: Any, profile: str = "balanced") -> list[tuple[str, Any]]:
@@ -221,24 +197,6 @@ def _parse_srt_segments(
     return segments
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def _ocr_segments_from_video(
     project: Project,
     scan_interval_sec: float = 1.0,
@@ -291,8 +249,56 @@ def _ocr_segments_from_video(
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
-        meta["engine"] = "video_open_failed"
-        return [], meta
+        # cv2 không decode được codec gốc (HEVC, MKV, VP9, AV1...)
+        # Thử transcode sang H.264 MP4 tạm bằng ffmpeg rồi retry.
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if not ffmpeg_bin:
+            meta["engine"] = "video_open_failed"
+            meta["video_open_detail"] = "cv2 failed and ffmpeg not found"
+            return [], meta
+        tmp_path = video_path.parent / f"_ocr_tmp_{video_path.stem}.mp4"
+        try:
+            logger.info("cv2 không mở được %s — transcode sang H.264 tạm: %s", video_path.name, tmp_path.name)
+            result = subprocess.run(
+                [
+                    ffmpeg_bin,
+                    "-y",
+                    "-i", str(video_path),
+                    "-c:v", "libx264",
+                    "-preset", "ultrafast",
+                    "-crf", "23",
+                    "-an",          # bỏ âm thanh để nhanh hơn
+                    str(tmp_path),
+                ],
+                capture_output=True,
+                timeout=600,
+            )
+            if result.returncode != 0:
+                meta["engine"] = "video_open_failed"
+                meta["video_open_detail"] = (
+                    f"ffmpeg transcode failed (code {result.returncode}): "
+                    + result.stderr.decode("utf-8", errors="ignore")[-300:]
+                )
+                return [], meta
+            cap = cv2.VideoCapture(str(tmp_path))
+            if not cap.isOpened():
+                tmp_path.unlink(missing_ok=True)
+                meta["engine"] = "video_open_failed"
+                meta["video_open_detail"] = "cv2 failed even after ffmpeg transcode to H.264"
+                return [], meta
+            meta["ffmpeg_transcode"] = True
+            meta["transcode_tmp"] = str(tmp_path)
+            video_path = tmp_path   # dùng file tạm cho phần còn lại
+        except subprocess.TimeoutExpired:
+            tmp_path.unlink(missing_ok=True)
+            meta["engine"] = "video_open_failed"
+            meta["video_open_detail"] = "ffmpeg transcode timeout (>600s)"
+            return [], meta
+        except Exception as ex:
+            tmp_path.unlink(missing_ok=True)
+            meta["engine"] = "video_open_failed"
+            meta["video_open_detail"] = f"ffmpeg exception: {str(ex)[:200]}"
+            return [], meta
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 24
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
@@ -414,15 +420,15 @@ def _ocr_segments_from_video(
             sig_diff = abs(sig_mean - last_signature[0]) + abs(sig_std - last_signature[1])
         should_skip_similar = (
             last_signature is not None
-            and sig_diff <= 2
+            and sig_diff <= 3
             and bool(segments)
-            and consecutive_similar_skips < 2
         )
         if should_skip_similar:
             meta["skipped_similar_frame_count"] = int(meta["skipped_similar_frame_count"]) + 1
             consecutive_similar_skips += 1
             if segments:
-                extended_end = (idx / fps) + max(0.5, effective_scan_interval)
+                # Extend end_sec liên tục theo frame hiện tại để lấp đầy khoảng trống
+                extended_end = (idx / fps) + max(0.4, effective_scan_interval * 0.6)
                 segments[-1]["end_sec"] = max(float(segments[-1]["end_sec"]), float(extended_end))
                 meta["duplicate_extend_count"] = int(meta["duplicate_extend_count"]) + 1
             continue
@@ -470,7 +476,8 @@ def _ocr_segments_from_video(
             continue
 
         start_sec = idx / fps
-        end_sec = start_sec + max(1.2, effective_scan_interval * 1.5)
+        # end_sec ban đầu ngắn hơn để bước post-process tự snap/fill sau
+        end_sec = start_sec + max(0.8, effective_scan_interval)
         last_text = text
         segments.append(
             {
@@ -489,6 +496,13 @@ def _ocr_segments_from_video(
 
     producer.join(timeout=1.0)
     cap.release()
+    # Dọn file tạm nếu đã transcode bằng ffmpeg
+    transcode_tmp = meta.get("transcode_tmp")
+    if transcode_tmp:
+        try:
+            Path(transcode_tmp).unlink(missing_ok=True)
+        except Exception:
+            pass
     if producer_error:
         meta["producer_error"] = producer_error[0][:240]
     meta["segments_before_merge"] = len(segments)
@@ -557,6 +571,32 @@ def _merge_adjacent_similar_segments(
     return merged
 
 
+def _fill_subtitle_gaps(
+    segments: list[dict[str, Any]],
+    max_gap_to_fill_sec: float = 1.5,
+    min_gap_between_sec: float = 0.04,
+) -> list[dict[str, Any]]:
+    """Post-process: snap end_sec về sát start_sec tiếp theo nếu gap nhỏ.
+    Giúp loại bỏ khoảng trắng thừa và đảm bảo phụ đề liên tục hơn."""
+    if len(segments) < 2:
+        return segments
+    result = [seg.copy() for seg in segments]
+    for i in range(len(result) - 1):
+        cur = result[i]
+        nxt = result[i + 1]
+        cur_end = float(cur["end_sec"])
+        nxt_start = float(nxt["start_sec"])
+        gap = nxt_start - cur_end
+        if gap <= 0:
+            # Overlap: cắt bớt end_sec để không overlap
+            cur["end_sec"] = max(float(cur["start_sec"]) + 0.1, nxt_start - min_gap_between_sec)
+        elif gap <= max_gap_to_fill_sec:
+            # Khoảng trống nhỏ: extend end_sec lên gần start tiếp theo
+            cur["end_sec"] = nxt_start - min_gap_between_sec
+        # Nếu gap lớn hơn max_gap_to_fill_sec → giữ nguyên (cố ý ngừng)
+    return result
+
+
 def _call_gemini_translate(
     text: str,
     prompt: str,
@@ -565,8 +605,9 @@ def _call_gemini_translate(
     target_lang: str,
     context_before: str = "",
     context_after: str = "",
+    model_name: str = "gemini-2.5-flash-lite",
 ) -> tuple[str, str]:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     system_prompt = (
         "You are expert subtitle translator. Keep tone natural, concise, and cinematic. "
         f"Translate from {source_lang} to {target_lang}. "
@@ -638,10 +679,11 @@ def _call_gemini_translate_batch(
     target_lang: str,
     context_before: str = "",
     context_after: str = "",
+    model_name: str = "gemini-2.5-flash-lite",
 ) -> tuple[list[str], str]:
     if not lines:
         return [], ""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     system_prompt = (
         "You are expert subtitle translator. "
         f"Translate from {source_lang} to {target_lang}. "
@@ -706,6 +748,54 @@ def _call_gemini_translate_batch(
         return [], f"gemini_batch_exception:{str(ex)[:300]}"
 
 
+def _load_persistent_gemini_keys() -> list[str]:
+    """Load Gemini keys từ file persistent /data/config/gemini_keys.txt."""
+    try:
+        from pathlib import Path as _Path
+        storage_root = _Path(get_settings().storage_root).resolve()
+        key_file = storage_root.parent / "config" / "gemini_keys.txt"
+        if key_file.exists():
+            raw = key_file.read_text(encoding="utf-8").strip()
+            return [k.strip() for k in raw.split(",") if k.strip()]
+    except Exception:
+        pass
+    return []
+
+
+def _resolve_gemini_keys_list(runtime_key: str | None) -> list[str]:
+    """Trả về danh sách tất cả Gemini API key theo thứ tự ưu tiên.
+    Runtime key (từ form) được đặt lên đầu, tiếp theo là persistent file, rồi .env."""
+    runtime_raw = (runtime_key or "").strip()
+    runtime_keys = [item.strip() for item in runtime_raw.split(",") if item.strip()]
+    
+    # Đọc từ persistent file trước
+    persistent_keys = _load_persistent_gemini_keys()
+    
+    # Fallback .env
+    env_raw = (get_settings().gemini_api_keys or "").strip()
+    env_keys = [item.strip() for item in env_raw.split(",") if item.strip()]
+    
+    all_keys: list[str] = []
+    for k in runtime_keys:
+        if k not in all_keys:
+            all_keys.append(k)
+    for k in persistent_keys:
+        if k not in all_keys:
+            all_keys.append(k)
+    for k in env_keys:
+        if k not in all_keys:
+            all_keys.append(k)
+    return all_keys
+
+
+def _resolve_gemini_keys(runtime_key: str | None) -> tuple[str | None, str | None]:
+    """Backward-compat: trả về (primary, backup) từ danh sách đầy đủ."""
+    all_keys = _resolve_gemini_keys_list(runtime_key)
+    primary = all_keys[0] if len(all_keys) >= 1 else None
+    backup = all_keys[1] if len(all_keys) >= 2 else None
+    return primary, backup
+
+
 def _translate_with_fallback(
     text: str,
     prompt: str,
@@ -716,57 +806,97 @@ def _translate_with_fallback(
     target_lang: str,
     context_before: str = "",
     context_after: str = "",
+    all_keys: list[str] | None = None,
+    key_switch_log: list[dict] | None = None,
+    models: list[str] | None = None,
 ) -> tuple[str, str, str]:
+    """Dịch với fallback qua tất cả key có sẵn, với mỗi key gọi qua list models. Log chi tiết."""
     invalid_keys = invalid_keys or set()
-    candidate_keys: list[str] = []
-    if api_key and api_key not in candidate_keys:
-        candidate_keys.append(api_key)
-    if backup_api_key and backup_api_key not in candidate_keys:
-        candidate_keys.append(backup_api_key)
+    # Xây dựng danh sách key ứng viên: all_keys ưu tiên nếu có, else dùng api_key+backup
+    if all_keys:
+        candidate_keys = [k for k in all_keys if k]
+    else:
+        candidate_keys = []
+        if api_key:
+            candidate_keys.append(api_key)
+        if backup_api_key and backup_api_key not in candidate_keys:
+            candidate_keys.append(backup_api_key)
 
+    models_to_try = [m.strip() for m in models if m.strip()] if models else ["gemini-2.5-flash-lite"]
     err = ""
+    tried_count = 0
     for idx, candidate in enumerate(candidate_keys):
         if candidate in invalid_keys:
+            if key_switch_log is not None:
+                key_switch_log.append({
+                    "action": "skip_invalid",
+                    "key_index": idx,
+                    "key_suffix": candidate[-6:] if len(candidate) > 6 else "***",
+                })
             continue
-        translated, err = _call_gemini_translate(
-            text,
-            prompt,
-            candidate,
-            source_lang,
-            target_lang,
-            context_before=context_before,
-            context_after=context_after,
-        )
-        if translated:
-            return translated, "gemini", ""
-        # Retry with fallback key only when current key is invalid.
-        if _is_gemini_key_error(err):
-            invalid_keys.add(candidate)
-            continue
-        if idx == 0:
-            break
+        
+        for m_idx, model_name in enumerate(models_to_try):
+            tried_count += 1
+            translated, err = _call_gemini_translate(
+                text,
+                prompt,
+                candidate,
+                source_lang,
+                target_lang,
+                context_before=context_before,
+                context_after=context_after,
+                model_name=model_name,
+            )
+            if translated:
+                if key_switch_log is not None and tried_count > 1:
+                    key_switch_log.append({
+                        "action": "success_on_fallback",
+                        "key_index": idx,
+                        "key_suffix": candidate[-6:] if len(candidate) > 6 else "***",
+                        "model": model_name,
+                    })
+                return translated, "gemini", ""
+            
+            # Key lỗi → đánh dấu invalid và break để thử key tiếp theo
+            if _is_gemini_key_error(err):
+                invalid_keys.add(candidate)
+                if key_switch_log is not None:
+                    next_key = next((k for k in candidate_keys[idx+1:] if k not in invalid_keys), None)
+                    key_switch_log.append({
+                        "action": "key_invalid_switching",
+                        "key_index": idx,
+                        "key_suffix": candidate[-6:] if len(candidate) > 6 else "***",
+                        "error": err[:200],
+                        "switching_to_index": candidate_keys.index(next_key) if next_key else None,
+                        "switching_to_suffix": next_key[-6:] if next_key and len(next_key) > 6 else None,
+                    })
+                break  # Không thử model tiếp theo cho key này
+            
+            # Lỗi không phải do key (rate limit, nghẽn mạng...) → thử model tiếp theo
+            if key_switch_log is not None:
+                key_switch_log.append({
+                    "action": "non_key_error",
+                    "key_index": idx,
+                    "key_suffix": candidate[-6:] if len(candidate) > 6 else "***",
+                    "model": model_name,
+                    "error": err[:200],
+                })
     try:
         from deep_translator import GoogleTranslator  # type: ignore
 
         translated = GoogleTranslator(source="auto", target=target_lang).translate(text)
         if translated:
+            if key_switch_log is not None:
+                key_switch_log.append({"action": "fallback_deep_translator", "result": "ok"})
             return str(translated).strip(), "deep_translator", ""
     except Exception as ex:
         dt_err = f"deep_translator_exception:{str(ex)[:300]}"
     else:
         dt_err = "deep_translator_empty"
-    final_err = err if api_key else "gemini_skipped_no_key"
+    final_err = err if (api_key or candidate_keys) else "gemini_skipped_no_key"
+    if key_switch_log is not None:
+        key_switch_log.append({"action": "all_keys_failed", "final_err": final_err[:200], "dt_err": dt_err[:200]})
     return f"[{target_lang}] {text}", "fallback_tag", f"{final_err} | {dt_err}"
-
-
-def _resolve_gemini_keys(runtime_key: str | None) -> tuple[str | None, str | None]:
-    runtime = (runtime_key or "").strip()
-    keys = (get_settings().gemini_api_keys or "").strip()
-    env_keys = [item.strip() for item in keys.split(",") if item.strip()]
-
-    primary = runtime or (env_keys[0] if env_keys else "")
-    backup = next((k for k in env_keys if k != primary), "")
-    return (primary or None), (backup or None)
 
 
 def _is_gemini_key_error(err: str) -> bool:
@@ -781,6 +911,8 @@ def _translate_project_segments(
     backup_api_key: str | None,
     voice_map: dict[str, str] | None = None,
     progress_hook: Callable[[dict[str, Any]], None] | None = None,
+    all_api_keys: list[str] | None = None,
+    models: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int], str, dict[str, Any]]:
     voice_map = voice_map or {}
     db_segments = list_segments(db, project.id)
@@ -796,8 +928,17 @@ def _translate_project_segments(
     gemini_batch_lines_ok = 0
     invalid_gemini_keys: set[str] = set()
     _invalid_keys_lock = threading.Lock()
+    key_switch_events: list[dict] = []  # Log rollback toàn bộ
 
-    if (primary_api_key or backup_api_key) and len(db_segments) >= 2:
+    # Xây dựng danh sách key đầy đủ
+    effective_all_keys: list[str] = all_api_keys if all_api_keys else []
+    if not effective_all_keys:
+        if primary_api_key:
+            effective_all_keys.append(primary_api_key)
+        if backup_api_key and backup_api_key not in effective_all_keys:
+            effective_all_keys.append(backup_api_key)
+
+    if effective_all_keys and len(db_segments) >= 2:
         chunk_size = 8
         # Chuẩn bị tất cả chunks để submit song song
         chunks_meta: list[tuple[int, list, str, str]] = []
@@ -813,45 +954,80 @@ def _translate_project_segments(
 
         def _translate_one_chunk(
             args: tuple[int, list, str, str],
-        ) -> tuple[int, list, list, str]:
-            """Dịch một chunk, trả về (start, chunk, translated_lines, err)."""
+        ) -> tuple[int, list, list, str, list]:
+            """Dịch một chunk, trả về (start, chunk, translated_lines, err, switch_log)."""
             start_idx, chunk, ctx_before, ctx_after = args
             lines = [seg.raw_text for seg in chunk]
-            with _invalid_keys_lock:
-                batch_key = primary_api_key if (primary_api_key and primary_api_key not in invalid_gemini_keys) else backup_api_key
-            translated, err = _call_gemini_translate_batch(
-                lines,
-                project.prompt,
-                batch_key or "",
-                project.source_lang,
-                project.target_lang,
-                context_before=ctx_before,
-                context_after=ctx_after,
-            )
-            if (
-                (not translated)
-                and _is_gemini_key_error(err)
-                and batch_key
-                and backup_api_key
-                and batch_key != backup_api_key
-            ):
-                with _invalid_keys_lock:
-                    invalid_gemini_keys.add(batch_key)
-                translated, err = _call_gemini_translate_batch(
-                    lines,
-                    project.prompt,
-                    backup_api_key,
-                    project.source_lang,
-                    project.target_lang,
-                    context_before=ctx_before,
-                    context_after=ctx_after,
-                )
-            return start_idx, chunk, translated, err
+            chunk_switch_log: list[dict] = []
 
+            # Vòng lặp qua tất cả key cho đến khi thành công
+            with _invalid_keys_lock:
+                remaining_keys = [k for k in effective_all_keys if k not in invalid_gemini_keys]
+
+            translated: list[str] = []
+            err = ""
+            models_to_try = [m.strip() for m in models if m.strip()] if models else ["gemini-2.5-flash-lite"]
+            for k_idx, batch_key in enumerate(remaining_keys):
+                for model_name in models_to_try:
+                    chunk_switch_log.append({
+                        "action": "trying_key",
+                        "key_index": effective_all_keys.index(batch_key) if batch_key in effective_all_keys else k_idx,
+                        "key_suffix": batch_key[-6:] if len(batch_key) > 6 else "***",
+                        "model": model_name,
+                        "chunk_start": start_idx,
+                    })
+                    translated, err = _call_gemini_translate_batch(
+                        lines,
+                        project.prompt,
+                        batch_key,
+                        project.source_lang,
+                        project.target_lang,
+                        context_before=ctx_before,
+                        context_after=ctx_after,
+                        model_name=model_name,
+                    )
+                    if translated and len(translated) == len(lines):
+                        if k_idx > 0 or model_name != models_to_try[0]:
+                            chunk_switch_log.append({
+                                "action": "success_on_fallback_key",
+                                "key_suffix": batch_key[-6:] if len(batch_key) > 6 else "***",
+                                "model": model_name,
+                                "fallback_index": k_idx,
+                            })
+                        break  # Thành công, thoát vòng lặp models
+
+                if translated and len(translated) == len(lines):
+                    break  # Thành công, thoát vòng lặp keys
+
+                # Key lỗi
+
+                if _is_gemini_key_error(err):
+                    with _invalid_keys_lock:
+                        invalid_gemini_keys.add(batch_key)
+                    next_key = next((k for k in remaining_keys[k_idx+1:] if k not in invalid_gemini_keys), None)
+                    chunk_switch_log.append({
+                        "action": "key_failed_switching",
+                        "key_suffix": batch_key[-6:] if len(batch_key) > 6 else "***",
+                        "error": err[:300],
+                        "switching_to": next_key[-6:] if next_key and len(next_key) > 6 else ("none" if not next_key else "***"),
+                    })
+                else:
+                    # Lỗi khác (rate limit, parse fail...)
+                    chunk_switch_log.append({
+                        "action": "chunk_error_trying_next",
+                        "key_suffix": batch_key[-6:] if len(batch_key) > 6 else "***",
+                        "error": err[:300],
+                    })
+            return start_idx, chunk, translated, err, chunk_switch_log
+
+        batch_chunks_done = 0
+        batch_total_segs = len(db_segments)
         with ThreadPoolExecutor(max_workers=max_parallel, thread_name_prefix="gemini-batch") as pool:
             futures = {pool.submit(_translate_one_chunk, args): args for args in chunks_meta}
             for future in as_completed(futures):
-                start_idx, chunk, translated_chunk, batch_err = future.result()
+                start_idx, chunk, translated_chunk, batch_err, chunk_log = future.result()
+                key_switch_events.extend(chunk_log)
+                batch_chunks_done += len(chunk)
                 if translated_chunk and len(translated_chunk) == len(chunk):
                     gemini_batch_chunks_ok += 1
                     gemini_batch_lines_ok += len(chunk)
@@ -861,8 +1037,18 @@ def _translate_project_segments(
                     gemini_batch_chunks_failed += 1
                     if batch_err and not first_translation_error:
                         first_translation_error = batch_err
-                    if "gemini_batch_" in batch_err:
+                    if "gemini_batch_" in batch_err or "gemini_" in batch_err:
                         gemini_error_count += 1
+                # Cập nhật UI sau mỗi chunk hoàn thành — tránh đứng ở 35%
+                if progress_hook:
+                    try:
+                        progress_hook({
+                            "done": min(batch_chunks_done, batch_total_segs),
+                            "total": batch_total_segs,
+                            "provider_counts": translation_stats.copy(),
+                        })
+                    except Exception:
+                        pass
 
     for idx, seg in enumerate(db_segments):
         prev_text = db_segments[idx - 1].raw_text if idx > 0 else ""
@@ -872,6 +1058,7 @@ def _translate_project_segments(
             provider = "gemini"
             err = ""
         else:
+            seg_switch_log: list[dict] = []
             txt, provider, err = _translate_with_fallback(
                 seg.raw_text,
                 project.prompt,
@@ -882,7 +1069,12 @@ def _translate_project_segments(
                 project.target_lang,
                 context_before=prev_text,
                 context_after=next_text,
+                all_keys=effective_all_keys if effective_all_keys else None,
+                key_switch_log=seg_switch_log,
+                models=models,
             )
+            if seg_switch_log:
+                key_switch_events.extend(seg_switch_log)
         if provider in translation_stats:
             translation_stats[provider] += 1
         if err and not first_translation_error:
@@ -924,6 +1116,7 @@ def _translate_project_segments(
             )
     translate_detail = {
         "total_segments": len(db_segments),
+        "total_keys_available": len(effective_all_keys),
         "used_runtime_key": bool(primary_api_key),
         "fallback_key_enabled": bool(backup_api_key),
         "provider_counts": translation_stats.copy(),
@@ -933,23 +1126,29 @@ def _translate_project_segments(
         "gemini_batch_chunks_failed": gemini_batch_chunks_failed,
         "gemini_batch_lines_ok": gemini_batch_lines_ok,
         "fallback_samples": fallback_samples,
+        "key_switch_log": key_switch_events[-50:] if key_switch_events else [],  # giữ tối đa 50 sự kiện
     }
     return normalized, translation_stats, first_translation_error, translate_detail
 
 
-def retranslate_project_segments(project_id: str, gemini_api_key: str | None = None) -> dict[str, Any]:
+def retranslate_project_segments(project_id: str, gemini_api_key: str | None = None, gemini_models: str | None = None) -> dict[str, Any]:
     db = SessionLocal()
     try:
         project = db.get(Project, project_id)
         if not project:
             return {"ok": False, "error": "project_not_found"}
-        primary_key, backup_key = _resolve_gemini_keys(gemini_api_key)
+        all_keys = _resolve_gemini_keys_list(gemini_api_key)
+        primary_key = all_keys[0] if all_keys else None
+        backup_key = all_keys[1] if len(all_keys) >= 2 else None
+        models = [m.strip() for m in (gemini_models or "").split(",")] if gemini_models else None
         normalized, translation_stats, first_translation_error, _ = _translate_project_segments(
             db,
             project,
             primary_key,
             backup_key,
             voice_map={},
+            all_api_keys=all_keys,
+            models=models,
         )
         replace_segments(db, project.id, normalized)
         updated = list_segments(db, project.id)
@@ -969,13 +1168,16 @@ def run_pipeline(
     job_id: str,
     input_mode: str = "video_ocr",
     gemini_api_key: str | None = None,
+    gemini_models: str | None = None,
     voice_map: dict[str, str] | None = None,
     scan_interval_sec: float = 1.5,
 ) -> dict[str, Any]:
     db = SessionLocal()
     voice_map = voice_map or {}
     try:
-        primary_key, backup_key = _resolve_gemini_keys(gemini_api_key)
+        all_keys = _resolve_gemini_keys_list(gemini_api_key)
+        primary_key = all_keys[0] if all_keys else None
+        backup_key = all_keys[1] if len(all_keys) >= 2 else None
         job = db.get(PipelineJob, job_id)
         if not job:
             return {"ok": False, "error": "job_not_found"}
@@ -1038,11 +1240,12 @@ def run_pipeline(
                 "voice_map_size": len(voice_map),
                 "gemini_key_present": bool(primary_key),
                 "gemini_fallback_key_enabled": bool(backup_key),
+                "gemini_total_keys": len(all_keys),
             },
         )
         _update_job(db, job, JobStatus.running, 1, "init", artifacts=artifacts)
         if pipeline_input_mode == "video_ocr":
-            push_event(job, artifacts, "ocr", "Dang tach video thanh frame va OCR...", 5, logger_name="pipeline")
+            push_event(job, artifacts, "ocr", "Đang tách video thành frame và OCR...", 5, logger_name="pipeline")
             _update_job(db, job, JobStatus.running, 5, "ocr", artifacts=artifacts)
             last_ocr_progress = 5
             last_ocr_event_sample = 0
@@ -1116,42 +1319,59 @@ def run_pipeline(
             )
             ocr_source = "rapidocr"
             if not segments:
-                ocr_engine_hint = ocr_meta.get("engine", "unknown")
-                # Kiểm tra flag debug – chỉ bật fake khi dev cần test end-to-end mà không có video thật
-                fake_fallback_enabled = os.environ.get("SOLAR_OCR_FAKE_FALLBACK", "").lower() in ("1", "true", "yes")
-                if fake_fallback_enabled:
-                    push_event(
-                        job,
-                        artifacts,
-                        "ocr",
-                        f"[DEBUG] OCR khong co ket qua (engine={ocr_engine_hint}), SOLAR_OCR_FAKE_FALLBACK=true → dung mau gia lap.",
-                        12,
-                        level="warning",
-                        logger_name="pipeline",
-                    )
-                    segments = _fake_ocr_segments(project)
-                    ocr_source = "fake_fallback"
-                    ocr_meta = {
+                # Xây dựng thông điệp chẩn đoán cụ thể dựa vào engine meta
+                ocr_engine = ocr_meta.get("engine", "unknown")
+                diag_hints = {
+                    "rapidocr_unavailable": (
+                        "Thư viện OCR (rapidocr-onnxruntime / cv2) chưa được cài đặt "
+                        "trong container. Kiểm tra Dockerfile hoặc requirements.txt."
+                    ),
+                    "missing_video": "Dự án chưa có đường dẫn video. Vui lòng tải lên video trước khi chạy pipeline.",
+                    "missing_video_file": (
+                        f"File video không tồn tại trên đĩa: {ocr_meta.get('video_path', '')}. "
+                        "Có thể video chưa tải xong hoặc đã bị xóa."
+                    ),
+                    "video_open_failed": (
+                        "cv2 không mở được file video (codec không được hỗ trợ). "
+                        "ffmpeg đã được thử nhưng cũng thất bại. "
+                        "Kiểm tra chi tiết bên dưới hoặc thử upload lại video dạng .mp4 H.264."
+                    ),
+                }
+                diag_msg = diag_hints.get(ocr_engine, f"OCR trả về 0 đoạn (engine={ocr_engine}).")
+                # Bổ sung chi tiết ffmpeg/transcode nếu có
+                video_open_detail = ocr_meta.get("video_open_detail", "")
+                if video_open_detail and ocr_engine == "video_open_failed":
+                    diag_msg = f"{diag_msg} Chi tiết: {video_open_detail[:200]}"
+                frames_sampled = int(ocr_meta.get("frames_sampled", 0) or 0)
+                frames_total = int(ocr_meta.get("frames_total", 0) or 0)
+                producer_error = ocr_meta.get("producer_error", "")
+                full_msg = (
+                    f"Lỗi OCR: {diag_msg} "
+                    f"[frames: {frames_sampled}/{frames_total}"
+                    + (f", producer_error={producer_error[:120]}" if producer_error else "")
+                    + "]"
+                )
+                set_stat(
+                    artifacts,
+                    "ocr",
+                    {
                         **ocr_meta,
-                        "engine": "fake_fallback",
-                        "segments_before_merge": len(segments),
-                    }
-                else:
-                    # Production: OCR thất bại thật sự → fail job với lý do rõ ràng
-                    set_stat(artifacts, "ocr", {**ocr_meta, "source": "failed", "segments_raw": 0})
-                    err_msg = (
-                        f"ocr_empty_result: engine={ocr_engine_hint}. "
-                        "Kiểm tra: video có subtitle không, ROI có bao subtitle không, "
-                        "và rapidocr_onnxruntime đã cài đúng chưa."
-                    )
-                    push_event(
-                        job, artifacts, "ocr", err_msg, 12, level="error", logger_name="pipeline"
-                    )
-                    _update_job(db, job, JobStatus.failed, 12, "ocr_empty_result", err_msg, artifacts=artifacts)
-                    project.status = ProjectStatus.failed
-                    db.add(project)
-                    db.commit()
-                    return {"ok": False, "job_id": job_id, "error": err_msg}
+                        "source": "ocr_empty",
+                        "segments_raw": 0,
+                        "diag": diag_msg,
+                    },
+                )
+                push_event(
+                    job,
+                    artifacts,
+                    "ocr",
+                    full_msg,
+                    12,
+                    level="error",
+                    logger_name="pipeline",
+                )
+                _update_job(db, job, JobStatus.failed, 12, "ocr_empty", full_msg, artifacts=artifacts)
+                return {"ok": False, "job_id": job_id, "error": full_msg}
 
             set_stat(
                 artifacts,
@@ -1166,24 +1386,30 @@ def run_pipeline(
                 job,
                 artifacts,
                 "ocr",
-                f"OCR xong: {len(segments)} doan text (source={ocr_source}).",
+                f"OCR xong: {len(segments)} đoạn text (source={ocr_source}).",
                 28,
                 logger_name="pipeline",
             )
+            segments_before_merge = len(segments)
             segments = _merge_adjacent_similar_segments(
                 segments,
                 max_gap_sec=max(0.8, effective_scan_interval * 1.5),
                 ratio_threshold=0.9,
             )
+            # Fill khoảng trống nhỏ giữa các segment OCR
+            segments = _fill_subtitle_gaps(
+                segments,
+                max_gap_to_fill_sec=max(1.0, effective_scan_interval * 1.2),
+            )
             set_stat(
                 artifacts,
                 "dedupe_ocr",
                 {
-                    "before": int(ocr_meta.get("segments_before_merge", len(segments))),
+                    "before": segments_before_merge,
                     "after": len(segments),
                 },
             )
-            push_event(job, artifacts, "ocr", f"Sau merge OCR: {len(segments)} doan.", 34, logger_name="pipeline")
+            push_event(job, artifacts, "ocr", f"Sau merge OCR: {len(segments)} đoạn.", 34, logger_name="pipeline")
 
         replace_segments(db, project.id, segments)
 
@@ -1191,7 +1417,7 @@ def run_pipeline(
             job,
             artifacts,
             "translate",
-            f"Bat dau dich {len(segments)} doan, gemini_key={'co' if primary_key else 'khong'}, backup_key={'co' if backup_key else 'khong'}.",
+            f"Bat dau dich {len(segments)} doan, so key Gemini={len(all_keys)}, {'co' if primary_key else 'khong co'} key chinh.",
             35,
             logger_name="pipeline",
         )
@@ -1219,6 +1445,7 @@ def run_pipeline(
             )
             _update_job(db, job, JobStatus.running, progress, "translate", artifacts=artifacts)
 
+        models = [m.strip() for m in (gemini_models or "").split(",")] if gemini_models else None
         normalized, translation_stats, first_translation_error, translate_detail = _translate_project_segments(
             db,
             project,
@@ -1226,6 +1453,7 @@ def run_pipeline(
             backup_key,
             voice_map=voice_map,
             progress_hook=_on_translate_progress,
+            all_api_keys=all_keys,
         )
         set_stat(
             artifacts,
@@ -1263,7 +1491,7 @@ def run_pipeline(
             logger_name="pipeline",
         )
 
-        push_event(job, artifacts, "dedupe_merge", "Dang merge subtitle trung lap lan cuoi...", 65, logger_name="pipeline")
+        push_event(job, artifacts, "dedupe_merge", "Đang merge subtitle trùng lặp lần cuối...", 65, logger_name="pipeline")
         _update_job(db, job, JobStatus.running, 65, "dedupe_merge", artifacts=artifacts)
         # MVP: bo qua merge nang cao, chi loai dong trung lien tiep.
         deduped = _merge_adjacent_similar_segments(
@@ -1274,6 +1502,11 @@ def run_pipeline(
             ),
             ratio_threshold=0.92,
         )
+        # Fill khoảng trống nhỏ lần cuối sau dịch (tránh khoảng trắng thừa trong SRT)
+        deduped = _fill_subtitle_gaps(
+            deduped,
+            max_gap_to_fill_sec=max(1.0, effective_scan_interval * 1.2),
+        )
         set_stat(
             artifacts,
             "dedupe_final",
@@ -1283,10 +1516,10 @@ def run_pipeline(
                 "removed": max(0, len(normalized) - len(deduped)),
             },
         )
-        push_event(job, artifacts, "dedupe_merge", f"Merge xong: {len(normalized)} -> {len(deduped)} doan.", 78, logger_name="pipeline")
+        push_event(job, artifacts, "dedupe_merge", f"Merge xong: {len(normalized)} -> {len(deduped)} đoạn.", 78, logger_name="pipeline")
         replace_segments(db, project.id, deduped)
 
-        push_event(job, artifacts, "tts", "Dang tao tts_lines.txt cho long tieng...", 80, logger_name="pipeline")
+        push_event(job, artifacts, "tts", "Đang tạo tts_lines.txt cho lồng tiếng...", 80, logger_name="pipeline")
         _update_job(db, job, JobStatus.running, 80, "tts", artifacts=artifacts)
         project_dir = Path(project.video_path).parent if project.video_path else Path.cwd()
         tts_script = project_dir / "tts_lines.txt"
@@ -1302,7 +1535,7 @@ def run_pipeline(
             },
         )
 
-        push_event(job, artifacts, "export", "Dang xuat SRT + JSON...", 90, logger_name="pipeline")
+        push_event(job, artifacts, "export", "Đang xuất SRT + JSON...", 90, logger_name="pipeline")
         _update_job(db, job, JobStatus.running, 90, "export", artifacts=artifacts)
         srt_path = project_dir / "output.vi.srt"
         json_path = project_dir / "output.project.json"
@@ -1346,7 +1579,7 @@ def run_pipeline(
                 "segments": len(deduped),
             },
         )
-        push_event(job, artifacts, "done", "Pipeline hoan tat.", 100, logger_name="pipeline")
+        push_event(job, artifacts, "done", "Pipeline hoàn tất.", 100, logger_name="pipeline")
         _update_job(db, job, JobStatus.done, 100, "done", artifacts=artifacts)
         project.status = ProjectStatus.ready
         db.add(project)

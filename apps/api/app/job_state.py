@@ -16,22 +16,26 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _project_job_dir(project_id: str) -> Path:
-    path = settings.storage_path / project_id / "_jobs"
+def _project_job_dir(project_id: str, folder_name: str | None = None) -> Path:
+    """Trả về thư mục _jobs của project.
+    Nếu folder_name có giá trị (project mới) → dùng folder_name.
+    Fallback về project_id (UUID) cho project cũ."""
+    folder = folder_name if folder_name else project_id
+    path = settings.storage_path / folder / "_jobs"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def event_log_path(project_id: str, job_id: str) -> Path:
-    return _project_job_dir(project_id) / f"{job_id}.events.jsonl"
+def event_log_path(project_id: str, job_id: str, folder_name: str | None = None) -> Path:
+    return _project_job_dir(project_id, folder_name=folder_name) / f"{job_id}.events.jsonl"
 
 
-def snapshot_log_path(project_id: str, job_id: str) -> Path:
-    return _project_job_dir(project_id) / f"{job_id}.snapshot.json"
+def snapshot_log_path(project_id: str, job_id: str, folder_name: str | None = None) -> Path:
+    return _project_job_dir(project_id, folder_name=folder_name) / f"{job_id}.snapshot.json"
 
 
-def stats_dir_path(project_id: str, job_id: str) -> Path:
-    path = _project_job_dir(project_id) / f"{job_id}.stats"
+def stats_dir_path(project_id: str, job_id: str, folder_name: str | None = None) -> Path:
+    path = _project_job_dir(project_id, folder_name=folder_name) / f"{job_id}.stats"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -42,20 +46,21 @@ def _sanitize_phase_name(phase: str) -> str:
 
 
 def _compact_value(value: Any, depth: int = 0) -> Any:
-    if depth >= 3:
+    if depth >= 5:  # tăng từ 3 lên 5 — tránh cắt key_switch_log (depth 3)
         return f"<truncated:{type(value).__name__}>"
     if isinstance(value, dict):
         compact: dict[str, Any] = {}
         for idx, (key, item) in enumerate(value.items()):
-            if idx >= 12:
-                compact["_extra_keys"] = max(0, len(value) - 12)
+            if idx >= 24:  # tăng từ 12 lên 24
+                compact["_extra_keys"] = max(0, len(value) - 24)
                 break
             compact[str(key)] = _compact_value(item, depth + 1)
         return compact
     if isinstance(value, list):
-        preview = [_compact_value(item, depth + 1) for item in value[:5]]
-        if len(value) > 5:
-            preview.append(f"<+{len(value) - 5} items>")
+        limit = 60 if depth <= 1 else 30  # list lồng sâu giới hạn ít hơn
+        preview = [_compact_value(item, depth + 1) for item in value[:limit]]
+        if len(value) > limit:
+            preview.append(f"<+{len(value) - limit} items>")
         return preview
     if isinstance(value, str):
         limit = max(80, int(settings.job_event_message_limit or 220))
@@ -67,9 +72,16 @@ def prepare_job_artifacts(job: Any) -> dict[str, Any]:
     base = job.artifacts if isinstance(job.artifacts, dict) else {}
     base["job_id"] = job.id
     base["project_id"] = job.project_id
-    base.setdefault("event_log", str(event_log_path(job.project_id, job.id)))
-    base.setdefault("snapshot_log", str(snapshot_log_path(job.project_id, job.id)))
-    base.setdefault("stats_dir", str(stats_dir_path(job.project_id, job.id)))
+    # Lấy folder_name từ project attribute nếu có (SQLAlchemy relationship loaded)
+    folder_name: str | None = None
+    project_obj = getattr(job, "project", None)
+    if project_obj is not None:
+        folder_name = getattr(project_obj, "folder_name", None)
+    if folder_name:
+        base["folder_name"] = folder_name
+    base.setdefault("event_log", str(event_log_path(job.project_id, job.id, folder_name=folder_name)))
+    base.setdefault("snapshot_log", str(snapshot_log_path(job.project_id, job.id, folder_name=folder_name)))
+    base.setdefault("stats_dir", str(stats_dir_path(job.project_id, job.id, folder_name=folder_name)))
     base.setdefault("events_preview", [])
     base.setdefault("stats_preview", {})
     base.setdefault("stats_index", {})
@@ -103,7 +115,7 @@ def push_event(
     artifacts["events"] = artifacts["events_preview"]
     artifacts["last_event"] = event
 
-    log_path = event_log_path(job.project_id, job.id)
+    log_path = event_log_path(job.project_id, job.id, folder_name=artifacts.get("folder_name"))
     with log_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
@@ -114,7 +126,8 @@ def set_stat(artifacts: dict[str, Any], phase: str, payload: dict[str, Any]) -> 
     project_id = str(artifacts.get("project_id") or "")
     job_id = str(artifacts.get("job_id") or "")
     if project_id and job_id:
-        phase_path = stats_dir_path(project_id, job_id) / f"{_sanitize_phase_name(phase)}.json"
+        folder_name = str(artifacts.get("folder_name") or "")
+        phase_path = stats_dir_path(project_id, job_id, folder_name=folder_name or None) / f"{_sanitize_phase_name(phase)}.json"
         phase_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         stats_index = artifacts.setdefault("stats_index", {})
         stats_index[phase] = {
@@ -144,5 +157,6 @@ def persist_snapshot(job: Any, artifacts: dict[str, Any]) -> None:
         "error_message": job.error_message or "",
         "artifacts": artifacts,
     }
-    out_path = snapshot_log_path(job.project_id, job.id)
+    folder_name = str(artifacts.get("folder_name") or "") or None
+    out_path = snapshot_log_path(job.project_id, job.id, folder_name=folder_name)
     out_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -29,6 +29,7 @@ function Stop-ByPidFile {
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
     Write-Info "Đã dừng $Name PID $procId"
   }
+
   Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
 }
 

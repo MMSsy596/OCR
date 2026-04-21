@@ -1,0 +1,443 @@
+import { useState, useEffect } from "react";
+
+const STORAGE_KEY = "translation_context_custom_presets";
+
+export const BUILTIN_PRESETS = {
+  // ── Phim / Drama ──────────────────────────────────────────────────────────
+  historical:    { label: "Phim cổ trang",       icon: "🏯", group: "Phim & Drama", text: "Dịch theo văn phong cổ trang, tự nhiên, dễ nghe, giữ thần thái hội thoại. Ưu tiên xưng hô theo quan hệ nhân vật và cấp bậc. Không dịch thô và không viết dài dòng." },
+  modern_short:  { label: "Phim hiện đại",        icon: "🏙️", group: "Phim & Drama", text: "Dịch theo văn phong hiện đại, đối thoại gọn, đời thường, tự nhiên như người Việt nói. Ưu tiên tốc độ đọc subtitle, tránh câu quá dài." },
+  romance:       { label: "Phim tình cảm",        icon: "💕", group: "Phim & Drama", text: "Dịch theo văn phong tình cảm, lãng mạn, cảm xúc tinh tế. Giữ lại sắc thái ngập ngừng, e thẹn. Không dịch quá thẳng tuột cảm xúc nhân vật." },
+  action:        { label: "Phim hành động",       icon: "💥", group: "Phim & Drama", text: "Dịch súc tích, mạnh mẽ, khẩn trương. Câu ngắn, dứt khoát. Giữ nhịp độ nhanh, tránh diễn đạt dài dòng khi nhân vật đang hành động." },
+  horror:        { label: "Phim kinh dị",         icon: "👻", group: "Phim & Drama", text: "Dịch tạo cảm giác căng thẳng, rùng rợn. Dùng từ ngữ ám ảnh, bí ẩn. Câu văn có thể ngắt quãng, không liền mạch để tạo hiệu ứng." },
+  comedy:        { label: "Phim hài",             icon: "😂", group: "Phim & Drama", text: "Dịch tự nhiên, vui vẻ, giữ yếu tố hài hước Việt hóa nếu phù hợp. Không dịch cứng nhắc, có thể điều chỉnh từ để tạo tiếng cười tự nhiên." },
+  review:        { label: "Review / Thuyết minh", icon: "🎬", group: "Phim & Drama", text: "Dịch theo văn review phim, rõ ý, dễ hiểu, liên kết nguyên nhân-kết quả. Khi cần, diễn đạt thành câu nhận xét tự nhiên cho người xem Việt." },
+
+  // ── Tiểu thuyết / Web truyện ──────────────────────────────────────────────
+  fantasy:       { label: "Huyền huyễn",          icon: "🔮", group: "Tiểu thuyết", text: "Dịch theo phong cách huyền huyễn, tạo cảm giác kỳ ảo nhưng vẫn rõ nghĩa. Thuật ngữ sức mạnh và bối cảnh cần nhất quán." },
+  cultivation:   { label: "Tu tiên / Luyện khí",  icon: "⚔️", group: "Tiểu thuyết", text: "Dịch đúng văn mạch tu tiên, giữ tinh thần cấp bậc tu vi, công pháp, linh căn, cảnh giới. Ưu tiên nhất quán thuật ngữ theo glossary." },
+  reincarnation: { label: "Chuyển sinh / Isekai", icon: "♻️", group: "Tiểu thuyết", text: "Dịch rõ cấu trúc kể chuyện chuyển sinh, giữ logic thời gian trước/sau chuyển sinh. Hạn chế lặp lại và tạo nhịp kể chuyện mạch lạc." },
+  wuxia:         { label: "Võ hiệp / Kiếm hiệp",  icon: "🗡️", group: "Tiểu thuyết", text: "Dịch theo văn phong võ hiệp cổ điển, khí phách, hào sảng. Giữ tên chiêu thức, phái võ không dịch hoặc phiên âm nhất quán. Câu văn có nhịp điệu phóng khoáng." },
+  danmei:        { label: "Danmei / BL",           icon: "🌸", group: "Tiểu thuyết", text: "Dịch tinh tế cảm xúc, giữ sắc thái tình cảm giữa các nhân vật nam. Không dịch thô, ưu tiên cảm xúc ngầm ẩn, ánh mắt, hành động thay lời nói." },
+
+  // ── Kỹ thuật / Hướng dẫn ─────────────────────────────────────────────────
+  tutorial:      { label: "Hướng dẫn / Tutorial", icon: "📖", group: "Kỹ thuật", text: "Dịch rõ ràng, chính xác theo thuật ngữ kỹ thuật. Giữ tên nút, menu, lệnh bằng tiếng Anh nếu phổ biến. Câu hướng dẫn ngắn gọn, dễ làm theo." },
+  tech_review:   { label: "Review công nghệ",      icon: "💻", group: "Kỹ thuật", text: "Dịch dùng thuật ngữ công nghệ chuẩn tiếng Việt. Giữ tên sản phẩm, thông số kỹ thuật nguyên bản. Phong cách nhận xét khách quan, rõ ràng." },
+  cooking:       { label: "Ẩm thực / Nấu ăn",     icon: "🍜", group: "Kỹ thuật", text: "Dịch dùng từ ẩm thực Việt Nam, các bước nấu ăn rõ ràng theo trình tự. Tên nguyên liệu Việt hóa khi có thể. Câu ngắn gọn dễ làm theo." },
+  sports:        { label: "Thể thao",              icon: "⚽", group: "Kỹ thuật", text: "Dịch dùng thuật ngữ thể thao Việt Nam. Giữ tên cầu thủ, đội, giải đấu nguyên bản. Câu bình luận ngắn, năng động, phản ánh nhịp độ trận đấu." },
+
+  // ── Hoạt hình / Game ──────────────────────────────────────────────────────
+  anime:         { label: "Anime / Hoạt hình",    icon: "🎌", group: "Anime & Game", text: "Dịch anime tự nhiên, giữ moe expressions và từ đặc trưng Nhật nếu phổ biến (senpai, nani...). Câu thoại nhân vật rõ cá tính, không dịch đơn điệu." },
+  game:          { label: "Game / Gaming",          icon: "🎮", group: "Anime & Game", text: "Dịch dùng thuật ngữ gaming Việt phổ biến. Giữ tên skill, item, class không dịch hoặc phiên âm nhất quán. Lời thoại nhân vật game giữ phong cách đặc trưng." },
+  documentary:   { label: "Tài liệu / Documentary",icon: "🌍", group: "Anime & Game", text: "Dịch nghiêm túc, chính xác theo phong cách tài liệu. Câu văn rõ ràng, mang tính thông tin. Không thêm ý kiến cá nhân, giữ giọng điệu khách quan trung lập." },
+};
+
+
+const TONE_OPTIONS = [
+  { key: "accurate", label: "Chính xác", desc: "Trung lập, sát nghĩa, ưu tiên rõ ý." },
+  { key: "natural",  label: "Tự nhiên",  desc: "Mềm mại, đối thoại như người Việt bản địa." },
+  { key: "dramatic", label: "Kịch tính", desc: "Đầy cảm xúc, phù hợp cảnh cao trào." },
+];
+
+export function loadCustomPresets() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveCustomPresets(presets) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(presets));
+  } catch(_) {}
+  
+  const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+  fetch(`${API_BASE}/admin/ui-settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ settings: { translation_context_custom_presets: presets } }),
+  }).catch(() => {});
+}
+
+export function TranslationContextModal({
+  currentPresetKey,
+  currentCustomText,
+  currentTone,
+  onConfirm,
+  onClose,
+}) {
+  const [tab, setTab] = useState("builtin"); // "builtin" | "custom"
+  const [selectedKey, setSelectedKey] = useState(currentPresetKey || "historical");
+  const [customPrompt, setCustomPrompt] = useState(currentCustomText || "");
+  const [selectedTone, setSelectedTone] = useState(currentTone || "accurate");
+  const [customPresets, setCustomPresets] = useState(loadCustomPresets());
+  const [saveName, setSaveName] = useState("");
+  const [showSaveForm, setShowSaveForm] = useState(false);
+
+  // Khi chọn preset builtin, điền text gợi ý vào custom
+  function handleSelectBuiltin(key) {
+    setSelectedKey(key);
+    if (!customPrompt || customPrompt === BUILTIN_PRESETS[currentPresetKey]?.text) {
+      setCustomPrompt(BUILTIN_PRESETS[key]?.text || "");
+    }
+  }
+
+  // Lấy text prompt hiện tại để preview
+  const activeText = tab === "custom"
+    ? customPrompt
+    : (customPresets[selectedKey]?.text || BUILTIN_PRESETS[selectedKey]?.text || "");
+
+  const activeLabel = tab === "custom"
+    ? (saveName || "Tuỳ chỉnh")
+    : (customPresets[selectedKey]?.label || BUILTIN_PRESETS[selectedKey]?.label || selectedKey);
+
+  // Compose full prompt preview
+  const toneText = {
+    accurate: "Giọng điệu chính xác, trung lập, ưu tiên sát nghĩa và rõ ý.",
+    natural:  "Giọng điệu tự nhiên, mềm mại, đối thoại như người Việt bản địa.",
+    dramatic: "Giọng điệu kịch tính, đầy cảm xúc, phù hợp cảnh cao trào.",
+  }[selectedTone] || "";
+
+  const fullPromptPreview = [
+    "Mục tiêu: dịch subtitle đúng ngữ cảnh, giữ ý nghĩa đầy đủ, ngôn ngữ tự nhiên.",
+    `Thể loại: ${activeText}`,
+    `Giọng điệu: ${toneText}`,
+    "Ràng buộc: Không tự ý thêm ý mới. Giữ nhất quán cách xưng hô, tên riêng, thuật ngữ và glossary.",
+    "Ràng buộc: Trả về câu dịch gọn, dễ đọc trên subtitle, không kèm giải thích.",
+  ].join("\n");
+
+  function handleSaveCustom() {
+    if (!saveName.trim()) return;
+    const newPresets = {
+      ...customPresets,
+      [saveName.trim()]: { label: saveName.trim(), text: customPrompt, icon: "⭐" },
+    };
+    setCustomPresets(newPresets);
+    saveCustomPresets(newPresets);
+    setSelectedKey(saveName.trim());
+    setShowSaveForm(false);
+    setSaveName("");
+  }
+
+  function handleDeleteCustom(key) {
+    const { [key]: _, ...rest } = customPresets;
+    setCustomPresets(rest);
+    saveCustomPresets(rest);
+    if (selectedKey === key) setSelectedKey("historical");
+  }
+
+  function handleUpdateCurrentPresetText(newText) {
+    if (tab === "custom") {
+      setCustomPrompt(newText);
+      return;
+    }
+    const isBuiltin = !!BUILTIN_PRESETS[selectedKey];
+    const baseLabel = isBuiltin ? BUILTIN_PRESETS[selectedKey].label : customPresets[selectedKey]?.label || selectedKey;
+    const baseIcon = isBuiltin ? BUILTIN_PRESETS[selectedKey].icon : customPresets[selectedKey]?.icon || "⭐";
+    
+    const newPresets = {
+      ...customPresets,
+      [selectedKey]: { label: baseLabel, icon: baseIcon, text: newText }
+    };
+    setCustomPresets(newPresets);
+    saveCustomPresets(newPresets);
+  }
+
+  function handleResetCurrentPreset() {
+    if (!BUILTIN_PRESETS[selectedKey]) return;
+    const { [selectedKey]: _, ...rest } = customPresets;
+    setCustomPresets(rest);
+    saveCustomPresets(rest);
+  }
+
+  function handleConfirm() {
+    const isBuiltin = !!BUILTIN_PRESETS[selectedKey];
+    const needsOverride = (tab === "custom") || (!isBuiltin) || (isBuiltin && activeText !== BUILTIN_PRESETS[selectedKey].text);
+
+    onConfirm({
+      presetKey: tab === "custom" ? "historical" : selectedKey,
+      customPromptOverride: needsOverride ? (tab === "custom" ? customPrompt : activeText) : null,
+      toneKey: selectedTone,
+      label: activeLabel,
+      fullPrompt: fullPromptPreview,
+    });
+  }
+
+  const allBuiltinEntries = Object.entries(BUILTIN_PRESETS);
+  const allCustomEntries  = Object.entries(customPresets);
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 9998,
+      background: "rgba(0,0,0,0.75)", backdropFilter: "blur(10px)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      padding: 16,
+    }}>
+      <div style={{
+        width: "100%", maxWidth: 900,
+        background: "var(--bg-card)",
+        borderRadius: "var(--radius-xl)",
+        border: "1px solid var(--border)",
+        boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
+        maxHeight: "90vh", display: "flex", flexDirection: "column",
+      }}>
+        {/* Header */}
+        <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 24 }}>🌐</span>
+          <div style={{ flex: 1 }}>
+            <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Ngữ cảnh bản dịch</h2>
+            <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0 0" }}>Chọn phong cách dịch hoặc tuỳ chỉnh prompt AI</p>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose} style={{ fontSize: 18, width: 36, height: 36 }}>✕</button>
+        </div>
+
+        {/* Tab header */}
+        <div style={{ display: "flex", borderBottom: "1px solid var(--border)", padding: "0 24px" }}>
+          {[
+            { key: "builtin", label: "📚 Preset có sẵn" },
+            { key: "custom",  label: "✏️ Tuỳ chỉnh" },
+          ].map(t => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              style={{
+                background: "none", border: "none", cursor: "pointer",
+                padding: "12px 16px", fontSize: 13, fontWeight: tab === t.key ? 700 : 400,
+                color: tab === t.key ? "var(--accent)" : "var(--text-secondary)",
+                borderBottom: tab === t.key ? "2px solid var(--accent)" : "2px solid transparent",
+                marginBottom: -1,
+                transition: "all 0.15s",
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Body */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "16px 24px" }}>
+
+          {tab === "builtin" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>
+                Chọn thể loại để AI tối ưu phong cách dịch phù hợp
+              </div>
+
+              {/* Builtin presets — grouped */}
+              {(() => {
+                const groups = {};
+                allBuiltinEntries.forEach(([key, meta]) => {
+                  const g = meta.group || "Khác";
+                  if (!groups[g]) groups[g] = [];
+                  groups[g].push([key, meta]);
+                });
+                return Object.entries(groups).map(([groupName, items]) => (
+                  <div key={groupName}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent-2)", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 6, marginTop: 4 }}>
+                      {groupName}
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 6 }}>
+                      {items.map(([key, meta]) => (
+                        <button
+                          key={key}
+                          onClick={() => handleSelectBuiltin(key)}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 10,
+                            padding: "10px 14px", borderRadius: "var(--radius-md)",
+                            background: selectedKey === key && tab === "builtin" ? "rgba(99,102,241,0.12)" : "var(--bg-elevated)",
+                            border: `1px solid ${selectedKey === key && tab === "builtin" ? "var(--border-focus)" : "var(--border)"}`,
+                            cursor: "pointer", textAlign: "left",
+                            transition: "all 0.15s",
+                          }}
+                        >
+                          <span style={{ fontSize: 18, flexShrink: 0 }}>{meta.icon}</span>
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>{meta.label}</div>
+                            <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>{meta.text.slice(0, 45)}…</div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ));
+              })()}
+
+              {/* Custom saved presets */}
+              {allCustomEntries.length > 0 && (
+                <>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginTop: 12 }}>
+                    ⭐ Preset đã lưu
+                  </div>
+                  {allCustomEntries.map(([key, meta]) => (
+                    <div key={key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <button
+                        onClick={() => { setSelectedKey(key); setCustomPrompt(meta.text); }}
+                        style={{
+                          flex: 1, display: "flex", alignItems: "center", gap: 10,
+                          padding: "10px 14px", borderRadius: "var(--radius-md)",
+                          background: selectedKey === key ? "rgba(251,146,60,0.1)" : "var(--bg-elevated)",
+                          border: `1px solid ${selectedKey === key ? "rgba(251,146,60,0.4)" : "var(--border)"}`,
+                          cursor: "pointer", textAlign: "left",
+                          transition: "all 0.15s",
+                        }}
+                      >
+                        <span style={{ fontSize: 18 }}>⭐</span>
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 600 }}>{meta.label}</div>
+                          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{(meta.text || "").slice(0, 60)}…</div>
+                        </div>
+                      </button>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => handleDeleteCustom(key)}
+                        style={{ color: "var(--danger)", fontSize: 13, flexShrink: 0 }}
+                        title="Xóa preset này"
+                      >🗑️</button>
+                    </div>
+                  ))}
+                </>
+              )}
+              
+              {/* Inline Editor for Built-in / Saved Presets */}
+              <div style={{ marginTop: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+                  <label style={{ fontSize: 13, fontWeight: 600, color: "var(--text-secondary)" }}>
+                    ✏️ Nội dung Prompt (bạn có thể sửa nội dung của tuỳ chọn này):
+                  </label>
+                  {customPresets[selectedKey] && BUILTIN_PRESETS[selectedKey] && (
+                    <button className="btn btn-ghost btn-sm" style={{fontSize: 11, color: "var(--warning)"}} onClick={handleResetCurrentPreset}>
+                      Khôi phục mặc định
+                    </button>
+                  )}
+                </div>
+                <textarea
+                  rows={4}
+                  value={activeText}
+                  onChange={(e) => handleUpdateCurrentPresetText(e.target.value)}
+                  style={{ width: "100%", padding: 12, fontFamily: "monospace", fontSize: 13, borderRadius: "var(--radius-md)", border: "1px solid var(--border)", background: "var(--bg-card)" }}
+                />
+              </div>
+            </div>
+          )}
+
+          {tab === "custom" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                Tuỳ chỉnh hoàn toàn prompt ngữ cảnh gửi cho AI. Bạn có thể lưu lại để dùng lần sau.
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label>Prompt ngữ cảnh tuỳ chỉnh</label>
+                <textarea
+                  rows={6}
+                  value={customPrompt}
+                  onChange={(e) => setCustomPrompt(e.target.value)}
+                  placeholder="Nhập hướng dẫn dịch cho AI... (VD: Dịch theo phong cách manga, giữ nguyên tên riêng tiếng Nhật)"
+                  style={{ fontFamily: "monospace", fontSize: 13 }}
+                />
+              </div>
+
+              {/* Quickly load from builtin */}
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12, color: "var(--text-muted)", alignSelf: "center" }}>Nạp từ preset:</span>
+                {allBuiltinEntries.map(([key, meta]) => (
+                  <button
+                    key={key}
+                    className="btn btn-ghost btn-sm"
+                    style={{ fontSize: 11 }}
+                    onClick={() => setCustomPrompt(meta.text)}
+                  >
+                    {meta.icon} {meta.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Save form */}
+              {showSaveForm ? (
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    value={saveName}
+                    onChange={(e) => setSaveName(e.target.value)}
+                    placeholder="Tên preset (VD: Anime lồng tiếng)"
+                    style={{ flex: 1 }}
+                    onKeyDown={(e) => e.key === "Enter" && handleSaveCustom()}
+                    autoFocus
+                  />
+                  <button className="btn btn-primary btn-sm" onClick={handleSaveCustom} disabled={!saveName.trim()}>
+                    Lưu
+                  </button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => { setShowSaveForm(false); setSaveName(""); }}>
+                    Huỷ
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setShowSaveForm(true)}
+                  disabled={!customPrompt.trim()}
+                  style={{ alignSelf: "flex-start" }}
+                >
+                  💾 Lưu preset này
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Tone selection (luôn hiện) */}
+          <div style={{ marginTop: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: "var(--text-secondary)" }}>
+              🎭 Giọng điệu bản dịch
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              {TONE_OPTIONS.map(t => (
+                <button
+                  key={t.key}
+                  onClick={() => setSelectedTone(t.key)}
+                  style={{
+                    flex: 1, padding: "10px 8px", borderRadius: "var(--radius-md)",
+                    background: selectedTone === t.key ? "rgba(99,102,241,0.12)" : "var(--bg-elevated)",
+                    border: `1px solid ${selectedTone === t.key ? "var(--border-focus)" : "var(--border)"}`,
+                    cursor: "pointer", textAlign: "center",
+                    transition: "all 0.15s",
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>{t.label}</div>
+                  <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 3 }}>{t.desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Full prompt preview */}
+          <details style={{ marginTop: 16 }}>
+            <summary style={{ fontSize: 12, cursor: "pointer", color: "var(--text-muted)", userSelect: "none" }}>
+              👁 Xem trước prompt đầy đủ sẽ gửi cho AI
+            </summary>
+            <pre style={{
+              marginTop: 8, padding: "12px", fontSize: 11,
+              fontFamily: "monospace", lineHeight: 1.6,
+              background: "var(--bg-elevated)", borderRadius: "var(--radius-md)",
+              border: "1px solid var(--border)", color: "var(--text-secondary)",
+              whiteSpace: "pre-wrap", wordBreak: "break-word",
+            }}>
+              {fullPromptPreview}
+            </pre>
+          </details>
+        </div>
+
+        {/* Footer */}
+        <div style={{
+          padding: "12px 24px", borderTop: "1px solid var(--border)",
+          display: "flex", gap: 8, alignItems: "center",
+        }}>
+          <div style={{ flex: 1, fontSize: 12, color: "var(--text-muted)" }}>
+            <strong style={{ color: "var(--text-primary)" }}>{activeLabel}</strong> · Giọng: {TONE_OPTIONS.find(t => t.key === selectedTone)?.label}
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>Huỷ</button>
+          <button className="btn btn-primary" onClick={handleConfirm}>
+            ✅ Áp dụng ngữ cảnh này
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

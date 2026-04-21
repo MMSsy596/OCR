@@ -15,13 +15,14 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from . import crud, models, schemas
 from .auth import require_api_auth
 from .capcut_exporter import export_to_capcut
 from .db import Base, SessionLocal, engine, ensure_runtime_indexes, get_db
-from .downloader import run_url_ingest_job
+from .downloader import fetch_url_formats, run_url_ingest_job
 from .exporter import export_subtitle_file
 from .models import JobStatus
 from .pipeline import retranslate_project_segments, run_pipeline
@@ -125,6 +126,7 @@ def _enqueue_pipeline_job(job_id: str, payload: schemas.PipelineStartRequest) ->
         job_id,
         input_mode=payload.input_mode,
         gemini_api_key=payload.gemini_api_key,
+        gemini_models=getattr(payload, "gemini_models", None),
         voice_map=payload.voice_map,
         scan_interval_sec=payload.scan_interval_sec,
         job_id=job_id,
@@ -136,7 +138,7 @@ def _run_job_in_background(label: str, target, *args, **kwargs) -> None:
         try:
             target(*args, **kwargs)
         except Exception:
-            logger.exception("Background fallback job failed: %s", label)
+            logger.exception("Trình xử lý nền thất bại: %s", label)
 
     threading.Thread(target=_runner, name=f"solar-{label}", daemon=True).start()
 
@@ -157,6 +159,48 @@ def _resolve_storage_artifact(path_text: str) -> Path:
     except ValueError as ex:
         raise HTTPException(status_code=400, detail="artifact_outside_storage") from ex
     return artifact_path
+
+
+def _slugify(text: str, max_len: int = 80) -> str:
+    """Chuyển tên project thành slug an toàn cho filesystem.
+    Dùng unicodedata để tách dấu ra, giữ lại ký tự Latin và số."""
+    import unicodedata
+    import re as _re
+    # Normalize NFD: tách dấu khỏi ký tự cơ sở
+    nfkd = unicodedata.normalize("NFKD", text or "")
+    # Chỉ giữ ký tự không phải combining mark (category Mn)
+    no_marks = "".join(ch for ch in nfkd if unicodedata.category(ch) != "Mn")
+    # Giữ chữ/số/space/gạch, thay ký tự khác bằng space
+    cleaned = "".join(
+        ch if (ch.isalnum() or ch in " -_") else " "
+        for ch in no_marks
+    )
+    # Gộp nhiều space/gạch thành một gạch ngang
+    slug = _re.sub(r"[\s\-]+", "-", cleaned.strip()).strip("-")
+    slug = slug[:max_len].strip("-")
+    return slug or "project"
+
+
+def _project_folder(project: models.Project) -> Path:
+    """Trả về thư mục storage của project.
+    - Nếu có folder_name → dùng folder_name (slug tên thật).
+    - Không có (project cũ trước migration) → fallback về UUID."""
+    folder = project.folder_name if project.folder_name else project.id
+    return settings.storage_path / folder
+
+
+def _make_unique_slug(db, base_slug: str, exclude_id: str | None = None) -> str:
+    """Tạo slug unique: nếu base_slug đã tồn tại thì thêm suffix -2, -3, ..."""
+    slug = base_slug
+    counter = 2
+    while crud.get_project_by_folder(db, slug, exclude_id=exclude_id):
+        slug = f"{base_slug[:75]}-{counter}"
+        counter += 1
+        if counter > 999:
+            break
+    return slug
+
+
 
 
 def _enqueue_dub_job(job_id: str, payload: schemas.DubStartRequest) -> None:
@@ -266,7 +310,7 @@ def _mark_stale_queued_jobs(db: Session, jobs: list[models.PipelineJob]) -> bool
             "phase": "queue",
             "level": "warning",
             "progress": int(job.progress or 0),
-            "message": f"Job queued qua han {timeout_sec}s, danh dau stale_queue_timeout.",
+            "message": f"Job hàng đợi quá hạn {timeout_sec}s, đánh dấu stale_queue_timeout.",
         }
         job.artifacts = artifacts
         job.status = JobStatus.failed
@@ -281,7 +325,16 @@ def _mark_stale_queued_jobs(db: Session, jobs: list[models.PipelineJob]) -> bool
 
 @app.post("/projects", response_model=schemas.ProjectRead)
 def create_project(payload: schemas.ProjectCreate, db: Session = Depends(get_db)):
-    project = crud.create_project(db, payload)
+    # Kiểm tra trùng tên project
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="project_name_required")
+    if crud.get_project_by_name(db, name):
+        raise HTTPException(status_code=409, detail="project_name_already_exists")
+    # Tạo folder_name (slug unique)
+    base_slug = _slugify(name)
+    folder_name = _make_unique_slug(db, base_slug)
+    project = crud.create_project(db, payload, folder_name=folder_name)
     return _to_project_read(project)
 
 
@@ -293,27 +346,37 @@ def list_projects(db: Session = Depends(get_db)):
 
 @app.post("/projects/clear-sessions", response_model=schemas.ClearSessionsResponse)
 def clear_sessions(payload: schemas.ClearSessionsRequest, db: Session = Depends(get_db)):
-    deleted_ids, skipped_processing = crud.clear_sessions(
+    deleted_rows, skipped_processing = crud.clear_sessions(
         db,
         include_processing=payload.include_processing,
     )
+    deleted_ids = [pid for pid, _ in deleted_rows]
     removed_storage_dirs = 0
     failed_storage_dirs: list[str] = []
     if payload.delete_storage:
         storage_root = settings.storage_path.resolve()
-        for project_id in deleted_ids:
-            candidate = (settings.storage_path / project_id).resolve()
-            try:
-                candidate.relative_to(storage_root)
-            except ValueError:
-                failed_storage_dirs.append(str(candidate))
-                continue
-            if candidate.exists():
+        for project_id, folder_name in deleted_rows:
+            # Ưu tiên xóa theo folder_name (tên thật), fallback UUID
+            candidates = []
+            if folder_name:
+                candidates.append((settings.storage_path / folder_name).resolve())
+            candidates.append((settings.storage_path / project_id).resolve())
+            deleted_this = False
+            for candidate in candidates:
+                if deleted_this:
+                    break
                 try:
-                    shutil.rmtree(candidate)
-                    removed_storage_dirs += 1
-                except Exception:
+                    candidate.relative_to(storage_root)
+                except ValueError:
                     failed_storage_dirs.append(str(candidate))
+                    continue
+                if candidate.exists():
+                    try:
+                        shutil.rmtree(candidate)
+                        removed_storage_dirs += 1
+                        deleted_this = True
+                    except Exception:
+                        failed_storage_dirs.append(str(candidate))
     return schemas.ClearSessionsResponse(
         deleted_projects=len(deleted_ids),
         deleted_project_ids=deleted_ids,
@@ -336,6 +399,33 @@ def update_project(project_id: str, payload: schemas.ProjectUpdate, db: Session 
     project = crud.get_project(db, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="project_not_found")
+    # Kiểm tra trùng tên khi đổi tên
+    new_name = (payload.name or "").strip() if payload.name is not None else None
+    if new_name and new_name != project.name:
+        if crud.get_project_by_name(db, new_name, exclude_id=project_id):
+            raise HTTPException(status_code=409, detail="project_name_already_exists")
+        # Đổi tên → tạo slug mới và rename thư mục trên disk
+        old_dir = _project_folder(project)
+        new_slug = _slugify(new_name)
+        new_slug = _make_unique_slug(db, new_slug, exclude_id=project_id)
+        new_dir = settings.storage_path / new_slug
+        if old_dir.exists() and old_dir != new_dir:
+            try:
+                old_dir.rename(new_dir)
+                # Cập nhật video_path nếu đang trỏ vào thư mục cũ
+                if project.video_path:
+                    old_video = Path(project.video_path)
+                    try:
+                        rel = old_video.relative_to(old_dir)
+                        project.video_path = str(new_dir / rel)
+                    except ValueError:
+                        pass
+            except Exception as exc:
+                logger.warning("Rename thư mục project thất bại: %s", exc)
+        project.folder_name = new_slug
+        db.add(project)
+        db.commit()
+        db.refresh(project)
     project = crud.update_project(db, project, payload)
     return _to_project_read(project)
 
@@ -346,7 +436,7 @@ def upload_video(project_id: str, request: Request, file: UploadFile = File(...)
     if not project:
         raise HTTPException(status_code=404, detail="project_not_found")
     _enforce_upload_constraints(file, dict(request.headers))
-    project_dir = settings.storage_path / project_id
+    project_dir = _project_folder(project)
     project_dir.mkdir(parents=True, exist_ok=True)
     ext = Path(file.filename or "video.mp4").suffix or ".mp4"
     target = project_dir / f"source{ext}"
@@ -360,6 +450,18 @@ def upload_video(project_id: str, request: Request, file: UploadFile = File(...)
     _cleanup_project_generated_files(project_dir, keep_source=target)
     project = crud.attach_video(db, project, target)
     return _to_project_read(project)
+
+
+@app.post("/ingest-url/check")
+def check_url_formats(payload: schemas.UrlCheckRequest):
+    """Kiểm tra URL và lấy danh sách chất lượng có thể tải (không tải file)."""
+    from .downloader import _validate_source_url
+    try:
+        url = _validate_source_url((payload.source_url or "").strip())
+    except ValueError as ex:
+        raise HTTPException(status_code=400, detail=str(ex))
+    result = fetch_url_formats(url)
+    return result
 
 
 @app.post("/projects/{project_id}/ingest-url/start", response_model=schemas.JobRead)
@@ -388,9 +490,11 @@ def start_url_ingest(project_id: str, payload: schemas.UrlIngestStartRequest, db
             job.id,
             source_url=payload.source_url,
             auto_start_pipeline=payload.auto_start_pipeline,
+            input_mode=payload.input_mode,
             gemini_api_key=payload.gemini_api_key,
             voice_map=payload.voice_map,
             scan_interval_sec=payload.scan_interval_sec,
+            format_id=payload.format_id,
         )
     return job
 
@@ -400,7 +504,7 @@ def upload_srt_file(project_id: str, file: UploadFile = File(...), db: Session =
     project = crud.get_project(db, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="project_not_found")
-    project_dir = settings.storage_path / project_id
+    project_dir = _project_folder(project)
     project_dir.mkdir(parents=True, exist_ok=True)
 
     src_name = Path(file.filename or "manual.external.srt")
@@ -508,6 +612,7 @@ def start_pipeline(project_id: str, payload: schemas.PipelineStartRequest, db: S
             job.id,
             input_mode=payload.input_mode,
             gemini_api_key=payload.gemini_api_key,
+            gemini_models=payload.gemini_models,
             voice_map=payload.voice_map,
             scan_interval_sec=payload.scan_interval_sec,
         )
@@ -574,7 +679,7 @@ def retranslate_segments(project_id: str, payload: schemas.RetranslateRequest, d
     project = crud.get_project(db, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="project_not_found")
-    result = retranslate_project_segments(project_id, gemini_api_key=payload.gemini_api_key)
+    result = retranslate_project_segments(project_id, gemini_api_key=payload.gemini_api_key, gemini_models=payload.gemini_models)
     if not result.get("ok"):
         raise HTTPException(status_code=500, detail=result.get("error", "retranslate_failed"))
     return schemas.RetranslateResponse(
@@ -725,6 +830,7 @@ def retry_stuck_jobs(project_id: str, db: Session = Depends(get_db)):
                     new_job.id,
                     input_mode=payload.input_mode,  # type: ignore[attr-defined]
                     gemini_api_key=payload.gemini_api_key,  # type: ignore[attr-defined]
+                    gemini_models=getattr(payload, "gemini_models", None),
                     voice_map=payload.voice_map,  # type: ignore[attr-defined]
                     scan_interval_sec=payload.scan_interval_sec,  # type: ignore[attr-defined]
                 )
@@ -967,17 +1073,24 @@ def import_capcut_draft(payload: schemas.CapCutImportRequest, db: Session = Depe
 
     project_name = (payload.project_name or draft_info.draft_name or draft_folder.name).strip() or "CapCut Import"
 
-    # Tạo project trong DB
+    # Kiểm tra trùng tên
+    if crud.get_project_by_name(db, project_name):
+        import time as _time
+        project_name = f"{project_name} ({int(_time.time()) % 10000})"
+
+    # Tạo project trong DB với folder_name slug
+    base_slug = _slugify(project_name)
+    folder_name = _make_unique_slug(db, base_slug)
     project_payload = schemas.ProjectCreate(
         name=project_name,
         source_lang=payload.source_lang,
         target_lang=payload.target_lang,
         roi=schemas.ROI(x=0.05, y=0.78, w=0.9, h=0.18),
     )
-    project = crud.create_project(db, project_payload)
+    project = crud.create_project(db, project_payload, folder_name=folder_name)
 
     # Tạo thư mục storage
-    project_dir = settings.storage_path / project.id
+    project_dir = _project_folder(project)
     project_dir.mkdir(parents=True, exist_ok=True)
 
     # Copy video
@@ -1033,13 +1146,28 @@ def export_project_to_capcut(
     # Xác định đường dẫn audio dub (nếu có)
     dub_path: str | None = None
     if payload.include_dub:
-        project_dir = settings.storage_path / project_id
-        for ext in (".wav", ".mp3", ".m4a", ".aac"):
-            candidate = project_dir / f"dub_output{ext}"
-            if not candidate.exists():
-                candidate = project_dir / f"output_dub{ext}"
-            if candidate.exists():
-                dub_path = str(candidate)
+        project_dir = _project_folder(project)
+        candidate_patterns = [
+            "dub_output.*",
+            "output_dub.*",
+            "dub.output.*",
+            "dub.*",
+            "output*.wav",
+            "output*.mp3",
+            "output*.m4a",
+            "output*.aac",
+        ]
+        audio_exts = {".wav", ".mp3", ".m4a", ".aac"}
+        seen_candidates: set[Path] = set()
+        for pattern in candidate_patterns:
+            for candidate in sorted(project_dir.glob(pattern), key=lambda path: path.stat().st_mtime, reverse=True):
+                if candidate in seen_candidates:
+                    continue
+                seen_candidates.add(candidate)
+                if candidate.is_file() and candidate.suffix.lower() in audio_exts:
+                    dub_path = str(candidate)
+                    break
+            if dub_path:
                 break
 
     result = export_to_capcut(
@@ -1051,6 +1179,332 @@ def export_project_to_capcut(
     )
 
     return schemas.CapCutExportResponse(**result)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Gemini Key Management
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_persistent_keys_path() -> Path:
+    from .settings import get_settings as _gs
+    storage_root = Path(_gs().storage_root).resolve()
+    data_dir = storage_root.parent
+    config_dir = data_dir / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir / "gemini_keys.txt"
+
+
+def _load_gemini_keys_from_env() -> list[str]:
+    """Đọc danh sách Gemini keys từ file persistent (fallback .env)."""
+    # 1. Thử đọc từ persistent file
+    p_path = _get_persistent_keys_path()
+    try:
+        if p_path.exists():
+            raw = p_path.read_text(encoding="utf-8").strip()
+            return [k.strip() for k in raw.split(",") if k.strip()]
+    except Exception:
+        pass
+        
+    # 2. Fallback .env qua settings
+    try:
+        from .settings import get_settings as _gs
+        _gs.cache_clear()
+    except Exception:
+        pass
+    from .settings import get_settings
+    raw = (get_settings().gemini_api_keys or "").strip()
+    return [k.strip() for k in raw.split(",") if k.strip()]
+
+
+def _save_gemini_keys_to_env(keys: list[str]) -> None:
+    """Lưu danh sách keys vào persistent file."""
+    keys_value = ",".join(keys)
+    
+    # 1. Ghi vào persistent file
+    try:
+        p_path = _get_persistent_keys_path()
+        p_path.write_text(keys_value, encoding="utf-8")
+    except Exception as e:
+        print(f"Warning: Could not save keys to persistent path: {e}")
+        
+    # 2. Vẫn cố gắng ghi vào .env cho tương thích ngược (nếu có thể)
+    env_path = Path(__file__).resolve().parents[3] / ".env"
+    try:
+        lines: list[str] = []
+        found = False
+        if env_path.exists():
+            lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
+        new_lines: list[str] = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("GEMINI_API_KEYS=") or stripped.startswith("GEMINI_API_KEYS ="):
+                new_lines.append(f"GEMINI_API_KEYS={keys_value}\n")
+                found = True
+            else:
+                new_lines.append(line)
+        if not found:
+            new_lines.append(f"GEMINI_API_KEYS={keys_value}\n")
+        env_path.write_text("".join(new_lines), encoding="utf-8")
+    except Exception:
+        pass
+        
+    # Invalidate settings cache
+    try:
+        from .settings import get_settings as _gs
+        _gs.cache_clear()
+    except Exception:
+        pass
+
+
+@app.get("/admin/check-ocr")
+def check_ocr_status():
+    """Chẩn đoán trạng thái thư viện OCR trong container."""
+    result: dict = {}
+    # Kiểm tra cv2
+    try:
+        import cv2  # type: ignore
+        result["cv2"] = {"ok": True, "version": cv2.__version__}
+    except Exception as ex:
+        result["cv2"] = {"ok": False, "error": str(ex)[:200]}
+    # Kiểm tra onnxruntime
+    try:
+        import onnxruntime as ort  # type: ignore
+        result["onnxruntime"] = {
+            "ok": True,
+            "version": ort.__version__,
+            "providers": list(ort.get_available_providers()),
+        }
+    except Exception as ex:
+        result["onnxruntime"] = {"ok": False, "error": str(ex)[:200]}
+    # Kiểm tra rapidocr
+    try:
+        from rapidocr_onnxruntime import RapidOCR  # type: ignore
+        engine = RapidOCR()
+        result["rapidocr"] = {"ok": True, "engine_init": "default"}
+    except Exception as ex:
+        result["rapidocr"] = {"ok": False, "error": str(ex)[:400]}
+    # Kiểm tra model files
+    try:
+        import rapidocr_onnxruntime as _ro
+        model_dir = Path(_ro.__file__).parent / "models"
+        if model_dir.exists():
+            models = [f.name for f in model_dir.glob("*.onnx")]
+            result["models"] = {"found": len(models), "files": models[:10]}
+        else:
+            result["models"] = {"found": 0, "note": "models dir not found"}
+    except Exception as ex:
+        result["models"] = {"error": str(ex)[:200]}
+    result["overall_ok"] = (
+        result.get("cv2", {}).get("ok", False)
+        and result.get("onnxruntime", {}).get("ok", False)
+        and result.get("rapidocr", {}).get("ok", False)
+    )
+    return result
+
+
+@app.get("/admin/check-update")
+def check_update():
+    """Kiểm tra có bản cập nhật Docker image mới hay không."""
+    try:
+        import urllib.request
+        from datetime import datetime, timezone
+        
+        # 1. Fetch remote image info
+        url = "https://hub.docker.com/v2/repositories/nanbao/ocr/tags/lastest"
+        req = urllib.request.Request(url, headers={"User-Agent": "OCR-Studio"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            last_updated_str = data.get("last_updated")
+            if not last_updated_str:
+                return {"has_update": False, "error": "No last_updated field"}
+            
+            # strptime compatibility fix: replace Z with +00:00 (Python 3.11 supports ISO 8601 with fromisoformat)
+            remote_time = datetime.fromisoformat(last_updated_str.replace("Z", "+00:00"))
+            
+        # 2. Get local container build time (dựa vào file web_dist/index.html của quá trình build)
+        local_build_path = Path(__file__).parent.parent / "web_dist" / "index.html"
+        if not local_build_path.exists():
+            return {"has_update": False, "message": "Dev env, no update needed"}
+            
+        mtime = local_build_path.stat().st_mtime
+        local_time = datetime.fromtimestamp(mtime, timezone.utc)
+        
+        # 3. So sánh: cho phép dung sai 30 phút vì push mất thời gian
+        diff_seconds = (remote_time - local_time).total_seconds()
+        has_update = diff_seconds > 1800 # 30 mins
+        
+        return {
+            "has_update": has_update,
+            "remote_time": remote_time.isoformat(),
+            "local_time": local_time.isoformat(),
+            "diff_seconds": diff_seconds
+        }
+    except Exception as e:
+        return {"has_update": False, "error": str(e)}
+
+
+class UISettingsRequest(BaseModel):
+    settings: dict
+
+@app.get("/admin/ui-settings")
+def get_ui_settings():
+    """Lấy các cấu hình giao diện (prompts, presets, forms) được lưu persistent."""
+    from .settings import get_settings as _gs
+    import json
+    
+    config_file = Path(_gs().storage_root).resolve().parent / "config" / "ui_settings.json"
+    if config_file.exists():
+        try:
+            return json.loads(config_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+@app.post("/admin/ui-settings")
+def save_ui_settings(payload: UISettingsRequest):
+    """Lưu trữ thêm cấu hình giao diện (prompts, presets, ...) vào data storage persistent."""
+    from .settings import get_settings as _gs
+    import json
+    
+    config_file = Path(_gs().storage_root).resolve().parent / "config" / "ui_settings.json"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    existing = {}
+    if config_file.exists():
+        try:
+            existing = json.loads(config_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+            
+    existing.update(payload.settings)
+    config_file.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"ok": True, "settings": existing}
+
+
+def _mask_key(key: str) -> str:
+    if len(key) <= 8:
+        return "****"
+    return "****" + key[-8:]
+
+
+@app.get("/admin/gemini-keys", response_model=schemas.GeminiKeyListResponse)
+def list_gemini_keys():
+    """Lấy danh sách Gemini API keys (đã ẩn nội dung)."""
+    keys = _load_gemini_keys_from_env()
+    items = [
+        schemas.GeminiKeyItem(
+            index=i,
+            key_masked=_mask_key(k),
+            key_suffix=k[-6:] if len(k) > 6 else k,
+            is_primary=(i == 0),
+        )
+        for i, k in enumerate(keys)
+    ]
+    return schemas.GeminiKeyListResponse(keys=items, total=len(items))
+
+
+@app.post("/admin/gemini-keys", response_model=schemas.GeminiKeyListResponse)
+def add_gemini_key(payload: schemas.GeminiKeyAddRequest):
+    """Thêm một Gemini API key mới vào cuối danh sách."""
+    new_key = (payload.api_key or "").strip()
+    if not new_key:
+        raise HTTPException(status_code=400, detail="api_key_required")
+    keys = _load_gemini_keys_from_env()
+    if new_key in keys:
+        raise HTTPException(status_code=409, detail="key_already_exists")
+    keys.append(new_key)
+    _save_gemini_keys_to_env(keys)
+    items = [
+        schemas.GeminiKeyItem(index=i, key_masked=_mask_key(k), key_suffix=k[-6:] if len(k) > 6 else k, is_primary=(i == 0))
+        for i, k in enumerate(keys)
+    ]
+    return schemas.GeminiKeyListResponse(keys=items, total=len(items))
+
+
+@app.patch("/admin/gemini-keys/{key_index}", response_model=schemas.GeminiKeyListResponse)
+def update_gemini_key(key_index: int, payload: schemas.GeminiKeyUpdateRequest):
+    """Cập nhật một Gemini API key theo vị trí."""
+    new_key = (payload.api_key or "").strip()
+    if not new_key:
+        raise HTTPException(status_code=400, detail="api_key_required")
+    keys = _load_gemini_keys_from_env()
+    if key_index < 0 or key_index >= len(keys):
+        raise HTTPException(status_code=404, detail="key_not_found")
+    keys[key_index] = new_key
+    _save_gemini_keys_to_env(keys)
+    items = [
+        schemas.GeminiKeyItem(index=i, key_masked=_mask_key(k), key_suffix=k[-6:] if len(k) > 6 else k, is_primary=(i == 0))
+        for i, k in enumerate(keys)
+    ]
+    return schemas.GeminiKeyListResponse(keys=items, total=len(items))
+
+
+@app.delete("/admin/gemini-keys/{key_index}", response_model=schemas.GeminiKeyDeleteResponse)
+def delete_gemini_key(key_index: int):
+    """Xóa một Gemini API key theo vị trí."""
+    keys = _load_gemini_keys_from_env()
+    if key_index < 0 or key_index >= len(keys):
+        raise HTTPException(status_code=404, detail="key_not_found")
+    keys.pop(key_index)
+    _save_gemini_keys_to_env(keys)
+    return schemas.GeminiKeyDeleteResponse(ok=True, deleted_index=key_index, remaining=len(keys))
+
+
+@app.put("/admin/gemini-keys/reorder", response_model=schemas.GeminiKeyListResponse)
+def reorder_gemini_keys(payload: schemas.GeminiKeyReorderRequest):
+    """Đổi thứ tự các Gemini API keys."""
+    keys = _load_gemini_keys_from_env()
+    indices = payload.new_order_indices
+    if len(indices) != len(keys) or set(indices) != set(range(len(keys))):
+        raise HTTPException(status_code=400, detail="invalid_indices")
+    
+    new_keys = [keys[i] for i in indices]
+    _save_gemini_keys_to_env(new_keys)
+    
+    items = [
+        schemas.GeminiKeyItem(index=i, key_masked=_mask_key(k), key_suffix=k[-6:] if len(k) > 6 else k, is_primary=(i == 0))
+        for i, k in enumerate(new_keys)
+    ]
+    return schemas.GeminiKeyListResponse(keys=items, total=len(items))
+
+
+@app.post("/admin/gemini-keys/{key_index}/test")
+def test_gemini_key_by_index(key_index: int):
+    """Kiểm tra tính hợp lệ của một Gemini API key theo index lưu trữ."""
+    import urllib.request
+    import json
+    
+    keys = _load_gemini_keys_from_env()
+    if key_index < 0 or key_index >= len(keys):
+        raise HTTPException(status_code=404, detail="key_not_found")
+        
+    api_key = keys[key_index].strip()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={api_key}"
+    body = {"contents": [{"parts": [{"text": "Hello"}]}]}
+    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST", headers={"Content-Type": "application/json"})
+    
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if "candidates" in data:
+                return {"ok": True, "message": "Key gọi API thành công."}
+            else:
+                return {"ok": False, "message": "Key hợp lệ nhưng phản hồi không có candidates."}
+    except Exception as ex:
+        err_msg = str(ex)
+        if hasattr(ex, 'code'):
+            if ex.code == 400:
+                err_msg = "Lỗi 400: API Key không hợp lệ."
+            elif ex.code == 403:
+                err_msg = "Lỗi 403: Không có quyền truy cập."
+            elif ex.code == 429:
+                err_msg = "Lỗi 429: Vượt quá giới hạn (Quota exceeded)."
+            try:
+                msg_body = ex.read().decode("utf-8", errors="ignore")
+                err_msg += f" (Chi tiết: {msg_body[:100]})"
+            except:
+                pass
+        return {"ok": False, "message": f"Thất bại: {err_msg}"}
 
 
 @app.get("/{full_path:path}", include_in_schema=False)

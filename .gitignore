@@ -21,3 +21,7 @@ apps/api/.venv/
 apps/worker/.venv/
 .env
 
+# Dữ liệu người dùng — không commit lên git
+ocr-data/
+ban_cai_dat/ocr-data/
+

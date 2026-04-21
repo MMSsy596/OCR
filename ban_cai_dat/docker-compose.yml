@@ -1,0 +1,29 @@
+name: ocr_studio
+services:
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  app:
+    image: nanbao/ocr:latest
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_NAME=NanBao OCR Studio
+      - PORT=8000
+      - WEB_ORIGIN=http://localhost:8000
+      - ALLOWED_HOSTS=localhost,127.0.0.1
+      - ENABLE_DOCS=true
+      - DATABASE_URL=sqlite+pysqlite:////data/ocr.db
+      - REDIS_URL=redis://redis:6379/0
+      - STORAGE_ROOT=/data/projects
+      - CAPCUT_DRAFT_DIR=/capcut-data
+      - HOST_STORAGE_ROOT=D:/project/OCR/ban_cai_dat/ocr-data/projects
+    volumes:
+      - ./ocr-data:/data
+      - C:/Users/NanBao（男宝）/AppData/Local/CapCut/User Data/Projects/com.lveditor.draft:/capcut-data
+    depends_on:
+      - redis

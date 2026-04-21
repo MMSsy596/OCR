@@ -1,4 +1,4 @@
-﻿"""
+"""
 CapCut Exporter â€” Táº¡o dá»± Ã¡n CapCut draft tá»« segments OCR Ä‘Ã£ dá»‹ch.
 
 Luá»“ng hoáº¡t Ä‘á»™ng:
@@ -21,6 +21,26 @@ import uuid
 from pathlib import Path
 
 logger = logging.getLogger("solar.ocr.capcut_export")
+
+def _to_host_path(path: str | None) -> str:
+    """Chuyen duong dan container (/data/projects/...) sang duong dan
+    Windows host de CapCut co the doc duoc.
+
+    Dung bien moi truong HOST_STORAGE_ROOT (dat qua docker-compose) de map.
+    Neu khong dat bien, tra ve path goc nguyen.
+    """
+    if not path:
+        return ""
+    host_storage = os.environ.get("HOST_STORAGE_ROOT", "").strip().replace("\\", "/")
+    container_storage = os.environ.get("STORAGE_ROOT", "/data/projects").rstrip("/")
+    path_fwd = str(path).replace("\\", "/")
+    if host_storage and path_fwd.startswith(container_storage):
+        rel = path_fwd[len(container_storage):]
+        return host_storage.rstrip("/") + rel
+    return path_fwd
+
+
+_BUNDLED_CAPCUT_TEMPLATE_DIR = Path(__file__).resolve().parent / "capcut_template" / "0416"
 
 
 _PLACEHOLDER_JPEG_BASE64 = (
@@ -49,16 +69,88 @@ def _sec_to_us(sec: float) -> int:
 
 
 def _get_capcut_root() -> Path | None:
-    """Tráº£ vá» thÆ° má»¥c gá»‘c CapCut draft."""
+    """Tim thu muc goc CapCut draft.
+
+    Thu tu uu tien:
+    1. Bien moi truong CAPCUT_DRAFT_DIR (danh cho Docker / may khach custom)
+    2. /capcut-data  (thu muc mount mac dinh trong Docker)
+    3. %LOCALAPPDATA% / home - khi chay native tren Windows
+    4. Quet tat ca o dia Windows (C:..Z:)
+    """
+    import string
+
+    _SUFFIX = Path("CapCut") / "User Data" / "Projects" / "com.lveditor.draft"
+
+    candidates: list[Path] = []
+
+    # --- 1. Env var CAPCUT_DRAFT_DIR ---
+    env_dir = os.environ.get("CAPCUT_DRAFT_DIR", "").strip()
+    if env_dir:
+        p = Path(env_dir)
+        if p.exists():
+            logger.info("CAPCUT_DRAFT_DIR: %s", p)
+            return p
+        # nguoi dung co the chi tro den thu muc CapCut (chua co com.lveditor.draft)
+        sub = p / "User Data" / "Projects" / "com.lveditor.draft"
+        if sub.exists():
+            logger.info("CAPCUT_DRAFT_DIR (sub): %s", sub)
+            return sub
+        logger.warning("CAPCUT_DRAFT_DIR được đặt (%s) nhưng không tồn tại!", env_dir)
+
+    # --- 2. /capcut-data - thu muc Docker volume mac dinh ---
+    docker_path = Path("/capcut-data")
+    if docker_path.exists():
+        candidates.append(docker_path)
+
+    # --- 3. %LOCALAPPDATA% / home (Windows native) ---
     local_app_data = os.environ.get("LOCALAPPDATA", "")
     if local_app_data:
-        candidate = Path(local_app_data) / "CapCut" / "User Data" / "Projects" / "com.lveditor.draft"
-        if candidate.exists():
-            return candidate
+        candidates.append(Path(local_app_data) / _SUFFIX)
+
     home = Path.home()
-    fallback = home / "AppData" / "Local" / "CapCut" / "User Data" / "Projects" / "com.lveditor.draft"
-    if fallback.exists():
-        return fallback
+    candidates.append(home / "AppData" / "Local" / _SUFFIX)
+
+    app_data = os.environ.get("APPDATA", "")
+    if app_data:
+        candidates.append(Path(app_data) / _SUFFIX)
+
+    # --- 4. Quet tat ca o dia (C:..Z:) ---
+    for drive_letter in string.ascii_uppercase:
+        drive = Path(f"{drive_letter}:\\")
+        if not drive.exists():
+            continue
+        users_dir = drive / "Users"
+        if users_dir.exists():
+            try:
+                for user_dir in users_dir.iterdir():
+                    if user_dir.is_dir():
+                        candidates.append(user_dir / "AppData" / "Local" / _SUFFIX)
+            except PermissionError:
+                pass
+        candidates.append(drive / _SUFFIX)
+
+    seen: set[str] = set()
+    for c in candidates:
+        try:
+            key = str(c).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            if c.exists():
+                logger.info("Tìm thấy CapCut tại: %s", c)
+                return c
+        except Exception:
+            continue
+
+    logger.warning(
+        "Không tìm thấy thư mục CapCut. Đã quét %d vị trí. "
+        "Hãy đặt biến môi trường CAPCUT_DRAFT_DIR.",
+        len(candidates),
+    )
+    return None
+def _get_bundled_reference_draft() -> Path | None:
+    if _BUNDLED_CAPCUT_TEMPLATE_DIR.exists():
+        return _BUNDLED_CAPCUT_TEMPLATE_DIR
     return None
 
 
@@ -145,7 +237,7 @@ def _probe_video_metadata(video_path: str | None) -> dict:
             "duration_us": max(0, duration_us),
         }
     except Exception:
-        logger.warning("Khong probe duoc metadata video %s", video_path, exc_info=True)
+        logger.warning("Không probe được metadata video %s", video_path, exc_info=True)
     try:
         import cv2  # type: ignore
 
@@ -164,7 +256,7 @@ def _probe_video_metadata(video_path: str | None) -> dict:
                 "duration_us": max(0, duration_us),
             }
     except Exception:
-        logger.warning("Khong fallback probe bang cv2 duoc cho %s", video_path, exc_info=True)
+        logger.warning("Không fallback probe bằng cv2 được cho %s", video_path, exc_info=True)
     return default
 
 
@@ -182,6 +274,43 @@ def _write_json(path: Path, payload: dict) -> None:
     )
 
 
+def _create_unique_draft_folder(capcut_root: Path, preferred_name: str) -> Path:
+    """Tao thu muc draft duy nhat theo cach an toan khi co request chay dong thoi."""
+    base_name = preferred_name.strip() or "Solar OCR Export"
+    counter = 0
+    while True:
+        folder_name = base_name if counter == 0 else f"{base_name} ({counter})"
+        draft_folder = capcut_root / folder_name
+        try:
+            draft_folder.mkdir(parents=True, exist_ok=False)
+            return draft_folder
+        except FileExistsError:
+            counter += 1
+
+
+def _is_safe_reference_draft(content: dict) -> bool:
+    materials = content.get("materials") or {}
+    tracks = content.get("tracks") or []
+    videos = materials.get("videos") or []
+    texts = materials.get("texts") or []
+    track_types = [track.get("type") for track in tracks]
+    text_tracks = [track for track in tracks if track.get("type") == "text"]
+    if not videos:
+        return False
+    if track_types.count("video") != 1:
+        return False
+    if len(text_tracks) < 2:
+        return False
+    if any(track_type not in {"video", "text"} for track_type in track_types):
+        return False
+    text_segment_count = sum(len(track.get("segments") or []) for track in text_tracks)
+    if text_segment_count < 1:
+        return False
+    if len(texts) != text_segment_count:
+        return False
+    return True
+
+
 def _pick_reference_draft(capcut_root: Path, exclude_names: set[str] | None = None) -> Path | None:
     exclude_names = exclude_names or set()
     preferred_name = "0416"
@@ -195,7 +324,7 @@ def _pick_reference_draft(capcut_root: Path, exclude_names: set[str] | None = No
         except Exception:
             logger.warning("Khong doc duoc preferred draft tham chieu %s", preferred_path, exc_info=True)
     best_path: Path | None = None
-    best_score = -1
+    best_score: tuple[int, int, int] | None = None
     for entry in capcut_root.iterdir():
         if not entry.is_dir() or entry.name in exclude_names:
             continue
@@ -209,56 +338,51 @@ def _pick_reference_draft(capcut_root: Path, exclude_names: set[str] | None = No
             continue
         try:
             content = _load_json(draft_content_path)
-            meta = _load_json(draft_meta_path)
-            type0 = next((item for item in (meta.get("draft_materials") or []) if item.get("type") == 0), None)
-            if not type0 or len(type0.get("value") or []) < 2:
+            if not _is_safe_reference_draft(content):
                 continue
-            materials = content.get("materials") or {}
-            tracks = content.get("tracks") or []
-            videos = materials.get("videos") or []
-            texts = materials.get("texts") or []
-            if not videos or len(tracks) < 2:
-                continue
-            score = draft_content_path.stat().st_size + len(texts) * 1000
-            if score > best_score:
+            texts = (content.get("materials") or {}).get("texts") or []
+            score = (
+                int(entry.stat().st_mtime_ns),
+                len(texts),
+                int(draft_content_path.stat().st_size),
+            )
+            if best_score is None or score > best_score:
                 best_score = score
                 best_path = entry
         except Exception:
-            logger.warning("Khong doc duoc draft tham chieu %s", entry, exc_info=True)
+            logger.warning("Không đọc được draft tham chiếu %s", entry, exc_info=True)
     return best_path
 
 
-def _pick_style_reference_draft(
-    capcut_root: Path,
-    style_source: str = "preset_0417",
-    exclude_names: set[str] | None = None,
-) -> Path | None:
-    exclude_names = exclude_names or set()
-    if style_source == "preset_0417":
-        preferred = capcut_root / "0417"
-        if preferred.name not in exclude_names and preferred.is_dir():
-            try:
-                content = _load_json(preferred / "draft_content.json")
-                text_materials = (content.get("materials") or {}).get("texts") or []
-                text_tracks = [track for track in (content.get("tracks") or []) if track.get("type") == "text" and track.get("segments")]
-                if text_materials and text_tracks:
-                    return preferred
-            except Exception:
-                logger.warning("Khong doc duoc style preset 0417", exc_info=True)
-    for entry in sorted(capcut_root.iterdir(), key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True):
-        if not entry.is_dir() or entry.name in exclude_names:
-            continue
-        if "broken" in entry.name.lower():
-            continue
-        try:
-            content = _load_json(entry / "draft_content.json")
-            text_materials = (content.get("materials") or {}).get("texts") or []
-            text_tracks = [track for track in (content.get("tracks") or []) if track.get("type") == "text" and track.get("segments")]
-            if text_materials and text_tracks:
-                return entry
-        except Exception:
-            logger.warning("Khong doc duoc draft style tham chieu %s", entry, exc_info=True)
-    return _pick_reference_draft(capcut_root, exclude_names=exclude_names)
+def _rebuild_text_tracks_from_reference(track_templates: list[dict], generated_segments: list[dict]) -> list[dict]:
+    if not track_templates or not generated_segments:
+        return []
+
+    capacities = [max(1, len(track.get("segments") or [])) for track in track_templates]
+    rebuilt_tracks: list[dict] = []
+    offset = 0
+    total_segments = len(generated_segments)
+
+    for idx, template in enumerate(track_templates):
+        remaining = total_segments - offset
+        if remaining <= 0:
+            break
+        if idx == len(track_templates) - 1:
+            take = remaining
+        else:
+            remaining_tracks = len(track_templates) - idx - 1
+            reserve_for_rest = min(remaining_tracks, max(0, remaining - 1))
+            max_take = max(1, remaining - reserve_for_rest)
+            take = min(capacities[idx], max_take)
+        rebuilt_track = _deep_clone(template)
+        rebuilt_track["segments"] = generated_segments[offset:offset + take]
+        rebuilt_tracks.append(rebuilt_track)
+        offset += take
+
+    if offset < total_segments and rebuilt_tracks:
+        rebuilt_tracks[-1]["segments"].extend(generated_segments[offset:])
+
+    return rebuilt_tracks
 
 
 def _build_key_value_payload(segment_id: str, material_id: str, material_name: str) -> dict:
@@ -379,53 +503,88 @@ def _build_draft_virtual_store_payload(placeholder_id: str, video_id: str) -> di
     }
 
 
-def _parse_srt_timestamp(value: str) -> float:
-    hh, mm, rest = value.split(":")
-    ss, ms = rest.split(",")
-    return (int(hh) * 3600) + (int(mm) * 60) + int(ss) + (int(ms) / 1000.0)
+def _build_placeholder_meta_entry(*, placeholder_meta_id: str, now_s: int, now_us: int) -> dict:
+    return {
+        "ai_group_type": "",
+        "create_time": now_s,
+        "duration": 33333,
+        "enter_from": 0,
+        "extra_info": "",
+        "file_Path": "",
+        "height": 0,
+        "id": placeholder_meta_id,
+        "import_time": now_s,
+        "import_time_ms": now_us,
+        "item_source": 1,
+        "md5": "",
+        "metetype": "none",
+        "roughcut_time_range": {"duration": 33333, "start": 0},
+        "sub_time_range": {"duration": -1, "start": -1},
+        "type": 0,
+        "width": 0,
+    }
 
 
-def _parse_srt_file(path: Path) -> list[dict]:
-    text = path.read_text(encoding="utf-8-sig")
-    blocks = re.split(r"\r?\n\r?\n+", text.strip())
-    segments: list[dict] = []
-    for block in blocks:
-        lines = [line.strip("\ufeff") for line in block.splitlines() if line.strip()]
-        if len(lines) < 2:
-            continue
-        time_line_index = 1 if "-->" in lines[1] else 0
-        if "-->" not in lines[time_line_index]:
-            continue
-        start_raw, end_raw = [part.strip() for part in lines[time_line_index].split("-->", 1)]
-        body = " ".join(lines[time_line_index + 1:]).strip()
-        if not body:
-            continue
-        segments.append({
-            "start_sec": _parse_srt_timestamp(start_raw),
-            "end_sec": _parse_srt_timestamp(end_raw),
-            "translated_text": body,
-            "raw_text": body,
-        })
-    return segments
+def _build_video_meta_entry(
+    *,
+    video_meta_id: str,
+    video_name: str,
+    video_path_fwd: str,
+    video_width: int,
+    video_height: int,
+    video_duration_us: int,
+    now_s: int,
+    now_us: int,
+) -> dict:
+    return {
+        "ai_group_type": "",
+        "create_time": now_s,
+        "duration": video_duration_us,
+        "enter_from": 0,
+        "extra_info": video_name,
+        "file_Path": video_path_fwd,
+        "height": video_height,
+        "id": video_meta_id,
+        "import_time": now_s,
+        "import_time_ms": now_us,
+        "item_source": 1,
+        "md5": "",
+        "metetype": "video",
+        "roughcut_time_range": {"duration": video_duration_us, "start": 0},
+        "sub_time_range": {"duration": -1, "start": -1},
+        "type": 0,
+        "width": video_width,
+    }
 
 
-def _resolve_reference_segments(video_path: str | None, fallback_segments: list[dict]) -> list[dict]:
-    if video_path:
-        project_dir = Path(video_path).parent
-        candidates = [
-            project_dir / "output.vi.srt",
-            project_dir / "manual.translated.srt",
-            project_dir / "manual.external.srt",
-        ]
-        for candidate in candidates:
-            if candidate.exists():
-                try:
-                    parsed = _parse_srt_file(candidate)
-                    if parsed:
-                        return parsed
-                except Exception:
-                    logger.warning("Khong parse duoc SRT tham chieu %s", candidate, exc_info=True)
-    return fallback_segments
+def _build_audio_meta_entry(
+    *,
+    audio_name: str,
+    audio_path_fwd: str,
+    audio_duration_us: int,
+    audio_meta_id: str,
+    now_s: int,
+    now_us: int,
+) -> dict:
+    return {
+        "ai_group_type": "",
+        "create_time": now_s,
+        "duration": audio_duration_us,
+        "enter_from": 0,
+        "extra_info": audio_name,
+        "file_Path": audio_path_fwd,
+        "height": 0,
+        "id": audio_meta_id,
+        "import_time": now_s,
+        "import_time_ms": now_us,
+        "item_source": 1,
+        "md5": "",
+        "metetype": "music",
+        "roughcut_time_range": {"duration": audio_duration_us, "start": 0},
+        "sub_time_range": {"duration": -1, "start": -1},
+        "type": 0,
+        "width": 0,
+    }
 
 
 def _clone_text_material_from_template(template: dict, text: str, font_path: str, group_id: str) -> dict:
@@ -551,7 +710,7 @@ def _upsert_root_meta(
         root_meta["draft_ids"] = len(store)
         _write_json(root_meta_path, root_meta)
     except Exception:
-        logger.warning("Khong cap nhat duoc root_meta_info.json", exc_info=True)
+        logger.warning("Không cập nhật được root_meta_info.json", exc_info=True)
 
 
 def _export_to_capcut_from_reference(
@@ -564,6 +723,7 @@ def _export_to_capcut_from_reference(
     video_path: str | None,
     segments: list[dict],
     font_path: str,
+    dub_audio_path: str | None,
 ) -> dict:
     now_us = int(time.time() * 1_000_000)
     now_s = int(time.time())
@@ -572,7 +732,7 @@ def _export_to_capcut_from_reference(
     timelines_project_id = _new_uuid()
     group_id = f"import_{int(time.time() * 1000)}"
 
-    shutil.copytree(reference_draft, draft_folder)
+    shutil.copytree(reference_draft, draft_folder, dirs_exist_ok=True)
 
     timeline_project_path = draft_folder / "Timelines" / "project.json"
     timelines_project = _load_json(timeline_project_path)
@@ -599,14 +759,22 @@ def _export_to_capcut_from_reference(
     reference_segments = _resolve_reference_segments(video_path, segments)
     total_end_sec = max((seg.get("end_sec", 0) for seg in reference_segments), default=0) if reference_segments else 0
     video_duration_us = int(video_info["duration_us"]) or _sec_to_us(total_end_sec) or 30_000_000
-    video_path_fwd = str(video_path).replace("\\", "/") if video_path else ""
+    video_path_fwd = _to_host_path(video_path)
     video_name = Path(video_path).name if video_path else "source.mp4"
+    include_dub = bool(dub_audio_path and Path(dub_audio_path).exists())
+    dub_path_fwd = _to_host_path(dub_audio_path) if include_dub and dub_audio_path else ""
+    dub_name = Path(dub_audio_path).name if include_dub and dub_audio_path else ""
 
     type0 = next((item for item in (draft_meta.get("draft_materials") or []) if item.get("type") == 0), None)
-    if not type0 or len(type0.get("value") or []) < 2:
+    if not type0:
         raise RuntimeError("reference_meta_video_missing")
-    placeholder_meta_id = type0["value"][0]["id"]
-    video_meta_id = type0["value"][1]["id"]
+    type0_values = type0.get("value") or []
+    if not type0_values:
+        raise RuntimeError("reference_meta_video_missing")
+    placeholder_meta = next((item for item in type0_values if item.get("metetype") == "none"), None)
+    video_meta = next((item for item in type0_values if item.get("metetype") == "video"), None) or type0_values[-1]
+    placeholder_meta_id = (placeholder_meta or {}).get("id") or str(uuid.uuid4()).lower()
+    video_meta_id = video_meta.get("id") or str(uuid.uuid4()).lower()
 
     video_materials = draft_content.get("materials", {}).get("videos") or []
     if not video_materials:
@@ -619,8 +787,11 @@ def _export_to_capcut_from_reference(
     video_material["material_name"] = video_name
     video_material["local_material_id"] = video_meta_id
 
-    video_track = next((track for track in (draft_content.get("tracks") or []) if track.get("type") == "video"), None)
-    text_track = next((track for track in (draft_content.get("tracks") or []) if track.get("type") == "text"), None)
+    all_tracks = draft_content.get("tracks") or []
+    video_track = next((track for track in all_tracks if track.get("type") == "video"), None)
+    text_tracks = [track for track in all_tracks if track.get("type") == "text"]
+    audio_track = next((track for track in all_tracks if track.get("type") == "audio"), None)
+    text_track = text_tracks[0] if text_tracks else None
     if not video_track or not text_track or not video_track.get("segments"):
         raise RuntimeError("reference_tracks_missing")
     video_track_segment = video_track["segments"][0]
@@ -684,20 +855,71 @@ def _export_to_capcut_from_reference(
         draft_content["materials"]["sound_channel_mappings"][0]["type"] = ""
     draft_content["materials"]["texts"] = text_materials
     draft_content["materials"]["material_animations"] = material_animations
-    draft_content["tracks"] = [
-        track for track in (draft_content.get("tracks") or [])
-        if track.get("type") != "text"
-    ] + text_tracks
+    rebuilt_text_tracks = _rebuild_text_tracks_from_reference(text_tracks, text_track_segments)
+    rebuilt_tracks = [video_track, *rebuilt_text_tracks]
 
-    type0["value"][0]["id"] = placeholder_meta_id
-    type0["value"][1]["id"] = video_meta_id
-    type0["value"][1]["width"] = video_width
-    type0["value"][1]["height"] = video_height
-    type0["value"][1]["duration"] = video_duration_us
-    type0["value"][1]["file_Path"] = video_path_fwd
-    type0["value"][1]["extra_info"] = video_name
-    type0["value"][1]["import_time"] = now_s
-    type0["value"][1]["import_time_ms"] = now_us
+    if include_dub:
+        audio_materials = draft_content.get("materials", {}).get("audios") or []
+        if not audio_materials or not audio_track or not audio_track.get("segments"):
+            raise RuntimeError("reference_audio_template_missing")
+        audio_material = audio_materials[0]
+        audio_material["duration"] = video_duration_us
+        audio_material["name"] = dub_name
+        audio_material["path"] = dub_path_fwd
+        audio_material["local_material_id"] = str(uuid.uuid4()).lower()
+        audio_material["music_id"] = str(uuid.uuid4()).lower()
+        audio_track_segment = audio_track["segments"][0]
+        audio_track_segment["material_id"] = audio_material["id"]
+        if audio_track_segment.get("source_timerange") is not None:
+            audio_track_segment["source_timerange"] = {"duration": video_duration_us, "start": 0}
+        audio_track_segment["target_timerange"] = {"duration": video_duration_us, "start": 0}
+        rebuilt_tracks.append(audio_track)
+    else:
+        draft_content["materials"]["audios"] = []
+
+    draft_content["tracks"] = rebuilt_tracks
+
+    built_type0_values = {
+        "none": _build_placeholder_meta_entry(
+            placeholder_meta_id=placeholder_meta_id,
+            now_s=now_s,
+            now_us=now_us,
+        ),
+        "video": _build_video_meta_entry(
+            video_meta_id=video_meta_id,
+            video_name=video_name,
+            video_path_fwd=video_path_fwd,
+            video_width=video_width,
+            video_height=video_height,
+            video_duration_us=video_duration_us,
+            now_s=now_s,
+            now_us=now_us,
+        ),
+    }
+    if include_dub:
+        audio_meta = next((item for item in type0_values if item.get("metetype") == "music"), None)
+        audio_meta_id = (audio_meta or {}).get("id") or str(uuid.uuid4()).lower()
+        built_type0_values["music"] = _build_audio_meta_entry(
+            audio_name=dub_name,
+            audio_path_fwd=dub_path_fwd,
+            audio_duration_us=video_duration_us,
+            audio_meta_id=audio_meta_id,
+            now_s=now_s,
+            now_us=now_us,
+        )
+
+    ordered_type0_values = []
+    used_type0_keys: set[str] = set()
+    for item in type0_values:
+        metetype = item.get("metetype") or ""
+        if metetype in built_type0_values and metetype not in used_type0_keys:
+            ordered_type0_values.append(built_type0_values[metetype])
+            used_type0_keys.add(metetype)
+    for metetype in ("video", "none", "music"):
+        if metetype in built_type0_values and metetype not in used_type0_keys:
+            ordered_type0_values.append(built_type0_values[metetype])
+            used_type0_keys.add(metetype)
+    type0["value"] = ordered_type0_values
     type2 = next((item for item in (draft_meta.get("draft_materials") or []) if item.get("type") == 2), None)
     if type2 is not None:
         srt_candidate = ""
@@ -795,7 +1017,7 @@ def _export_to_capcut_from_reference(
         "draft_folder": str(draft_folder),
         "draft_name": draft_name,
         "subtitle_count": len(text_materials),
-        "message": f"Da tao du an CapCut '{draft_name}' thanh cong!",
+        "message": f"Đã tạo dự án CapCut '{draft_name}' thành công!",
     }
 
 
@@ -1060,18 +1282,12 @@ def export_to_capcut(
     timelines_project_id = _new_uuid()
     safe_name = project_name.strip() or "Solar OCR Export"
 
-    # Táº¡o thÆ° má»¥c draft
-    draft_folder = capcut_root / safe_name
-    # Náº¿u Ä‘Ã£ tá»“n táº¡i thÃ¬ thÃªm sá»‘
-    counter = 1
-    while draft_folder.exists():
-        draft_folder = capcut_root / f"{safe_name} ({counter})"
-        counter += 1
+    # Tao thu muc draft truoc theo cach atomic de tranh dung ten khi co request dong thoi.
+    draft_folder = _create_unique_draft_folder(capcut_root, safe_name)
     final_name = draft_folder.name
 
-    reference_draft = None
-    style_reference_draft = None
-    if not dub_audio_path:
+    reference_draft = _get_bundled_reference_draft()
+    if reference_draft is None:
         reference_draft = _pick_reference_draft(capcut_root, exclude_names={final_name})
         style_reference_draft = _pick_style_reference_draft(
             capcut_root,
@@ -1089,11 +1305,10 @@ def export_to_capcut(
                 video_path=video_path,
                 segments=segments,
                 font_path=font_path,
+                dub_audio_path=dub_audio_path,
             )
         except Exception:
             logger.warning("Clone draft tham chieu that bai, fallback ve exporter cu", exc_info=True)
-
-    draft_folder.mkdir(parents=True)
 
     # â”€â”€ Materials â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Video material
@@ -1109,7 +1324,7 @@ def export_to_capcut(
     meta_video_id = str(uuid.uuid4()).lower()
     video_library_material_id = uuid.uuid4().hex
 
-    video_path_fwd = str(video_path).replace("\\", "/") if video_path else ""
+    video_path_fwd = _to_host_path(video_path)
     video_name     = Path(video_path).name if video_path else "source.mp4"
     video_info = _probe_video_metadata(video_path)
     video_width = int(video_info["width"])
@@ -1194,7 +1409,7 @@ def export_to_capcut(
     audio_material = None
     if dub_audio_path and Path(dub_audio_path).exists():
         audio_mat_id = _new_uuid()
-        dub_path_fwd = str(dub_audio_path).replace("\\", "/")
+        dub_path_fwd = _to_host_path(dub_audio_path)
         dub_name = Path(dub_audio_path).name
         audio_material = {
             "app_id": 0, "category_id": "", "category_name": "",

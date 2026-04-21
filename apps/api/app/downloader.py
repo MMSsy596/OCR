@@ -173,6 +173,78 @@ def _validate_source_url(source_url: str) -> str:
         raise ValueError("blocked_private_or_invalid_host")
     return parsed.geturl()
 
+def fetch_url_formats(source_url: str) -> dict[str, Any]:
+    """Lấy danh sách chất lượng video có thể tải từ URL (không tải file)."""
+    platform, host = _detect_platform(source_url)
+    try:
+        import yt_dlp  # type: ignore
+    except Exception as ex:
+        return {"ok": False, "error": f"yt_dlp_unavailable: {ex}",
+                "platform": platform, "host": host, "title": "",
+                "thumbnail": None, "duration_sec": None, "formats": []}
+    opts: dict[str, Any] = {"quiet": True, "no_warnings": True, "noplaylist": True}
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(source_url, download=False)
+    except Exception as ex:
+        return {"ok": False, "error": str(ex)[:300], "platform": platform, "host": host,
+                "title": "", "thumbnail": None, "duration_sec": None, "formats": []}
+    if not isinstance(info, dict):
+        return {"ok": False, "error": "info_invalid", "platform": platform, "host": host,
+                "title": "", "thumbnail": None, "duration_sec": None, "formats": []}
+
+    def _res_label(h: int) -> str:
+        if h >= 2160: return "4K"
+        if h >= 1440: return "2K"
+        if h >= 1080: return "1080p"
+        if h >= 720:  return "720p"
+        if h >= 480:  return "480p"
+        if h >= 360:  return "360p"
+        return f"{h}p"
+
+    # Nhóm theo chiều cao, chọn format tốt nhất mỗi nhóm
+    bucket_best: dict[int, dict] = {}
+    for f in (info.get("formats") or []):
+        h = int(f.get("height") or 0)
+        if str(f.get("vcodec") or "none") == "none" or h < 144:
+            continue
+        fps = int(f.get("fps") or 0)
+        cur = bucket_best.get(h)
+        if cur is None or fps > int(cur.get("fps") or 0):
+            bucket_best[h] = f
+
+    formats: list[dict] = []
+    for h in sorted(bucket_best.keys(), reverse=True):
+        f = bucket_best[h]
+        fps = int(f.get("fps") or 0)
+        ext = str(f.get("ext") or "mp4")
+        filesize = f.get("filesize") or f.get("filesize_approx")
+        fps_label = f" {fps}fps" if fps > 30 else ""
+        size_label = f" · {_human_bytes(filesize)}" if filesize else ""
+        formats.append({
+            "format_id": str(f.get("format_id") or ""),
+            "label": f"{_res_label(h)}{fps_label} ({ext.upper()}){size_label}",
+            "height": h, "fps": fps, "ext": ext,
+            "filesize": int(filesize) if filesize else None,
+            "filesize_human": _human_bytes(filesize) if filesize else "?",
+            "vcodec": str(f.get("vcodec") or ""),
+            "acodec": str(f.get("acodec") or "none"),
+        })
+    formats.insert(0, {
+        "format_id": "auto",
+        "label": "🏆 Tốt nhất có thể (tự động)",
+        "height": 9999, "fps": 0, "ext": "mp4",
+        "filesize": None, "filesize_human": "?",
+        "vcodec": "auto", "acodec": "auto",
+    })
+    return {
+        "ok": True, "platform": platform, "host": host,
+        "title": str(info.get("title") or ""),
+        "thumbnail": str(info.get("thumbnail") or "") or None,
+        "duration_sec": float(info.get("duration") or 0) or None,
+        "formats": formats,
+    }
+
 
 def _download_direct(
     source_url: str,
@@ -224,6 +296,7 @@ def _download_with_ytdlp(
     source_url: str,
     target_dir: Path,
     progress_cb,
+    format_id: str | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     try:
         import yt_dlp  # type: ignore
@@ -258,11 +331,12 @@ def _download_with_ytdlp(
             state["target_path"] = str(d.get("filename") or "")
             progress_cb(88, int(d.get("downloaded_bytes") or 0), int(d.get("total_bytes") or 0), 0.0, 0)
 
+    # Dùng format_id do người dùng chọn, fallback "tốt nhất"
+    fmt = (format_id if (format_id and format_id != "auto") else "bestvideo*+bestaudio/best")
     options: dict[str, Any] = {
         "outtmpl": output_template,
         "noplaylist": True,
-        # Prefer absolute best quality stream pair (video+audio) first.
-        "format": "bestvideo*+bestaudio/best",
+        "format": fmt,
         "format_sort": ["res", "fps", "hdr", "vcodec", "acodec", "br", "size"],
         "progress_hooks": [_hook],
         "quiet": True,
@@ -356,6 +430,7 @@ def run_url_ingest_job(
     gemini_api_key: str | None = None,
     voice_map: dict[str, str] | None = None,
     scan_interval_sec: float = 1.5,
+    format_id: str | None = None,
 ) -> dict[str, Any]:
     db = SessionLocal()
     try:
@@ -415,7 +490,8 @@ def run_url_ingest_job(
         download_meta: dict[str, Any]
         if platform in {"youtube", "tiktok", "facebook", "instagram", "x", "bilibili", "dailymotion", "generic"}:
             try:
-                downloaded_path, download_meta = _download_with_ytdlp(source_url, project_dir, _on_progress)
+                downloaded_path, download_meta = _download_with_ytdlp(
+                    source_url, project_dir, _on_progress, format_id=format_id)
             except Exception as ex:
                 _push_event(
                     artifacts,

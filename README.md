@@ -1,657 +1,309 @@
-# NanBao OCR Studio 男宝
+# NanBao OCR Studio
 
-> Ứng dụng trích xuất subtitle từ video bằng OCR, tự động dịch và tạo audio dub.
+Ứng dụng OCR video để trích xuất phụ đề, dịch subtitle và tạo audio dub.
 
----
+Stack mặc định hiện tại:
+- `SQLite` để lưu dữ liệu ứng dụng
+- `Redis` để chạy hàng đợi job nền
+- 1 image Docker chứa sẵn `frontend + API + worker`
 
-## Mục lục
+`PostgreSQL` và `MinIO` không còn là yêu cầu mặc định.
 
-1. [Tổng quan](#1-tổng-quan)
-2. [Kiến trúc hệ thống](#2-kiến-trúc-hệ-thống)
-3. [Chức năng chính](#3-chức-năng-chính)
-4. [Kết quả đầu ra](#4-kết-quả-đầu-ra)
-5. [Yêu cầu hệ thống](#5-yêu-cầu-hệ-thống)
-6. [Cài đặt](#6-cài-đặt)
-7. [Cấu hình môi trường](#7-cấu-hình-môi-trường)
-8. [Chạy ứng dụng](#8-chạy-ứng-dụng)
-9. [Hướng dẫn sử dụng từng bước](#9-hướng-dẫn-sử-dụng-từng-bước)
-10. [API Reference nhanh](#10-api-reference-nhanh)
-11. [Xử lý lỗi thường gặp](#11-xử-lý-lỗi-thường-gặp)
-12. [Lệnh vận hành hữu ích](#12-lệnh-vận-hành-hữu-ích)
+## 1. Yêu cầu hệ thống
 
----
+### Chạy bằng Docker image
 
-## 1. Tổng quan
+Chỉ cần:
+- `Docker Desktop` hoặc Docker Engine
 
-**NanBao OCR Studio** là một web application chạy local (hoặc self-hosted) giúp:
+Khuyên dùng thêm:
+- RAM từ `8 GB`
+- Ổ đĩa trống tối thiểu `10 GB`
 
-- **Trích xuất subtitle** từ video bằng OCR (đọc chữ hiển thị trên khung hình) — dùng RapidOCR + OpenCV
-- **Tự động dịch** subtitle sang ngôn ngữ đích (Gemini API ưu tiên, fallback sang Deep Translator)
-- **Chỉnh sửa subtitle** thủ công ngay trên giao diện web
-- **Export** phụ đề ra nhiều định dạng: SRT, VTT, CSV, TXT, JSON
-- **Tạo audio dub** từ file SRT bằng Edge TTS / gTTS / pyttsx3
+### Chạy từ mã nguồn
 
----
+Cần:
+- `Python 3.11` hoặc `3.12`
+- `Node.js 20+`
+- `Redis 7+`
+- `FFmpeg` và `ffprobe`
 
-## 2. Kiến trúc hệ thống
+## 2. File và thư mục cần có
 
-```
-D:\project\OCR
+### Nếu chạy từ image đã build sẵn
+
+Không cần mã nguồn. Chỉ cần:
+- image Docker, ví dụ `nanbao/ocr:lastest`
+- 1 volume hoặc thư mục mount vào `/data`
+
+Trong `/data`, ứng dụng sẽ tự dùng:
+- `/data/ocr.db` cho `SQLite`
+- `/data/projects` để lưu video, file export, audio dub
+
+### Nếu chạy từ mã nguồn
+
+Tối thiểu cần các file và thư mục này:
+
+```text
+OCR/
 ├── apps/
-│   ├── api/          # Backend FastAPI (Python)
-│   │   └── app/
-│   │       ├── main.py       # Router, middleware, endpoint
-│   │       ├── pipeline.py   # Pipeline OCR / dịch
-│   │       ├── tts_dubber.py # Audio dub
-│   │       ├── exporter.py   # Export SRT/VTT/CSV/TXT/JSON
-│   │       ├── downloader.py # Ingest video từ URL (yt-dlp)
-│   │       ├── models.py     # SQLAlchemy models
-│   │       ├── schemas.py    # Pydantic schemas
-│   │       ├── crud.py       # DB operations
-│   │       ├── db.py         # Database session
-│   │       ├── auth.py       # API token auth
-│   │       ├── settings.py   # Cấu hình từ .env
-│   │       ├── queue.py      # RQ queue
-│   │       └── job_state.py  # Trạng thái job realtime
-│   │
-│   ├── web/          # Frontend React + Vite
-│   │   └── src/
-│   │       ├── App.jsx       # Main app, routing wizard
-│   │       ├── components/   # UI components
-│   │       ├── hooks/        # Custom hooks
-│   │       └── styles.css    # Dark theme CSS
-│   │
-│   └── worker/       # RQ Worker (chạy job nền)
-│       └── worker.py
-│
-├── storage/          # Lưu file video + output
+│   ├── api/
+│   ├── web/
+│   └── worker/
+├── scripts/
+├── storage/
 │   └── projects/
-├── logs/             # Log file API, worker, web
-├── .env              # Biến môi trường (tạo từ .env.example)
+├── .env.example
+├── Dockerfile
 ├── docker-compose.yml
-├── start-all.ps1     # Script khởi động toàn bộ stack
-└── stop-all.ps1      # Script dừng toàn bộ
+├── README.md
+├── start-all.ps1
+└── stop-all.ps1
 ```
 
-**Luồng dữ liệu:**
+## 3. Biến môi trường
 
-```
-Upload Video / URL
-      ↓
-  [API :8000]  ──────→  [DB: SQLite / PostgreSQL]
-      ↓
-  Background Thread / RQ Worker
-      ↓
-  Pipeline OCR (RapidOCR + OpenCV)
-      ↓
-  Dịch (Gemini → Deep Translator fallback)
-      ↓
-  Lưu Segment vào DB
-      ↓
-  Frontend poll / SSE stream
-      ↓
-  Chỉnh sửa → Export / Dub Audio
-```
-
----
-
-## 3. Chức năng chính
-
-### 3.1 Quản lý Project
-- Tạo, xem danh sách, cập nhật project
-- Mỗi project có: tên, ngôn ngữ nguồn/đích, ROI (vùng OCR), prompt dịch, glossary
-- Xóa hàng loạt session cũ
-
-### 3.2 Nạp video
-| Phương thức | Mô tả |
-|---|---|
-| **Upload file** | Upload trực tiếp `.mp4`, `.mov`, `.mkv`, `.avi`, `.webm`, `.m4v` |
-| **Ingest URL** | Nhập URL YouTube / TikTok / bất kỳ, hệ thống tự tải về bằng `yt-dlp` |
-| **Upload SRT thủ công** | Upload file `.srt` sẵn có để dùng làm nguồn dịch |
-
-### 3.3 Pipeline xử lý
-
-**OCR từ khung hình video**
-- Đọc từng khung hình theo `scan_interval_sec` (mặc định 1s)
-- Crop theo ROI (vùng subtitle cài đặt), chỉ decode frame được chọn (tiết kiệm CPU)
-- Thử nhiều preprocessing variant: grayscale, upscale, Gaussian blur, Otsu, CLAHE
-- Chọn kết quả OCR tốt nhất theo score
-- Gộp các segment liền kề, trùng nội dung
-- Tự động giới hạn sample nếu video dài (tối đa 1600 frames)
-
-**Dịch thuật**
-- Ưu tiên **Gemini API** (`gemini-2.5-flash-lite`) với context trước/sau để dịch tự nhiên
-- Fallback sang **Deep Translator** (Google Translate free) nếu không có Gemini key
-- Hỗ trợ **Glossary** (từ điển riêng): `从=từ`, `他=anh ấy`...
-- Hỗ trợ **Prompt** tùy chỉnh: phong cách dịch, thuật ngữ chuyên ngành
-
-### 3.4 Theo dõi tiến trình
-- **Server-Sent Events (SSE)**: `/projects/{id}/stream` — frontend nhận cập nhật realtime mỗi 2 giây
-- Xem trạng thái job: `queued` → `running` → `done` / `failed`
-- Xem `progress %`, `step` hiện tại, log event
-
-### 3.5 Chỉnh sửa subtitle
-- Chỉnh sửa từng dòng `raw_text` (gốc) và `translated_text` (dịch) ngay trên web
-- Lưu thay đổi về DB qua API
-- **Re-translate**: dịch lại toàn bộ segment mà không cần chạy lại pipeline
-
-### 3.6 Export phụ đề
-
-| Định dạng | Mô tả |
-|---|---|
-| **SRT** | Định dạng subtitle chuẩn, dùng được với VLC, MKV |
-| **VTT** | WebVTT, dùng cho trình duyệt web |
-| **CSV** | Bảng tính, tiện phân tích |
-| **TXT** | Plain text, dễ đọc |
-| **JSON** | Dữ liệu có cấu trúc, dùng cho tích hợp khác |
-
-Mỗi định dạng có 3 mode nội dung: `raw` (gốc), `translated` (dịch), `bilingual` (song ngữ)
-
-### 3.7 Tạo audio dub (TTS)
-- Nhận file SRT làm đầu vào
-- Chọn **giọng đọc** (Edge TTS voices), **tốc độ**, **âm lượng**, **pitch**
-- Xuất ra file `wav` hoặc `mp3`
-- Hỗ trợ tùy chọn `match_video_duration`: căn thời lượng dub theo video gốc
-
-### 3.8 Retry / Recovery
-- Phát hiện job bị "kẹt" ở trạng thái `queued` quá lâu (stale timeout: 180s)
-- API `POST /projects/{id}/jobs/retry-stuck`: tạo lại job mới từ payload cũ
-
----
-
-## 4. Kết quả đầu ra
-
-Sau khi pipeline hoàn tất, bạn nhận được:
-
-```
-storage/projects/{project_id}/
-├── source.mp4              # Video gốc đã upload
-├── manual.raw.srt          # Export SRT ngôn ngữ gốc
-├── manual.translated.srt   # Export SRT đã dịch
-├── manual.bilingual.srt    # Export SRT song ngữ
-├── manual.translated.vtt   # Export VTT
-├── manual.translated.csv   # Export CSV
-├── manual.translated.json  # Export JSON
-└── output_dub.wav          # Audio dub (nếu đã chạy TTS)
-```
-
-Các file có thể tải về trực tiếp từ giao diện web hoặc qua API endpoint download.
-
----
-
-## 5. Yêu cầu hệ thống
-
-### Bắt buộc
-| Phần mềm | Phiên bản | Ghi chú |
-|---|---|---|
-| **Python** | 3.11 hoặc 3.12 | Python 3.13 chưa được kiểm tra |
-| **Node.js** | 20+ | Kèm npm |
-| **Redis** | 6+ | Hàng đợi job nền |
-
-### Khuyến nghị (để dùng đầy đủ tính năng)
-| Phần mềm | Mục đích |
-|---|---|
-| **Docker Desktop** | Chạy PostgreSQL / Redis / MinIO bằng container |
-| **FFmpeg + ffprobe** | Tạo audio dub (TTS) |
-| **CUDA / GPU ONNX** | Tăng tốc OCR nếu có GPU NVIDIA |
-
-### Kiểm tra môi trường
-
-Mở PowerShell, chạy từng lệnh:
+Tạo file `.env` từ `.env.example`:
 
 ```powershell
-python --version    # Python 3.11.x hoặc 3.12.x
-node --version      # v20.x.x trở lên
-npm --version       # 9.x.x trở lên
-docker --version    # Docker version 24+
-ffmpeg -version     # ffmpeg version ...
-ffprobe -version    # ffprobe version ...
+Copy-Item .env.example .env
 ```
 
----
+Mẫu cấu hình hiện tại:
 
-## 6. Cài đặt
+```env
+APP_NAME=NanBao OCR Studio
+API_HOST=0.0.0.0
+API_PORT=8000
+WEB_ORIGIN=http://localhost:5173
+DATABASE_URL=sqlite+pysqlite:///./ocr.db
+REDIS_URL=redis://localhost:6379/0
+STORAGE_ROOT=../../storage/projects
+GEMINI_API_KEYS=
+DEFAULT_SOURCE_LANG=zh
+DEFAULT_TARGET_LANG=vi
+```
 
-### Bước 1 — Lấy mã nguồn
+Ý nghĩa các biến chính:
+- `DATABASE_URL`: mặc định dùng `SQLite`
+- `REDIS_URL`: địa chỉ Redis cho worker
+- `STORAGE_ROOT`: nơi lưu video, subtitle, file export, audio
+- `GEMINI_API_KEYS`: để trống nếu không dùng Gemini
+- `WEB_ORIGIN`: địa chỉ frontend được phép gọi API
+
+### Biến môi trường khi chạy image Docker
+
+Nếu chạy bằng image, nên dùng:
+
+```env
+PORT=8000
+WEB_ORIGIN=http://localhost:8000
+ALLOWED_HOSTS=localhost,127.0.0.1
+ENABLE_DOCS=true
+DATABASE_URL=sqlite+pysqlite:////data/ocr.db
+REDIS_URL=redis://redis:6379/0
+STORAGE_ROOT=/data/projects
+GEMINI_API_KEYS=
+DEFAULT_SOURCE_LANG=zh
+DEFAULT_TARGET_LANG=vi
+```
+
+## 4. Cài đặt và chạy bằng Docker
+
+Đây là cách khuyên dùng.
+
+### Cách 1: Chạy nhanh bằng `docker run`
+
+1. Chạy Redis:
 
 ```powershell
-git clone <repo-url> D:\project\OCR
+docker run -d --name nanbao-ocr-redis -p 6379:6379 redis:7
 ```
 
-Hoặc nếu đã có code:
+2. Chạy app:
 
 ```powershell
-cd D:\project\OCR
+docker run -d --name nanbao-ocr-app `
+  -p 8000:8000 `
+  -e PORT=8000 `
+  -e WEB_ORIGIN=http://localhost:8000 `
+  -e ALLOWED_HOSTS=localhost,127.0.0.1 `
+  -e ENABLE_DOCS=true `
+  -e DATABASE_URL=sqlite+pysqlite:////data/ocr.db `
+  -e REDIS_URL=redis://host.docker.internal:6379/0 `
+  -e STORAGE_ROOT=/data/projects `
+  -v nanbao_ocr_data:/data `
+  nanbao/ocr:lastest
 ```
 
-Kiểm tra có đủ thư mục:
+3. Mở ứng dụng:
+- `http://localhost:8000`
 
-```
-apps/api/
-apps/web/
-apps/worker/
-storage/projects/   ← tự tạo nếu chưa có
-```
+4. Kiểm tra health:
+- `http://localhost:8000/health`
 
-### Bước 2 — Cài Python dependencies (backend)
+### Cách 2: Chạy bằng `docker compose`
+
+Repo đã có sẵn `docker-compose.yml` cho stack `SQLite + Redis`.
+
+Chạy:
 
 ```powershell
-cd D:\project\OCR\apps\api
+docker compose up -d
+```
+
+Kiểm tra:
+
+```powershell
+docker compose ps
+docker compose logs -f app
+```
+
+Truy cập:
+- `http://localhost:8000`
+
+### Dữ liệu được lưu ở đâu
+
+Khi chạy Docker:
+- volume `app_data` chứa `SQLite` và dữ liệu project
+- Redis chỉ dùng cho queue, không lưu dữ liệu chính của app
+
+## 5. Cài đặt và chạy từ mã nguồn
+
+### Bước 1: Tạo môi trường backend
+
+```powershell
+cd apps/api
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-**Các thư viện chính được cài:**
-
-| Thư viện | Mục đích |
-|---|---|
-| `fastapi` + `uvicorn` | Web framework + ASGI server |
-| `sqlalchemy` + `psycopg` | ORM + PostgreSQL driver |
-| `pydantic-settings` | Đọc cấu hình từ `.env` |
-| `opencv-python` | Đọc frame video |
-| `rapidocr-onnxruntime` | Engine OCR |
-| `deep-translator` | Dịch tự động (Google free) |
-| `edge-tts` | Text-to-speech chất lượng cao |
-| `yt-dlp` | Tải video từ URL |
-| `redis` + `rq` | Hàng đợi job nền |
-
-### Bước 3 — Cài Node.js dependencies (frontend)
+### Bước 2: Tạo môi trường worker
 
 ```powershell
-cd D:\project\OCR\apps\web
+cd ..\worker
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+### Bước 3: Cài frontend
+
+```powershell
+cd ..\web
 npm install
 ```
 
-### Bước 4 — Cài Redis
+### Bước 4: Chạy Redis
 
-**Phương án A: Docker (khuyên dùng)**
+Khuyên dùng Docker:
 
 ```powershell
-cd D:\project\OCR
+cd ..\..
 docker compose up -d redis
 ```
 
-**Phương án B: Redis native trên Windows**
-- Tải [Redis for Windows](https://github.com/microsoftarchive/redis/releases) và cài đặt
-- Hoặc cài qua WSL2
+### Bước 5: Chạy từng service
 
----
-
-## 7. Cấu hình môi trường
-
-### Tạo file `.env`
+Terminal 1, chạy API:
 
 ```powershell
-Copy-Item D:\project\OCR\.env.example D:\project\OCR\.env
-```
-
-### Chỉnh sửa file `.env`
-
-```env
-# ──── Ứng dụng ────────────────────────────────────
-APP_NAME=NanBao OCR Studio
-API_HOST=0.0.0.0
-API_PORT=8000
-WEB_ORIGIN=http://localhost:5173
-
-# ──── Database ────────────────────────────────────
-# Chọn 1 trong 2:
-
-# Option A: SQLite (đơn giản nhất, không cần cài gì thêm)
-DATABASE_URL=sqlite+pysqlite:///./ocr.db
-
-# Option B: PostgreSQL (Docker hoặc local)
-# DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5434/ocr
-
-# ──── Redis ───────────────────────────────────────
-REDIS_URL=redis://localhost:6379/0
-
-# ──── Storage ─────────────────────────────────────
-STORAGE_ROOT=../../storage/projects
-
-# ──── Dịch thuật ──────────────────────────────────
-# Điền Gemini API key để dùng dịch chất lượng cao
-# Có thể điền nhiều key cách nhau dấu phẩy (sẽ xoay vòng)
-GEMINI_API_KEYS=AIza...
-
-# Ngôn ngữ mặc định
-DEFAULT_SOURCE_LANG=zh   # zh = Tiếng Trung
-DEFAULT_TARGET_LANG=vi   # vi = Tiếng Việt
-
-# ──── Bảo mật (để trống khi dev local) ───────────
-# API_TOKEN=your-secret-token
-
-# ──── MinIO (tùy chọn, dùng nếu cần object storage) ──
-MINIO_ENDPOINT=localhost:9000
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin
-MINIO_BUCKET=ocr-assets
-```
-
-> **Ghi chú:** Khi dev local, để `API_TOKEN` trống — không cần xác thực. Chỉ bật khi deploy lên server.
-
----
-
-## 8. Chạy ứng dụng
-
-### Cách 1: Script tự động (khuyên dùng cho lần đầu)
-
-```powershell
-cd D:\project\OCR
-.\start-all.ps1
-```
-
-Script sẽ tự động:
-1. Tạo thư mục `logs/`, `tmp/`, `storage/projects/`
-2. Tạo `.venv` Python nếu chưa có
-3. Cài `pip install -r requirements.txt`
-4. Cài `npm install` cho frontend
-5. Khởi động Redis (nếu chưa có)
-6. Khởi động **API** tại `:8000`
-7. Khởi động **Worker** (job nền)
-8. Khởi động **Web** tại `:5173`
-9. Kiểm tra health endpoint tự động
-
-**Dừng tất cả:**
-
-```powershell
-.\stop-all.ps1
-```
-
----
-
-### Cách 2: Chạy thủ công từng service
-
-#### Terminal 1 — Khởi động infrastructure
-
-```powershell
-# Dùng Docker (cần Docker Desktop đang chạy)
-cd D:\project\OCR
-docker compose up -d postgres redis minio
-
-# Kiểm tra containers đang chạy
-docker compose ps
-```
-
-#### Terminal 2 — Chạy API backend
-
-```powershell
-cd D:\project\OCR\apps\api
+cd apps/api
 .\.venv\Scripts\Activate.ps1
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Kiểm tra: mở http://127.0.0.1:8000/health → phải trả về `{"ok": true}`
-
-Xem Swagger docs: http://127.0.0.1:8000/docs
-
-#### Terminal 3 — Chạy Worker (job nền)
+Terminal 2, chạy worker:
 
 ```powershell
-cd D:\project\OCR\apps\worker
+cd apps/worker
 .\.venv\Scripts\Activate.ps1
-
-# Nếu worker venv chưa có, cài trước:
-pip install -r requirements.txt
-
 python worker.py
 ```
 
-> **Lưu ý:** Trên Windows, worker dùng `SimpleWorker` (không fork process) — hoàn toàn bình thường.  
-> Nếu Redis không khả dụng, API sẽ tự fallback chạy job bằng **background thread** trong process.
-
-#### Terminal 4 — Chạy Frontend
+Terminal 3, chạy frontend:
 
 ```powershell
-cd D:\project\OCR\apps\web
+cd apps/web
 npm run dev
 ```
 
----
+Truy cập:
+- frontend dev: `http://localhost:5173`
+- API: `http://localhost:8000`
+- docs: `http://localhost:8000/docs`
 
-### Cách 3: Docker toàn bộ (production-like)
+## 6. Chạy bằng script có sẵn
+
+### Script hỗ trợ local
+
+Khởi động Redis:
 
 ```powershell
-cd D:\project\OCR
-
-# Build image
-docker build -t nanbao-ocr-api .
-docker build -f Dockerfile.web -t nanbao-ocr-web .
-
-# Chạy toàn bộ stack
-docker compose up
+cd scripts
+.\dev.ps1
 ```
 
----
-
-### Kiểm tra sau khi khởi động
-
-| Service | URL | Kết quả mong đợi |
-|---|---|---|
-| **Web UI** | http://127.0.0.1:5173 | Giao diện dark mode NanBao OCR |
-| **API Health** | http://127.0.0.1:8000/health | `{"ok": true, "environment": "development"}` |
-| **API Docs** | http://127.0.0.1:8000/docs | Swagger UI với toàn bộ endpoint |
-| **Runtime Info** | http://127.0.0.1:8000/runtime/capabilities | Kiểm tra ffmpeg, whisper có sẵn không |
-
----
-
-## 9. Hướng dẫn sử dụng từng bước
-
-### Bước 1 — Tạo Project
-
-1. Mở http://127.0.0.1:5173
-2. Bấm **"New Project"** hoặc **"Tạo project mới"**
-3. Nhập tên project
-4. Chọn ngôn ngữ nguồn (ví dụ: `zh` - Tiếng Trung) và ngôn ngữ đích (`vi` - Tiếng Việt)
-
-### Bước 2 — Nạp video
-
-**Phương thức A — Upload file:**
-- Kéo thả hoặc chọn file video (`.mp4`, `.mov`, `.mkv`, `.avi`, `.webm`)
-- Chờ upload hoàn tất (thanh tiến trình)
-
-**Phương thức B — Ingest từ URL:**
-- Dán URL YouTube / TikTok / ...
-- Bấm **"Ingest URL"**
-- Hệ thống dùng `yt-dlp` tự tải về
-
-### Bước 3 — Cấu hình pipeline
-
-**Cài đặt ROI (vùng OCR):**
-- Điều chỉnh ô chọn vùng xem subtitle trên frame preview
-- ROI mặc định: toàn bộ phần dưới màn hình — phù hợp video có subtitle ở dưới
-- Kéo/thu nhỏ để chỉ bao vùng chữ cần đọc → tăng độ chính xác OCR
-
-**Cài đặt dịch:**
-- Nhập **Gemini API Key** nếu có (dịch chất lượng cao hơn)
-- Nhập **Prompt** tùy chỉnh: ví dụ "Dịch theo văn phong anime, giữ nguyên tên nhân vật"
-- Nhập **Glossary** (một dòng một từ): ví dụ `主人公=nhân vật chính`
-
-**Tùy chọn OCR nâng cao:**
-- `scan_interval_sec`: khoảng cách giữa 2 frame scan (mặc định 1.0s)
-
-### Bước 4 — Chạy Pipeline
-
-1. Bấm **"Start Pipeline"**
-2. Theo dõi tiến trình realtime:
-   - Thanh progress %
-   - Tên bước hiện tại: `ocr_extract`, `translate`, `save_segments`, `done`...
-3. Khi pipeline hoàn tất → các segment subtitle xuất hiện bên dưới
-
-### Bước 5 — Chỉnh sửa subtitle
-
-- Click vào từng dòng để sửa `raw_text` (văn bản gốc) hoặc `translated_text` (bản dịch)
-- Bấm **"Save"** để lưu thay đổi
-- Nếu muốn dịch lại toàn bộ mà không chạy pipeline: bấm **"Re-translate"**
-
-### Bước 6 — Export phụ đề
-
-1. Chọn **định dạng export**: `SRT`, `VTT`, `CSV`, `TXT`, `JSON`
-2. Chọn **mode nội dung**:
-   - `raw` — Chỉ văn bản gốc
-   - `translated` — Chỉ bản dịch
-   - `bilingual` — Song ngữ (gốc + dịch)
-3. Bấm **"Export"** → tải file về
-
-### Bước 7 — Tạo Audio Dub (TTS) *(tuỳ chọn)*
-
-1. Chuyển sang tab **"Dub"**
-2. Chọn file SRT nguồn (đã export ở bước 6)
-3. Cấu hình:
-   - **Voice**: ví dụ `vi-VN-HoaiMyNeural` (Edge TTS)
-   - **Rate**: tốc độ đọc (`+0%`, `+10%`, `-5%`...)
-   - **Volume**: âm lượng
-   - **Pitch**: cao độ giọng
-   - **Format**: `wav` hoặc `mp3`
-4. Bấm **"Start Dub"**
-5. Chờ job hoàn tất → tải file audio về
-
----
-
-## 10. API Reference nhanh
-
-| Method | Endpoint | Mô tả |
-|---|---|---|
-| `GET` | `/health` | Kiểm tra server còn sống |
-| `GET` | `/runtime/capabilities` | Kiểm tra ffmpeg, whisper |
-| `POST` | `/projects` | Tạo project mới |
-| `GET` | `/projects` | Danh sách project |
-| `GET` | `/projects/{id}` | Chi tiết project |
-| `PATCH` | `/projects/{id}` | Cập nhật project |
-| `POST` | `/projects/{id}/upload` | Upload video |
-| `POST` | `/projects/{id}/ingest-url/start` | Ingest từ URL |
-| `POST` | `/projects/{id}/srt/upload` | Upload SRT thủ công |
-| `GET` | `/projects/{id}/video` | Stream video |
-| `POST` | `/projects/{id}/pipeline/start` | Bắt đầu pipeline OCR/ASR |
-| `POST` | `/projects/{id}/dub/start` | Bắt đầu tạo audio dub |
-| `GET` | `/projects/{id}/segments` | Lấy danh sách segment |
-| `PUT` | `/projects/{id}/segments` | Lưu chỉnh sửa segment |
-| `POST` | `/projects/{id}/segments/retranslate` | Dịch lại toàn bộ |
-| `POST` | `/projects/{id}/export` | Export phụ đề |
-| `GET` | `/projects/{id}/exports/{key}` | Tải file export |
-| `GET` | `/projects/{id}/jobs` | Danh sách job |
-| `POST` | `/projects/{id}/jobs/retry-stuck` | Retry job bị stuck |
-| `GET` | `/jobs/{job_id}` | Trạng thái job |
-| `GET` | `/jobs/{job_id}/artifact/{key}` | Tải artifact job |
-| `GET` | `/projects/{id}/stream` | SSE stream realtime |
-
-Xem chi tiết tại: http://127.0.0.1:8000/docs
-
----
-
-## 11. Xử lý lỗi thường gặp
-
-### ❌ Web không mở được `:5173`
+Khởi động nhanh API và frontend:
 
 ```powershell
-# Kiểm tra cổng có ai chiếm không
-Get-NetTCPConnection -LocalPort 5173 -State Listen
-
-# Kiểm tra terminal web có đang chạy không, nếu không thì chạy lại
-cd D:\project\OCR\apps\web && npm run dev
-```
-
-### ❌ API không lên `:8000`
-
-```powershell
-# Xem log lỗi
-Get-Content D:\project\OCR\logs\api-dev.err.log -Tail 50
-
-# Kiểm tra thường gặp:
-# - DATABASE_URL sai → sửa trong .env
-# - Port 8000 bị chiếm bởi app khác
-Get-NetTCPConnection -LocalPort 8000 -State Listen
-```
-
-### ❌ Job đứng yên không chạy
-
-```powershell
-# Kiểm tra Redis đang chạy
-redis-cli ping   # Kết quả: PONG
-
-# Hoặc qua docker
-docker compose ps redis
-
-# Xem log worker
-Get-Content D:\project\OCR\logs\worker.out.log -Tail 50
-```
-
-> **Lưu ý:** Nếu Redis không khả dụng, API sẽ tự chạy job bằng background thread. Job vẫn chạy nhưng mất khi API restart.
-
-### ❌ OCR trả về rỗng / không có subtitle
-
-- Kiểm tra video có subtitle **hard-coded** (in lên frame) — OCR chỉ đọc được loại này
-- Thử thu nhỏ ROI để chỉ bao vùng subtitle thay vì cả màn hình
-- Thử giảm `scan_interval_sec` (ví dụ từ 1.0 → 0.5) để scan dày hơn
-
-### ❌ Lỗi Audio Dub thất bại
-
-```powershell
-# Kiểm tra ffmpeg và ffprobe có trong PATH
-ffmpeg -version
-ffprobe -version
-
-# Nếu chưa cài:
-# Tải từ https://ffmpeg.org/download.html
-# Giải nén và thêm đường dẫn vào PATH hệ thống
-```
-
-### ❌ `rapidocr` lỗi `KeyError("model_path")` trên Windows
-
-Pipeline tự xử lý bằng fallback `RapidOCR()` mặc định — OCR vẫn chạy bình thường.
-
-### ❌ `psycopg` không cài được
-
-Nếu dùng SQLite, không cần `psycopg`. Xóa dòng `psycopg[binary]` trong `requirements.txt` hoặc cài riêng:
-
-```powershell
-pip install psycopg[binary]
-```
-
----
-
-## 12. Lệnh vận hành hữu ích
-
-```powershell
-# Tại D:\project\OCR
-
-# Khởi động toàn bộ
 .\start-all.ps1
-
-# Dừng toàn bộ
-.\stop-all.ps1
-
-# Xem log realtime
-Get-Content .\logs\api-dev.out.log -Tail 100 -Wait
-Get-Content .\logs\worker.out.log -Tail 100 -Wait
-Get-Content .\logs\web-dev.out.log -Tail 100 -Wait
-
-# Kiểm tra API health
-Invoke-RestMethod http://127.0.0.1:8000/health
-
-# Kiểm tra capabilities (ffmpeg, whisper)
-Invoke-RestMethod http://127.0.0.1:8000/runtime/capabilities
-
-# Xem danh sách project
-Invoke-RestMethod http://127.0.0.1:8000/projects
-
-# Reset hoàn toàn (xóa DB SQLite + storage)
-Remove-Item D:\project\OCR\apps\api\ocr.db -ErrorAction SilentlyContinue
-Remove-Item D:\project\OCR\storage\projects\* -Recurse -Force -ErrorAction SilentlyContinue
-
-# Kiểm tra cổng đang dùng
-Get-NetTCPConnection -State Listen | Where-Object LocalPort -in @(8000, 5173, 6379, 5432)
 ```
 
----
+Dừng stack local:
 
-## Nhãn hiệu / Branding
+```powershell
+.\stop-all.ps1
+```
 
-**NanBao OCR Studio** — 男宝
+## 7. Build image
 
-Định danh package, log, và thương hiệu: `nanbao` / `NanBao`
+Build image local:
 
----
+```powershell
+docker build -t nanbao-ocr-app:latest .
+```
 
-*README được cập nhật lần cuối: Tháng 4/2026 — phiên bản OCR only (đã loại bỏ module ASR)*
+Chạy thử:
+
+```powershell
+docker run --rm -p 8000:8000 `
+  -e PORT=8000 `
+  -e WEB_ORIGIN=http://localhost:8000 `
+  -e ALLOWED_HOSTS=localhost,127.0.0.1 `
+  -e ENABLE_DOCS=true `
+  -e DATABASE_URL=sqlite+pysqlite:////data/ocr.db `
+  -e REDIS_URL=redis://host.docker.internal:6379/0 `
+  -e STORAGE_ROOT=/data/projects `
+  -v nanbao_ocr_data:/data `
+  nanbao-ocr-app:latest
+```
+
+## 8. Push image lên Docker Hub
+
+Ví dụ:
+
+```powershell
+docker tag nanbao-ocr-app:latest nanbao/ocr:lastest
+docker push nanbao/ocr:lastest
+```
+
+## 9. Ghi chú vận hành
+
+- `SQLite` là dữ liệu chính của app, nằm trong volume `/data`
+- `Redis` chỉ dùng cho hàng đợi job nền
+- Nếu Redis tạm mất kết nối, worker sẽ thử khởi động lại
+- Nếu chỉ cần demo nhanh, app vẫn có thể lên mà không có Redis, nhưng queue nền sẽ không ổn định
+
+## 10. Kiểm tra nhanh sau khi chạy
+
+```powershell
+Invoke-RestMethod http://localhost:8000/health
+```
+
+Kết quả mong đợi:
+
+```json
+{"ok":true,"environment":"development"}
+```

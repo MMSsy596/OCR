@@ -1,5 +1,7 @@
 import { startTransition, useEffect, useMemo, useState } from "react";
 import { CapcutImportModal } from "./components/CapcutImportModal";
+import { GeminiKeyManager } from "./components/GeminiKeyManager";
+import { TranslationContextModal } from "./components/TranslationContextModal";
 import { NotificationIsland } from "./components/NotificationIsland";
 import { WizardNav } from "./components/WizardNav";
 import { Step1Project } from "./components/steps/Step1Project";
@@ -104,7 +106,8 @@ const TONE_PRESETS = {
   dramatic: "Giọng điệu kịch tính, đầy cảm xúc, phù hợp cảnh cao trào.",
 };
 
-function composePrompt(presetKey, toneKey) {
+function composePrompt(presetKey, toneKey, customOverride) {
+  if (customOverride) return customOverride;
   const pre  = PROMPT_PRESETS[presetKey]?.text || PROMPT_PRESETS.historical.text;
   const tone = TONE_PRESETS[toneKey] || TONE_PRESETS.accurate;
   return [
@@ -136,6 +139,26 @@ export function App() {
   const [runtimeCapabilities, setRuntimeCapabilities] = useState(null);
   const [syncPendingCount, setSyncPendingCount] = useState(0);
   const [showCapcutModal, setShowCapcutModal] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen]     = useState(true);
+  const [showKeyManager, setShowKeyManager]   = useState(false);
+  const [showContextModal, setShowContextModal] = useState(false);
+  const [customPromptOverride, setCustomPromptOverride] = useState(null);
+  const [appUpdateInfo, setAppUpdateInfo]     = useState(null);
+
+  async function checkAppUpdate() {
+    try {
+      const res = await jsonFetch(`${API_BASE}/admin/check-update`);
+      if (res?.has_update) {
+        const snoozeUntil = localStorage.getItem("update_snooze_until");
+        if (snoozeUntil && Date.now() < parseInt(snoozeUntil, 10)) return;
+        setAppUpdateInfo(res);
+      } else {
+        setAppUpdateInfo(null);
+      }
+    } catch (e) {
+      console.warn("Failed to check app update", e);
+    }
+  }
 
   const [projectForm, setProjectForm] = useState({
     name: "", source_lang: "zh", target_lang: "vi",
@@ -143,15 +166,29 @@ export function App() {
     roi: { x: 0.05, y: 0.78, w: 0.9, h: 0.18 },
   });
   const [translationPreset, setTranslationPreset] = useState("historical");
-  const [translationTone]                         = useState("accurate");
+  const [translationTone, setTranslationTone]     = useState("accurate");
   const [videoFile, setVideoFile]         = useState(null);
   const [sourceUrl, setSourceUrl]         = useState("");
   const [autoStartAfterIngest, setAutoStartAfterIngest] = useState(true);
   const [srtUploadFile, setSrtUploadFile] = useState(null);
-  const [pipelineForm, setPipelineForm]   = useState({
-    input_mode: "video_ocr", gemini_api_key: "",
-    voiceMapText: "character_a=male-deep\ncharacter_b=female-bright\nnarrator=narrator-neutral",
-    scan_interval_sec: 1.5,
+  const [pipelineForm, setPipelineForm]   = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("pipeline_form_saved") || "{}");
+      return {
+        input_mode: saved.input_mode || "video_ocr",
+        gemini_api_key: saved.gemini_api_key || "",
+        gemini_models: saved.gemini_models || "gemini-2.5-flash-lite, gemini-2.5-flash, gemini-2.5-pro",
+        voiceMapText: saved.voiceMapText || "character_a=male-deep\ncharacter_b=female-bright\nnarrator=narrator-neutral",
+        scan_interval_sec: saved.scan_interval_sec || 1.5,
+      };
+    } catch {
+      return {
+        input_mode: "video_ocr", gemini_api_key: "",
+        gemini_models: "gemini-2.5-flash-lite, gemini-2.5-flash, gemini-2.5-pro",
+        voiceMapText: "character_a=male-deep\ncharacter_b=female-bright\nnarrator=narrator-neutral",
+        scan_interval_sec: 1.5,
+      };
+    }
   });
   const [exportForm, setExportForm]       = useState({ export_format: "srt", content_mode: "translated" });
   const [dubForm, setDubForm]             = useState({
@@ -183,12 +220,14 @@ export function App() {
 
   const latestPipelineJob  = useMemo(() => pickLatestByKind(jobs, "pipeline"), [jobs]);
   const latestDubJob       = useMemo(() => pickLatestByKind(jobs, "dub"), [jobs]);
+  const latestIngestJob    = useMemo(() => pickLatestByKind(jobs, "url_ingest"), [jobs]);
   const latestDubAudioJob  = useMemo(() => pickDubAudioJob(jobs), [jobs]);
   const latestDubAudioUrl  = useMemo(() => latestDubAudioJob?.artifacts?.dubbed_audio ? `${API_BASE}/jobs/${latestDubAudioJob.id}/artifact/dubbed_audio` : "", [latestDubAudioJob]);
   const latestDubAudioName = useMemo(() => latestDubAudioJob?.artifacts?.dub_output_key || "dub-output.wav", [latestDubAudioJob]);
   const latestJobEvents    = useMemo(() => [...(latestPipelineJob?.artifacts?.events || [])].slice(-30).reverse(), [latestPipelineJob]);
   const latestJobStats     = useMemo(() => latestPipelineJob?.artifacts?.stats || {}, [latestPipelineJob]);
   const latestDubEvents    = useMemo(() => [...(latestDubJob?.artifacts?.events || [])].slice(-20).reverse(), [latestDubJob]);
+  const latestIngestEvents = useMemo(() => [...(latestIngestJob?.artifacts?.events || [])].slice(-40).reverse(), [latestIngestJob]);
 
   /* ── hooks ── */
   const { editableSegments, setEditableSegments, isEditingSegments, setIsEditingSegments, currentVideoTime, setCurrentVideoTime, activeSegment, resetHistory, updateEditableSegment, mergeAdjacentDuplicateSegments, undoSegments, redoSegments, setUndoStack, setRedoStack } =
@@ -214,7 +253,7 @@ export function App() {
       setEditableSegments, setJobs, setMessage, setWizardStep,
       projectForm, sourceUrl, autoStartAfterIngest, pipelineForm,
       selectedProjectId, videoFile, roiDraft,
-      composePrompt: () => composePrompt(translationPreset, translationTone),
+      composePrompt: () => composePrompt(translationPreset, translationTone, customPromptOverride),
       selectedProject, setProjectForm, setRoiDraft,
     });
 
@@ -250,14 +289,32 @@ export function App() {
   async function loadProjectsSafe() {
     beginSync();
     try {
-      const [data, cap] = await Promise.all([
+      const [data, cap, uiSettings] = await Promise.all([
         jsonFetch(`${API_BASE}/projects`),
         jsonFetch(`${API_BASE}/runtime/capabilities`).catch(() => null),
+        jsonFetch(`${API_BASE}/admin/ui-settings`).catch(() => ({})),
       ]);
       setProjects(data);
       setRuntimeCapabilities(cap);
+      
+      // Khôi phục uiSettings từ backend (ghi đè localStorage nếu có)
+      if (uiSettings && Object.keys(uiSettings).length > 0) {
+        if (uiSettings.pipeline_form_saved) {
+           setPipelineForm((prev) => ({...prev, ...uiSettings.pipeline_form_saved}));
+           if (uiSettings.pipeline_form_saved.translationPreset) {
+               setTranslationPreset(uiSettings.pipeline_form_saved.translationPreset);
+           }
+        }
+        if (uiSettings.translation_context_custom_presets) {
+           localStorage.setItem("translation_context_custom_presets", JSON.stringify(uiSettings.translation_context_custom_presets));
+           // Dispatch event context
+           window.dispatchEvent(new Event("storage"));
+        }
+      }
+      
       setApiStatus("online");
       if (!selectedProjectId && data.length) setSelectedProjectId(data[0].id);
+      checkAppUpdate();
     } catch {
       setApiStatus("offline");
       setMessage(`Không kết nối được API. Hãy chạy backend.`);
@@ -423,13 +480,17 @@ export function App() {
     projects, selectedProjectId, setSelectedProjectId,
     projectForm, setProjectForm, creating, createProject,
     clearOldSessions, clearingSessions, translationPreset, setTranslationPreset,
+    customPromptOverride,
     statusLabel,
     onOpenCapcutModal: () => setShowCapcutModal(true),
+    onOpenContextModal: () => setShowContextModal(true),
   };
   const step2Props = {
     selectedProject, videoFile, setVideoFile, loading, uploadVideo,
     sourceUrl, setSourceUrl, autoStartAfterIngest, setAutoStartAfterIngest,
-    ingestVideoFromUrl, ingestingUrl,
+    ingestVideoFromUrl, ingestingUrl, setWizardStep,
+    latestIngestJob, latestIngestEvents,
+    apiBase: API_BASE,
   };
   const step3Props = {
     selectedProject, videoSrc, stageRef, roiDraft, roiEditMode,
@@ -441,6 +502,8 @@ export function App() {
     latestPipelineJob, latestJobEvents, latestJobStats, pipelineForm, setPipelineForm,
     translationPreset, setTranslationPreset, streamState,
     retryingStuckJobs, retryStuckJobs, runtimeCapabilities,
+    onNextStep: () => setWizardStep(5),
+    onOpenContextModal: () => setShowContextModal(true),
   };
   const step5Props = {
     editableSegments, selectedProject, savingSegments, retranslating,
@@ -473,21 +536,45 @@ export function App() {
   return (
     <div className="app-shell">
       {/* Sidebar */}
-      <aside className="sidebar">
-        <div className="sidebar-header">
-          <div className="app-logo-icon" style={{ background: "none", boxShadow: "none", padding: 0, overflow: "hidden", borderRadius: "var(--radius-sm)" }}>
-            <img src="/favicon.png" alt="Solar OCR" style={{ width: 26, height: 26, objectFit: "cover", display: "block", borderRadius: "var(--radius-sm)" }} />
-          </div>
-          <h1 style={{fontSize: 15, fontWeight: 700}}>Solar OCR Studio</h1>
+      <aside className={`sidebar ${isSidebarOpen ? "" : "collapsed"}`}>
+        <div className="sidebar-header" style={{ padding: isSidebarOpen ? "20px 24px" : "20px 0", justifyContent: isSidebarOpen ? "flex-start" : "center", display: "flex", alignItems: "center", gap: 12 }}>
+          <button 
+            className="sidebar-toggle-btn"
+            onClick={() => setIsSidebarOpen(!isSidebarOpen)} 
+            style={{ background: "transparent", border: "none", color: "var(--text-secondary)", cursor: "pointer", fontSize: 18, width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "var(--radius-sm)" }}
+            onMouseOver={(e) => e.currentTarget.style.background = "var(--bg-hover)"}
+            onMouseOut={(e) => e.currentTarget.style.background = "transparent"}
+            title={isSidebarOpen ? "Thu gọn (Thu hẹp sidebar)" : "Mở rộng"}
+          >
+            {isSidebarOpen ? "◀" : "▶"}
+          </button>
+          
+          {isSidebarOpen && (
+            <>
+              <div className="app-logo-icon" style={{ background: "none", boxShadow: "none", padding: 0, overflow: "hidden", borderRadius: "var(--radius-sm)" }}>
+                <img src="/favicon.png" alt="Solar OCR" style={{ width: 26, height: 26, objectFit: "cover", display: "block", borderRadius: "var(--radius-sm)" }} />
+              </div>
+              <h1 style={{fontSize: 15, fontWeight: 700, whiteSpace: "nowrap"}}>Solar OCR</h1>
+            </>
+          )}
         </div>
 
-        <div style={{ padding: "16px 14px", flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
-          <button
+        {isSidebarOpen ? (
+          <div style={{ padding: "16px 14px", flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
+            <button
             className="btn btn-primary"
             style={{ width: "100%", justifyContent: "center" }}
             onClick={() => setSelectedProjectId("")}
           >
             + Tạo dự án mới
+          </button>
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ width: "100%", justifyContent: "center", gap: 6 }}
+            onClick={() => setShowKeyManager(true)}
+            title="Quản lý Gemini API Keys"
+          >
+            🔑 Quản lý Keys
           </button>
           
           <div>
@@ -511,18 +598,81 @@ export function App() {
                 }}
               >
                 <div className="project-card-icon" style={{ width: 26, height: 26, fontSize: 13 }}>🎞️</div>
-                <div style={{ minWidth: 0 }}>
-                  <div className="project-card-title" style={{ fontSize: 12 }}>{p.name}</div>
-                  <div className="project-card-sub" style={{ fontSize: 10 }}>{p.source_lang} → {p.target_lang}</div>
+                <div style={{ minWidth: 0, overflow: "hidden" }}>
+                  <div className="project-card-title" style={{ fontSize: 12 }} title={`${p.name}\nID: ${p.id}`}>{p.name}</div>
+                  <div className="project-card-sub" style={{ fontSize: 10 }}>{p.source_lang} → {p.target_lang} · <span style={{ fontFamily: "monospace", opacity: 0.6 }}>{p.id.slice(0, 8)}</span></div>
                 </div>
               </div>
             ))}
           </div>
         </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, alignItems: "center", paddingTop: 16 }}>
+            <button
+              style={{ background: "var(--text-primary)", color: "var(--bg-base)", width: 36, height: 36, borderRadius: "var(--radius-pill)", border: "none", cursor: "pointer", fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center" }}
+              title="Tạo dự án mới"
+              onClick={() => {
+                setIsSidebarOpen(true);
+                setSelectedProjectId("");
+              }}
+            >
+              +
+            </button>
+            <div style={{ height: 1, background: "var(--border)", width: "60%" }} />
+            {projects.slice(0, 5).map(p => (
+              <div 
+                key={p.id}
+                title={p.name}
+                onClick={() => {
+                  setSelectedProjectId(p.id);
+                  const targetStep = p.video_path ? (hasValidRoi(p.roi) ? 4 : 3) : 2;
+                  setWizardStep(targetStep);
+                }}
+                className={`project-card-icon ${p.id === selectedProjectId ? "active" : ""}`}
+                style={{ 
+                  cursor: "pointer", 
+                  width: 32, height: 32, fontSize: 14, 
+                  background: p.id === selectedProjectId ? "var(--accent)" : "var(--bg-elevated)", 
+                  color: p.id === selectedProjectId ? "#fff" : "inherit" 
+                }}
+              >
+                🎞️
+              </div>
+            ))}
+          </div>
+        )}
       </aside>
 
       {/* Main Area */}
       <div className="main-wrapper">
+        
+        {/* Update Banner */}
+        {appUpdateInfo && (
+          <div style={{ background: "var(--accent-2)", color: "var(--bg-base)", padding: "10px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, zIndex: 10 }}>
+            <div>
+              <strong>🚀 Bản cập nhật mới đã sẵn sàng!</strong> Phiên bản mới đã được đẩy lên Docker Hub. Hãy vào bảng quản lý (.bat) và chọn "Cập nhật ứng dụng" để nhận tính năng mới.
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button 
+                onClick={() => {
+                  // Snooze 4 hours
+                  localStorage.setItem("update_snooze_until", Date.now() + 4 * 3600 * 1000);
+                  setAppUpdateInfo(null);
+                }}
+                style={{ background: "rgba(0,0,0,0.15)", border: "none", color: "inherit", padding: "4px 12px", borderRadius: "100px", cursor: "pointer", fontWeight: 600 }}
+              >
+                Nhắc lại sau 4h
+              </button>
+              <button 
+                onClick={() => setAppUpdateInfo(null)}
+                style={{ background: "transparent", border: "none", color: "inherit", fontSize: 18, cursor: "pointer", display: "flex", alignItems: "center" }}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+
         <header className="app-header">
           {selectedProjectId ? (
             <WizardNav
@@ -556,6 +706,31 @@ export function App() {
         <CapcutImportModal
           onClose={() => setShowCapcutModal(false)}
           onImported={handleCapcutImported}
+        />
+      )}
+
+      {/* Gemini Key Manager */}
+      {showKeyManager && (
+        <GeminiKeyManager onClose={() => setShowKeyManager(false)} />
+      )}
+
+      {/* Translation Context Modal */}
+      {showContextModal && (
+        <TranslationContextModal
+          currentPresetKey={translationPreset}
+          currentCustomText={customPromptOverride || ""}
+          currentTone={translationTone}
+          onClose={() => setShowContextModal(false)}
+          onConfirm={(result) => {
+            setTranslationPreset(result.presetKey);
+            setTranslationTone(result.toneKey);
+            if (result.customPromptOverride) {
+              setCustomPromptOverride(result.customPromptOverride);
+            } else {
+              setCustomPromptOverride(null);
+            }
+            setShowContextModal(false);
+          }}
         />
       )}
     </div>

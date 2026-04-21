@@ -1,13 +1,5 @@
-import { useState } from "react";
-
-const PROMPT_PRESETS_META = {
-  historical:    { label: "Phim cổ trang",     icon: "🏯" },
-  modern_short:  { label: "Phim hiện đại",     icon: "🏙️" },
-  fantasy:       { label: "Huyền huyễn",        icon: "🔮" },
-  cultivation:   { label: "Tu tiên",            icon: "⚔️" },
-  reincarnation: { label: "Chuyển sinh",        icon: "♻️" },
-  review:        { label: "Review phim",        icon: "🎬" },
-};
+import { useState, useMemo, useEffect } from "react";
+import { BUILTIN_PRESETS, loadCustomPresets } from "../TranslationContextModal";
 
 export function Step1Project({
   projects,
@@ -21,8 +13,18 @@ export function Step1Project({
   clearingSessions,
   translationPreset,
   setTranslationPreset,
+  customPromptOverride,
   onOpenCapcutModal,
+  onOpenContextModal,
 }) {
+  const [customPresets, setCustomPresets] = useState({});
+
+  useEffect(() => {
+    setCustomPresets(loadCustomPresets());
+  }, [translationPreset, customPromptOverride]);
+
+  const allPresets = { ...BUILTIN_PRESETS, ...customPresets };
+  const currentText = customPromptOverride || allPresets[translationPreset]?.text || "";
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", width: "100%", padding: "20px 0" }}>
       <div className="card" style={{ boxShadow: "0 12px 48px rgba(0,0,0,0.5)", border: "1px solid rgba(251, 146, 60, 0.2)" }}>
@@ -76,19 +78,39 @@ export function Step1Project({
           </div>
 
           <div className="form-group">
-            <label>Thể loại & Phong cách dịch</label>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+              <label style={{ marginBottom: 0 }}>Thể loại & Phong cách dịch</label>
+              <button 
+                className="btn btn-ghost btn-sm" 
+                style={{ fontSize: 13, color: "var(--accent)", padding: "2px 8px" }}
+                onClick={onOpenContextModal}
+                title="Sửa ngữ cảnh hiện tại"
+              >
+                ⚙️ Tuỳ chỉnh ngữ cảnh
+              </button>
+            </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-              {Object.entries(PROMPT_PRESETS_META).map(([key, meta]) => (
+              {Object.entries(allPresets).map(([key, meta]) => (
                 <button
                   key={key}
                   className={`btn ${translationPreset === key ? "btn-primary" : "btn-secondary"}`}
                   style={{ flexDirection: "column", gap: 6, padding: "16px 12px", border: translationPreset === key ? "1px solid var(--border-focus)" : "" }}
                   onClick={() => setTranslationPreset(key)}
                 >
-                  <span style={{ fontSize: 24 }}>{meta.icon}</span>
+                  <span style={{ fontSize: 24 }}>{meta.icon || "⭐"}</span>
                   <span style={{ fontSize: 13 }}>{meta.label}</span>
                 </button>
               ))}
+            </div>
+            
+            {/* Preview Box */}
+            <div style={{ marginTop: 12, padding: "12px 14px", background: "var(--bg-elevated)", borderRadius: "var(--radius-md)", border: "1px solid var(--border)" }}>
+              <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6, fontWeight: 600 }}>
+                Ngữ cảnh hiện tại {customPromptOverride ? "(Đã ghi đè tuỳ chỉnh)" : ""}:
+              </div>
+              <div style={{ fontSize: 13, color: "var(--text-primary)", fontStyle: "italic", lineHeight: 1.5 }}>
+                "{currentText}"
+              </div>
             </div>
           </div>
 

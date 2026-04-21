@@ -261,8 +261,7 @@ export function Step3Region({
         <div className="step-guide-text">
           <h3>Bước 3: Khoanh vùng phụ đề</h3>
           <p>
-            Dùng thanh tua để xem các vị trí có chữ phụ đề, rồi bật{" "}
-            <strong>Vẽ vùng</strong> và kéo để khoanh vùng chính xác.
+            Dùng thanh tua để tìm vị trí có chữ phụ đề, sau đó trực tiếp kéo chuột trên video để vẽ khung cắt hoặc di chuyển khung màu xanh.
           </p>
         </div>
       </div>
@@ -273,12 +272,6 @@ export function Step3Region({
           <div className="row-actions">
             <button className="btn btn-sm btn-secondary" onClick={resetDefault}>
               🔄 Mặc định
-            </button>
-            <button
-              className={`btn btn-sm ${roiEditMode ? "btn-primary" : "btn-secondary"}`}
-              onClick={toggleRoiEditMode}
-            >
-              {roiEditMode ? "✏️ Đang vẽ — bấm để tắt" : "✏️ Vẽ vùng"}
             </button>
           </div>
         </div>
@@ -354,9 +347,7 @@ export function Step3Region({
 
                 {/* Hint */}
                 <span style={{ fontSize: 12, color: "var(--text-muted)", marginLeft: "auto" }}>
-                  {roiEditMode
-                    ? "Kéo để vẽ vùng mới · Kéo khung xanh để di chuyển · Kéo góc để thay đổi kích thước"
-                    : "Bật \"Vẽ vùng\" để chỉnh sửa vùng OCR"}
+                  Kéo để vẽ vùng mới · Kéo khung xanh để di chuyển · Kéo góc để đổi kích thước
                 </span>
               </div>
 

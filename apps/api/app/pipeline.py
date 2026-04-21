@@ -654,10 +654,14 @@ def _call_gemini_translate(
             body = ex.read().decode("utf-8", errors="ignore")
         except Exception:
             body = ""
-        return "", f"gemini_http_{ex.code}:{body[:300]}"
+        err_str = f"gemini_http_{ex.code}:{body[:300]}"
+        logger.warning("[Gemini] Lỗi HTTP %s | key=***%s | %s", ex.code, api_key[-6:] if api_key and len(api_key) > 6 else "?", body[:200])
+        return "", err_str
     except error.URLError as ex:
+        logger.warning("[Gemini] Lỗi mạng (URLError) | key=***%s | reason=%s", api_key[-6:] if api_key and len(api_key) > 6 else "?", ex.reason)
         return "", f"gemini_url_error:{ex.reason}"
     except Exception as ex:
+        logger.warning("[Gemini] Exception | key=***%s | %s", api_key[-6:] if api_key and len(api_key) > 6 else "?", str(ex)[:200])
         return "", f"gemini_exception:{str(ex)[:300]}"
 
 
@@ -741,10 +745,14 @@ def _call_gemini_translate_batch(
             body = ex.read().decode("utf-8", errors="ignore")
         except Exception:
             body = ""
-        return [], f"gemini_batch_http_{ex.code}:{body[:300]}"
+        err_str = f"gemini_batch_http_{ex.code}:{body[:300]}"
+        logger.warning("[Gemini-Batch] Lỗi HTTP %s | key=***%s | model=%s | %s", ex.code, api_key[-6:] if api_key and len(api_key) > 6 else "?", model_name, body[:200])
+        return [], err_str
     except error.URLError as ex:
+        logger.warning("[Gemini-Batch] Lỗi mạng (URLError) | key=***%s | model=%s | reason=%s", api_key[-6:] if api_key and len(api_key) > 6 else "?", model_name, ex.reason)
         return [], f"gemini_batch_url_error:{ex.reason}"
     except Exception as ex:
+        logger.warning("[Gemini-Batch] Exception | key=***%s | model=%s | %s", api_key[-6:] if api_key and len(api_key) > 6 else "?", model_name, str(ex)[:200])
         return [], f"gemini_batch_exception:{str(ex)[:300]}"
 
 
@@ -913,6 +921,7 @@ def _translate_project_segments(
     progress_hook: Callable[[dict[str, Any]], None] | None = None,
     all_api_keys: list[str] | None = None,
     models: list[str] | None = None,
+    key_event_hook: Callable[[dict], None] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int], str, dict[str, Any]]:
     voice_map = voice_map or {}
     db_segments = list_segments(db, project.id)
@@ -960,6 +969,15 @@ def _translate_project_segments(
             lines = [seg.raw_text for seg in chunk]
             chunk_switch_log: list[dict] = []
 
+            def _log_key_event(ev: dict) -> None:
+                """Append vào switch_log VÀ push realtime qua hook nếu có."""
+                chunk_switch_log.append(ev)
+                if key_event_hook:
+                    try:
+                        key_event_hook(ev)
+                    except Exception:
+                        pass
+
             # Vòng lặp qua tất cả key cho đến khi thành công
             with _invalid_keys_lock:
                 remaining_keys = [k for k in effective_all_keys if k not in invalid_gemini_keys]
@@ -969,7 +987,7 @@ def _translate_project_segments(
             models_to_try = [m.strip() for m in models if m.strip()] if models else ["gemini-2.5-flash-lite"]
             for k_idx, batch_key in enumerate(remaining_keys):
                 for model_name in models_to_try:
-                    chunk_switch_log.append({
+                    _log_key_event({
                         "action": "trying_key",
                         "key_index": effective_all_keys.index(batch_key) if batch_key in effective_all_keys else k_idx,
                         "key_suffix": batch_key[-6:] if len(batch_key) > 6 else "***",
@@ -988,7 +1006,7 @@ def _translate_project_segments(
                     )
                     if translated and len(translated) == len(lines):
                         if k_idx > 0 or model_name != models_to_try[0]:
-                            chunk_switch_log.append({
+                            _log_key_event({
                                 "action": "success_on_fallback_key",
                                 "key_suffix": batch_key[-6:] if len(batch_key) > 6 else "***",
                                 "model": model_name,
@@ -1000,20 +1018,19 @@ def _translate_project_segments(
                     break  # Thành công, thoát vòng lặp keys
 
                 # Key lỗi
-
                 if _is_gemini_key_error(err):
                     with _invalid_keys_lock:
                         invalid_gemini_keys.add(batch_key)
                     next_key = next((k for k in remaining_keys[k_idx+1:] if k not in invalid_gemini_keys), None)
-                    chunk_switch_log.append({
+                    _log_key_event({
                         "action": "key_failed_switching",
                         "key_suffix": batch_key[-6:] if len(batch_key) > 6 else "***",
                         "error": err[:300],
                         "switching_to": next_key[-6:] if next_key and len(next_key) > 6 else ("none" if not next_key else "***"),
                     })
                 else:
-                    # Lỗi khác (rate limit, parse fail...)
-                    chunk_switch_log.append({
+                    # Lỗi khác (rate limit, nghẽn mạng, parse fail...)
+                    _log_key_event({
                         "action": "chunk_error_trying_next",
                         "key_suffix": batch_key[-6:] if len(batch_key) > 6 else "***",
                         "error": err[:300],
@@ -1445,6 +1462,38 @@ def run_pipeline(
             )
             _update_job(db, job, JobStatus.running, progress, "translate", artifacts=artifacts)
 
+        # Hook realtime: push log key dịch ngay khi mỗi API call xảy ra
+        _key_event_lock = threading.Lock()
+
+        def _on_key_event(ev: dict) -> None:
+            """Gọi từ worker thread — push log key switch lên SSE ngay lập tức."""
+            action = ev.get("action", "")
+            key_suffix = ev.get("key_suffix", "???")
+            model = ev.get("model", "")
+            err = (ev.get("error") or "")[:150]
+            if action == "trying_key":
+                if ev.get("key_index", 0) == 0:
+                    return  # key đầu tiên không log — giảm noise
+                level = "info"
+                msg = f"🔑 Thử fallback key #{ev.get('key_index', 0)+1} (***{key_suffix}) model={model}"
+            elif action in ("key_failed_switching", "key_invalid_switching"):
+                level = "warning"
+                next_s = ev.get("switching_to") or ev.get("switching_to_suffix") or "none"
+                msg = f"⚠️ Key ***{key_suffix} lỗi → ***{next_s} | {err}"
+            elif action in ("success_on_fallback", "success_on_fallback_key"):
+                level = "success"
+                msg = f"✅ Key dự phòng ***{key_suffix} thành công (model={model})"
+            elif action in ("non_key_error", "chunk_error_trying_next"):
+                level = "warning"
+                msg = f"⚡ key ***{key_suffix} lỗi mạng/parse: {err}"
+            elif action == "all_keys_failed":
+                level = "error"
+                msg = f"❌ Tất cả key thất bại: {(ev.get('final_err') or '')[:200]}"
+            else:
+                return  # skip_invalid và các action ít quan trọng
+            with _key_event_lock:
+                push_event(job, artifacts, "key_switch", msg, last_translate_progress, level=level, logger_name="pipeline")
+
         models = [m.strip() for m in (gemini_models or "").split(",")] if gemini_models else None
         normalized, translation_stats, first_translation_error, translate_detail = _translate_project_segments(
             db,
@@ -1454,6 +1503,8 @@ def run_pipeline(
             voice_map=voice_map,
             progress_hook=_on_translate_progress,
             all_api_keys=all_keys,
+            models=models,
+            key_event_hook=_on_key_event,
         )
         set_stat(
             artifacts,

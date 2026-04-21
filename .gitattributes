@@ -1,0 +1,9 @@
+# Tất cả file mặc định dùng LF khi checkout
+* text=auto
+
+# Shell scripts PHẢI dùng LF — không được convert sang CRLF
+*.sh text eol=lf
+
+# File Windows script giữ CRLF
+*.bat text eol=crlf
+*.ps1 text eol=crlf

@@ -125,21 +125,22 @@ function formatEventTime(isoText) {
 
 function formatKeyAction(ev) {
   if (!ev) return "";
+  const err = ev.error ? ` [${ev.error.slice(0, 120)}]` : "";
   switch (ev.action) {
-    case "trying_key":        return `🔑 Đang thử key #${ev.key_index + 1} (****${ev.key_suffix})`;
+    case "trying_key":        return `🔑 Thử key #${ev.key_index + 1} (****${ev.key_suffix}) model=${ev.model || "?"})`;
     case "key_failed_switching":
     case "key_invalid_switching":
-      return `⚠️ Key ****${ev.key_suffix} lỗi → chuyển sang ****${ev.switching_to || "?"}`;
+      return `⚠️ Key ****${ev.key_suffix} lỗi → ****${ev.switching_to || "?"}${err}`;
     case "success_on_fallback":
     case "success_on_fallback_key":
-      return `✅ Thành công với key dự phòng ****${ev.key_suffix}`;
+      return `✅ Fallback key ****${ev.key_suffix} thành công (model=${ev.model || "?"})`;
     case "non_key_error":
     case "chunk_error_trying_next":
-      return `⚡ Lỗi mạng/parse với key ****${ev.key_suffix}, thử key tiếp`;
+      return `⚡ Lỗi mạng/parse key ****${ev.key_suffix}${err}`;
     case "fallback_deep_translator": return "🔄 Dùng Deep Translator (không có Gemini key hợp lệ)";
-    case "all_keys_failed":   return "❌ Tất cả key đều thất bại";
+    case "all_keys_failed":   return `❌ Tất cả key đều thất bại${err}`;
     case "skip_invalid":      return `⏭ Bỏ qua key đã lỗi ****${ev.key_suffix}`;
-    default:                  return `${ev.action}`;
+    default:                  return `${ev.action}${err}`;
   }
 }
 
@@ -408,10 +409,16 @@ export function Step4Run({
 
           {showLog && latestJobEvents?.length > 0 && (
             <div className="live-log">
-              {[...latestJobEvents].slice(0, 25).map((ev, i) => (
+              {[...latestJobEvents].slice(0, 40).map((ev, i) => (
                 <div
                   key={`${ev.time}-${i}`}
-                  className={`log-line${ev.level === "warning" ? " warn" : ev.level === "error" ? " error" : ev.level === "success" || ev.phase === "done" ? " ok" : ""}`}
+                  className={`log-line${
+                    ev.level === "warning" ? " warn"
+                    : ev.level === "error" ? " error"
+                    : ev.level === "success" || ev.phase === "done" ? " ok"
+                    : ev.phase === "key_switch" ? " warn"
+                    : ""
+                  }`}
                 >
                   <span className="log-time">[{formatEventTime(ev.time)}]</span>
                   <span>[{ev.phase}] {ev.message}</span>

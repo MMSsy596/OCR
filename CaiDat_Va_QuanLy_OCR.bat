@@ -187,15 +187,15 @@ echo ========================================================
 echo DANG TAI VA CAI DAT UNG DUNG MOI...
 echo Vui long doi cau hinh mang tai du lieu ve trong it phut...
 echo ========================================================
-docker compose pull
+call :pull_with_progress
 docker compose up -d
 if %ERRORLEVEL% NEQ 0 goto error_handling
 echo.
 echo ========================================================
 echo KHOI CHAY VA CAI DAT HOAN TAT! Ung dung dang chay ngam.
-echo Vui long mo trinh duyet va truy cap: http://localhost:8000
+echo Truy cap vao: http://localhost:8000
 echo ========================================================
-pause
+call :ask_open_browser
 goto menu
 
 :update
@@ -205,7 +205,7 @@ echo.
 echo ========================================================
 echo DANG CAP NHAT PHIEN BAN MOI NHAT TREN MAY CHU...
 echo ========================================================
-docker compose pull
+call :pull_with_progress
 docker compose down --remove-orphans
 rem --- Xoa container cu con sot neu docker compose down chua don het ---
 docker rm -f nanbao-ocr-redis >nul 2>&1
@@ -215,9 +215,9 @@ if %ERRORLEVEL% NEQ 0 goto error_handling
 echo.
 echo ========================================================
 echo HOAN TAT QUA TRINH CAP NHAT! He thong da thay phien ban moi.
-echo Vui long truy cap lai web: http://localhost:8000
+echo Truy cap lai web: http://localhost:8000
 echo ========================================================
-pause
+call :ask_open_browser
 goto menu
 
 :run
@@ -234,7 +234,7 @@ echo ========================================================
 echo HOAN TAT! Ung dung da san sang.
 echo Truy cap vao: http://localhost:8000
 echo ========================================================
-pause
+call :ask_open_browser
 goto menu
 
 :stop
@@ -339,3 +339,41 @@ exit
 
 :end
 exit
+
+
+rem ============================================================
+rem Ham phu: Pull image voi hien thi tien trinh ro rang
+rem ============================================================
+:pull_with_progress
+echo.
+echo [THONG TIN] Dang kiem tra cac image can tai ve...
+
+rem Lay danh sach image trong compose file de hien thi truoc
+for /f "tokens=2 delims=: " %%I in ('findstr /i "image:" docker-compose.yml 2^>nul') do (
+    echo   - %%I (dang kiem tra tren may chu...)
+)
+echo.
+
+rem Chay pull voi output day du (plain progress hien thi moi layer)
+echo [PULL] Bat dau tai image moi nhat...
+echo --------------------------------------------------------
+docker compose pull --progress plain 2>&1
+echo --------------------------------------------------------
+echo [PULL] Hoan tat tai image.
+echo.
+goto :eof
+
+
+rem ============================================================
+rem Ham phu: Hoi nguoi dung co muon mo App bang trinh duyet
+rem ============================================================
+:ask_open_browser
+echo.
+set /p open_browser="Ban co muon mo App ngay bay gio trong trinh duyet khong? (Y/N): "
+if /i "%open_browser%"=="Y" (
+    echo [OK] Dang mo http://localhost:8000 ....
+    timeout /t 0 /nobreak >nul
+    start "" "http://localhost:8000"
+)
+pause
+goto :eof

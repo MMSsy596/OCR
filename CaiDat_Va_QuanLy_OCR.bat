@@ -354,10 +354,10 @@ for /f "tokens=2 delims=: " %%I in ('findstr /i "image:" docker-compose.yml 2^>n
 )
 echo.
 
-rem Chay pull voi output day du (plain progress hien thi moi layer)
+rem Chay pull voi output mac dinh (hien thi tien do tung layer)
 echo [PULL] Bat dau tai image moi nhat...
 echo --------------------------------------------------------
-docker compose pull --progress plain 2>&1
+docker compose pull 2>&1
 echo --------------------------------------------------------
 echo [PULL] Hoan tat tai image.
 echo.
